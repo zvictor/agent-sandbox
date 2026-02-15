@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: agent <tool> [args...]" >&2
+  exit 1
+fi
+
+tool="$1"
+shift
+
+if ! command -v nix-build >/dev/null 2>&1; then
+  echo "nix-build is required to run $tool from tools/agent-sandbox/nix/tool-images.nix" >&2
+  exit 1
+fi
+
+agent_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+project_root="${AGENT_PROJECT_ROOT:-$PWD}"
+entry_nix="${AGENT_NIX_ENTRY:-$agent_root/nix/tool-images.nix}"
+cache_dir="${AGENT_CACHE_DIR:-$project_root/.cache/agent-tools}"
+tools_list="${AGENT_TOOLS:-codex claude opencode}"
+project_nix_dir="${AGENT_PROJECT_NIX_DIR:-$project_root/nix}"
+project_dev_packages_file="${AGENT_PROJECT_DEV_PACKAGES_FILE:-$project_nix_dir/dev-packages.nix}"
+project_locked_pkgs_file="${AGENT_PROJECT_LOCKED_PKGS_FILE:-$project_nix_dir/locked-pkgs.nix}"
+project_nixpkgs_lock_file="${AGENT_PROJECT_NIXPKGS_LOCK_FILE:-$project_nix_dir/nixpkgs.lock}"
+project_unstable_lock_file="${AGENT_PROJECT_UNSTABLE_LOCK_FILE:-$project_nix_dir/unstable.lock}"
+
+export AGENT_PROJECT_NIX_DIR="$project_nix_dir"
+export AGENT_PROJECT_DEV_PACKAGES_FILE="$project_dev_packages_file"
+export AGENT_PROJECT_LOCKED_PKGS_FILE="$project_locked_pkgs_file"
+export AGENT_PROJECT_NIXPKGS_LOCK_FILE="$project_nixpkgs_lock_file"
+export AGENT_PROJECT_UNSTABLE_LOCK_FILE="$project_unstable_lock_file"
+
+if [ "${AGENT_DEBUG:-0}" = "1" ]; then
+  echo "[agent] project_nix_dir=$project_nix_dir" >&2
+  echo "[agent] project_dev_packages_file=$project_dev_packages_file" >&2
+  echo "[agent] project_locked_pkgs_file=$project_locked_pkgs_file" >&2
+  echo "[agent] project_nixpkgs_lock_file=$project_nixpkgs_lock_file" >&2
+  echo "[agent] project_unstable_lock_file=$project_unstable_lock_file" >&2
+  echo "[agent] entry_nix=$entry_nix" >&2
+fi
+
+mkdir -p "$cache_dir"
+
+has_tool=0
+for candidate in $tools_list; do
+  if [ "$candidate" = "$tool" ]; then
+    has_tool=1
+    break
+  fi
+done
+
+if [ "$has_tool" -ne 1 ]; then
+  echo "[agent] unsupported tool '$tool' (configured tools: $tools_list)" >&2
+  exit 1
+fi
+
+hash_inputs() {
+  if command -v sha1sum >/dev/null 2>&1; then
+    hash_cmd="sha1sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    hash_cmd="shasum -a 1"
+  else
+    return 1
+  fi
+
+  {
+    for f in \
+      "$agent_root/default.nix" \
+      "$agent_root/nix/tool-images.nix" \
+      "$project_dev_packages_file" \
+      "$project_locked_pkgs_file" \
+      "$project_nixpkgs_lock_file" \
+      "$project_unstable_lock_file"
+    do
+      printf '%s\n' "$f"
+      if [ -f "$f" ]; then
+        cat "$f"
+      else
+        printf '__MISSING__\n'
+      fi
+      printf '\n'
+    done
+
+    printf 'entry_nix=%s\n' "$entry_nix"
+    printf 'tools_list=%s\n' "$tools_list"
+    printf 'project_nix_dir=%s\n' "$project_nix_dir"
+    printf 'project_dev_packages_file=%s\n' "$project_dev_packages_file"
+    printf 'project_locked_pkgs_file=%s\n' "$project_locked_pkgs_file"
+    printf 'project_nixpkgs_lock_file=%s\n' "$project_nixpkgs_lock_file"
+    printf 'project_unstable_lock_file=%s\n' "$project_unstable_lock_file"
+
+    if [ -n "${AGENT_HASH_FILES:-}" ]; then
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        printf '%s\n' "$f"
+        if [ -f "$f" ]; then
+          cat "$f"
+        else
+          printf '__MISSING__\n'
+        fi
+        printf '\n'
+      done < <(printf '%s\n' "${AGENT_HASH_FILES}" | tr ',' '\n' | sed '/^$/d')
+    fi
+  } | $hash_cmd | awk '{print $1}'
+}
+
+hash="$(hash_inputs || true)"
+cache_file=""
+if [ -n "$hash" ]; then
+  cache_file="$cache_dir/$hash"
+  if [ -f "$cache_file" ]; then
+    wrapper_out="$(awk -v selected_tool="$tool" '$1==selected_tool {print $2}' "$cache_file")"
+    if [ -n "$wrapper_out" ] && [ -x "$wrapper_out/bin/$tool" ]; then
+      exec "$wrapper_out/bin/$tool" "$@"
+    fi
+  fi
+fi
+
+start_ts="$(date +%s)"
+echo "[agent] building tool wrappers (this may take a while on first run)..." >&2
+
+out_file="$(mktemp)"
+args=(
+  --no-out-link
+  "$entry_nix"
+  --argstr projectNixDir "$project_nix_dir"
+  --argstr projectDevPackagesFile "$project_dev_packages_file"
+  --argstr projectLockedPkgsFile "$project_locked_pkgs_file"
+)
+for t in $tools_list; do
+  args+=(-A "$t.wrapper")
+done
+nix-build "${args[@]}" 1>"$out_file"
+status=$?
+if [ "$status" -ne 0 ]; then
+  rm -f "$out_file"
+  exit "$status"
+fi
+end_ts="$(date +%s)"
+echo "[agent] build finished in $((end_ts - start_ts))s" >&2
+
+mapfile -t paths <"$out_file"
+wrapper_out=""
+idx=0
+if [ -n "$cache_file" ]; then
+  tmp_cache="${cache_file}.tmp"
+  : >"$tmp_cache"
+fi
+
+for t in $tools_list; do
+  path="${paths[$idx]:-}"
+  if [ -z "$path" ]; then
+    echo "[agent] build output missing for $t" >&2
+    rm -f "$out_file"
+    if [ -n "${tmp_cache:-}" ]; then
+      rm -f "$tmp_cache"
+    fi
+    exit 1
+  fi
+
+  if [ "$t" = "$tool" ]; then
+    wrapper_out="$path"
+  fi
+
+  if [ -n "$cache_file" ]; then
+    printf '%s %s\n' "$t" "$path" >>"$tmp_cache"
+  fi
+
+  idx=$((idx + 1))
+done
+
+if [ -n "$cache_file" ]; then
+  mv "$tmp_cache" "$cache_file"
+fi
+
+rm -f "$out_file"
+if [ -z "$wrapper_out" ] || [ ! -x "$wrapper_out/bin/$tool" ]; then
+  echo "[agent] wrapper for $tool not found after build" >&2
+  exit 1
+fi
+
+exec "$wrapper_out/bin/$tool" "$@"
