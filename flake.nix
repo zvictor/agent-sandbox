@@ -1,5 +1,5 @@
 {
-  description = "Reusable sandboxed agent wrappers (codex/claude/opencode)";
+  description = "Reusable sandboxed agent wrappers (codex/claude/opencode/codemachine)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -26,7 +26,7 @@
               runHook preInstall
               mkdir -p "$out"
               cp -r default.nix nix scripts README.md "$out/"
-              chmod +x "$out/scripts/agent" "$out/scripts/codex" "$out/scripts/claude" "$out/scripts/opencode"
+              chmod +x "$out/scripts/agent" "$out/scripts/codex" "$out/scripts/claude" "$out/scripts/opencode" "$out/scripts/codemachine"
               runHook postInstall
             '';
           };
@@ -49,6 +49,7 @@
           codex = mkTool "codex";
           claude = mkTool "claude";
           opencode = mkTool "opencode";
+          codemachine = mkTool "codemachine";
           default = mkTool "agent";
         });
 
@@ -65,6 +66,7 @@
           codex = mkApp "${p.codex}/bin/codex";
           claude = mkApp "${p.claude}/bin/claude";
           opencode = mkApp "${p.opencode}/bin/opencode";
+          codemachine = mkApp "${p.codemachine}/bin/codemachine";
         });
     };
 }

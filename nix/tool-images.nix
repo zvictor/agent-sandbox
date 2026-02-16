@@ -121,6 +121,7 @@ let
     codex = { pkg = "@openai/codex"; bin = "codex"; latest = true; };
     opencode = { pkg = "opencode-ai"; bin = "opencode"; };
     claude = { pkg = "@anthropic-ai/claude-code"; bin = "claude"; };
+    codemachine = { pkg = "codemachine"; bin = "codemachine"; };
   };
 
 

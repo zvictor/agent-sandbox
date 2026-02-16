@@ -1,12 +1,12 @@
 # Agent Sandbox
 
-Reusable sandbox project for running `codex`, `claude`, and `opencode` in a containerized environment.
+Reusable sandbox project for running `codex`, `claude`, `opencode`, and `codemachine` in a containerized environment.
 
 ## Entry points
 
-- Flake packages: `agent`, `codex`, `claude`, `opencode`
-- Flake apps: `#agent`, `#codex`, `#claude`, `#opencode`
-- Scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`
+- Flake packages: `agent`, `codex`, `claude`, `opencode`, `codemachine`
+- Flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`
+- Scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`
 
 ## Host project contract
 
@@ -51,6 +51,7 @@ Add this project as a flake input in your NixOS configuration and install packag
             agent-sandbox.packages.${pkgs.system}.codex
             agent-sandbox.packages.${pkgs.system}.claude
             agent-sandbox.packages.${pkgs.system}.opencode
+            agent-sandbox.packages.${pkgs.system}.codemachine
           ];
         })
       ];
@@ -118,12 +119,13 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/claude
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/opencode
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 ```
 
 ## Additional knobs
 
 - `AGENT_CACHE_DIR`: wrapper cache directory
-- `AGENT_TOOLS`: tools built/cached by `scripts/agent` (default: `codex claude opencode`)
+- `AGENT_TOOLS`: tools built/cached by `scripts/agent` (default: `codex claude opencode codemachine`)
 - `AGENT_PASS_ENV_PREFIXES`: comma-separated env prefixes forwarded to container
 - `AGENT_PASS_ENV_NAMES`: comma-separated exact env names forwarded to container
 - `AGENT_AUTO_MOUNT_DIRS`: comma-separated dir names auto-mounted from ancestors
