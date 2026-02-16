@@ -84,8 +84,8 @@ let
       exec ${pkgsFinal.git}/bin/git "$@"
     fi
 
-    # List of allowed read-only git commands (prefix matching)
-    SAFE_COMMANDS="fetch|status|diff|log|show|branch|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|config|remote|tag|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"
+    # List of allowed safe git commands (prefix matching)
+    SAFE_COMMANDS="clone|fetch|status|diff|log|show|branch|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|config|remote|tag|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"
 
     # Resolve the git subcommand (first non-flag argument)
     SUBCOMMAND=""
