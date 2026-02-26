@@ -28,8 +28,12 @@ Optional overrides:
 - `AGENT_PROJECT_LOCKED_PKGS_FILE`
 - `AGENT_PROJECT_NIXPKGS_LOCK_FILE`
 - `AGENT_PROJECT_UNSTABLE_LOCK_FILE`
+- `AGENT_PROJECT_NIXPKGS_URL`
+- `AGENT_PROJECT_UNSTABLE_URL`
 
-If these files are missing, the sandbox fails fast.
+If lock files are missing, `scripts/agent` auto-generates them from the URLs in
+`locked-pkgs.nix` (`nixpkgsSrc` / `unstableSrc`) or from the default channel URLs.
+Use `AGENT_REFRESH_LOCKS=1` to force lock refresh.
 
 ## Install system-wide (NixOS)
 
@@ -133,7 +137,11 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_EXTRA_ENV`: comma-separated `KEY=VALUE` container env assignments
 - `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace`
 - `AGENT_HASH_FILES`: comma-separated extra files included in wrapper cache hash
+- `AGENT_REFRESH_LOCKS=1`: force regenerate `nix/*.lock` from channel URLs
 - `AGENT_DEBUG=1`: prints resolved project paths before build
+
+Wrapper outputs are stored as real Nix GC roots under the agent cache, so periodic
+`nix-collect-garbage` runs do not invalidate the wrapper cache by default.
 
 ## Legacy nix-build entry
 

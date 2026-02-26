@@ -1,4 +1,9 @@
-args@{ shared ? null, projectNixDir ? null, projectDevPackagesFile ? null, projectLockedPkgsFile ? null, ... }:
+args@{ shared ? null
+     , projectNixDir ? null
+     , projectDevPackagesFile ? null
+     , projectLockedPkgsFile ? null
+     , ...
+     }:
 
 let
   normalizePath = value:
@@ -17,6 +22,7 @@ let
   projectRootEnvPath = envPath "AGENT_PROJECT_ROOT";
   pwdEnvPath = envPath "PWD";
   projectNixDirEnvPath = envPath "AGENT_PROJECT_NIX_DIR";
+
   projectNixDirPath =
     normalizePath (
       if projectNixDir != null then projectNixDir
@@ -25,8 +31,10 @@ let
       else if pwdEnvPath != null then "${toString pwdEnvPath}/nix"
       else null
     );
+
   projectDevPackagesEnvPath = envPath "AGENT_PROJECT_DEV_PACKAGES_FILE";
   projectLockedPkgsEnvPath = envPath "AGENT_PROJECT_LOCKED_PKGS_FILE";
+
   projectDevPackagesPath =
     normalizePath (
       if projectDevPackagesFile != null then projectDevPackagesFile
@@ -34,6 +42,7 @@ let
       else if projectNixDirPath != null then "${toString projectNixDirPath}/dev-packages.nix"
       else null
     );
+
   projectLockedPkgsPath =
     normalizePath (
       if projectLockedPkgsFile != null then projectLockedPkgsFile
@@ -41,15 +50,17 @@ let
       else if projectNixDirPath != null then "${toString projectNixDirPath}/locked-pkgs.nix"
       else null
     );
+
   projectLockedPkgsPathText =
     if projectLockedPkgsPath == null then "(unset)"
     else toString projectLockedPkgsPath;
+
   projectDevPackagesPathText =
     if projectDevPackagesPath == null then "(unset)"
     else toString projectDevPackagesPath;
 
-  locked = if pkgsArg != null && unstableArg != null
-    then { pkgs = pkgsArg; unstable = unstableArg; }
+  locked =
+    if pkgsArg != null && unstableArg != null then { pkgs = pkgsArg; unstable = unstableArg; }
     else if projectLockedPkgsPath != null && builtins.pathExists projectLockedPkgsPath
       then import projectLockedPkgsPath { }
       else builtins.throw ''
@@ -61,8 +72,8 @@ let
   pkgsFinal = if pkgsArg != null then pkgsArg else locked.pkgs;
   unstableFinal = if unstableArg != null then unstableArg else locked.unstable;
 
-  sharedPackages = if shared != null
-    then shared
+  sharedPackages =
+    if shared != null then shared
     else if projectDevPackagesPath != null && builtins.pathExists projectDevPackagesPath
       then import projectDevPackagesPath { pkgs = pkgsFinal; unstable = unstableFinal; }
       else builtins.throw ''
@@ -116,14 +127,12 @@ let
     fi
   '';
 
-
   tools = {
-    codex = { pkg = "@openai/codex"; bin = "codex"; latest = true; };
-    opencode = { pkg = "opencode-ai"; bin = "opencode"; };
-    claude = { pkg = "@anthropic-ai/claude-code"; bin = "claude"; };
-    codemachine = { pkg = "codemachine"; bin = "codemachine"; };
+    codex       = { pkg = "@openai/codex";             bin = "codex";       latest = true; };
+    opencode    = { pkg = "opencode-ai";               bin = "opencode";    latest = true; };
+    claude      = { pkg = "@anthropic-ai/claude-code"; bin = "claude";      latest = true; };
+    codemachine = { pkg = "codemachine";               bin = "codemachine"; latest = true; };
   };
-
 
   mkBunToolLauncher = { name, pkg, bin ? name, latest ? false }:
     let
@@ -133,6 +142,11 @@ let
       set -euo pipefail
 
       CACHE_DIR="''${TOOL_CACHE:-/cache}/${name}"
+      if [ "${name}" = "codex" ]; then
+        # Codemachine may spawn codex without forwarding CODEX_HOME.
+        export CODEX_HOME="''${CODEX_HOME:-/config/.codex}"
+        export CODEX_CONFIG_DIR="''${CODEX_CONFIG_DIR:-''${CODEX_HOME}}"
+      fi
       mkdir -p "$CACHE_DIR"
 
       if [ ! -f "$CACHE_DIR/package.json" ]; then
@@ -140,32 +154,41 @@ let
       fi
 
       pkg_json="$CACHE_DIR/node_modules/${pkg}/package.json"
+      bin_path="$CACHE_DIR/node_modules/.bin/${bin}"
 
       if [ "${latestFlag}" = "1" ]; then
-        latest_version=$(npm view ${pkg} version 2>/dev/null | head -n1)
-        if [ -z "$latest_version" ]; then
-          echo "Failed to determine latest ${pkg} version" >&2
-          exit 1
-        fi
-
         current_version=""
         if [ -f "$pkg_json" ]; then
-          current_version=$(node -p "require('$pkg_json').version")
+          current_version=$(bun --print "require('$pkg_json').version" 2>/dev/null || true)
           echo "${pkg} is cached as version ''${current_version:-unknown}" >&2
         fi
 
-        if [ "$current_version" != "$latest_version" ]; then
+        latest_version="$(bun info ${pkg} version 2>/dev/null | head -n1 || true)"
+        if [ -z "$latest_version" ]; then
+          if [ -n "$current_version" ]; then
+            echo "Could not resolve latest ${pkg}; using cached version ''${current_version}." >&2
+          else
+            echo "Could not resolve latest ${pkg}; installing ${pkg} without a pinned version..." >&2
+            (cd "$CACHE_DIR" && bun add "${pkg}")
+          fi
+        elif [ "$current_version" != "$latest_version" ]; then
           echo "Installing ${pkg}@$latest_version (latest) inside sandbox cache..." >&2
-          (cd "$CACHE_DIR" && bun add "${pkg}@$latest_version" >/dev/null)
+          (cd "$CACHE_DIR" && bun add "${pkg}@$latest_version")
         fi
       else
         if [ ! -f "$pkg_json" ]; then
           echo "Installing ${pkg} inside sandbox cache..." >&2
-          (cd "$CACHE_DIR" && bun add "${pkg}" >/dev/null)
+          (cd "$CACHE_DIR" && bun add "${pkg}")
         fi
       fi
 
-      exec "$CACHE_DIR/node_modules/.bin/${bin}" "$@"
+      if [ ! -x "$bin_path" ]; then
+        echo "Expected launcher missing after install: $bin_path" >&2
+        exit 1
+      fi
+
+      bun "$bin_path" "$@"
+      # exec "$bin_path" "$@"
     '';
 
   toolsWithName = builtins.mapAttrs (name: tool: tool // { inherit name; }) tools;
@@ -219,7 +242,6 @@ let
   baseImageTag  = "latest";
   baseImageRef  = "${baseImageName}:${baseImageTag}";
 
-
   toolsImage = pkgsFinal.dockerTools.buildImage {
     name = baseImageName;
     tag  = baseImageTag;
@@ -243,6 +265,10 @@ let
 
       mkdir -p tmp
       chmod 1777 tmp
+
+      # Common config mount root used by wrappers
+      mkdir -p config
+      chmod 0777 config
     '';
 
     config = {
@@ -286,42 +312,9 @@ EOF
 
       image_archive="${toolsImage}"
       base_ref="${baseImageRef}"
-      entrypoint="/bin/${toolName}"
+      entrypoint="/usr/bin/env"
 
-      host_config=""
-      container_config=""
-      profile_var=""
-      profile_dir="profiles"
-      profile_base=""
-      profile_target=""
-      config_env_var=""
-
-      case "${toolName}" in
-        codex)
-          host_config="''${CODEX_HOME:-''${HOME}/.codex}"
-          container_config="/config/.codex"
-          profile_var="CODEX_PROFILE"
-          profile_target="auth.json"
-          config_env_var="CODEX_HOME"
-          profile_base="''${HOME}/.codex/profiles"
-          ;;
-        opencode)
-          host_config="''${OPENCODE_CONFIG_DIR:-''${HOME}/.config/opencode}"
-          container_config="/config/.opencode"
-          profile_var="OPENCODE_PROFILE"
-          profile_target="opencode.json"
-          config_env_var="OPENCODE_CONFIG_DIR"
-          ;;
-        claude)
-          host_config="''${CLAUDE_CONFIG_DIR:-''${HOME}/.claude}"
-          container_config="/config/.claude"
-          profile_var="CLAUDE_PROFILE"
-          profile_target=".credentials.json"
-          config_env_var="CLAUDE_CONFIG_DIR"
-          ;;
-      esac
-
-      # ---- Compute CODEX_NAME_PREFIX/worktree tag (simple rules) ----
+      # ---- Compute name_prefix/worktree tag (simple rules) ----
       # 1) If worktree: use origin URL repo name
       # 2) Else if regular git: use `git rev-parse --git-dir` and take its parent folder name
       # 3) Else: use the parent folder name of $PWD
@@ -413,7 +406,7 @@ EOF
       group_id=$(id -g)
 
       # Allowlisted env prefixes to pass through from host to container.
-      default_pass_env_prefixes=$'DEPLOYMENT_STAGE\nCODEX_PROFILE\nOPENCODE_PROFILE\nCLAUDE_PROFILE\nOPENCODE_\nCLAUDE_\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nDEBUG\nGIT_ALLOW'
+      default_pass_env_prefixes=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nCODEX_PROFILE\nOPENCODE_PROFILE\nCLAUDE_PROFILE\nCODEX_CONFIG_DIR\nOPENCODE_CONFIG_DIR\nCLAUDE_CONFIG_DIR\nCODEX_PROFILE_BASE_DIR\nOPENCODE_PROFILE_BASE_DIR\nCLAUDE_PROFILE_BASE_DIR\nOPENCODE_\nCLAUDE_'
       pass_env_prefixes="''${AGENT_PASS_ENV_PREFIXES:-$default_pass_env_prefixes}"
 
       suffix=""
@@ -456,7 +449,7 @@ require-sigs = false"
         --rm
         --network=host
         --name "''${container_name}"
-        -v "$cache_dir:/cache"
+        -v "$cache_dir:/cache:rw"
         -v "''${AGENT_WORKSPACE_HOST_PATH:-$PWD}:/workspace:rw"
         "''${cache_mount_args[@]}"
         --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m
@@ -468,8 +461,6 @@ require-sigs = false"
         -e "WORKSPACE_HOST_PATH=''${AGENT_WORKSPACE_HOST_PATH:-$PWD}"
         -e "NIX_CONFIG=$nix_config"
       )
-
-      args+=( -e "CODEX_NAME_PREFIX=$name_prefix" )
 
       if [ -n "''${AGENT_EXTRA_ENV:-}" ]; then
         while IFS= read -r env_spec; do
@@ -557,29 +548,113 @@ require-sigs = false"
         args+=( --user "''${user_id}:''${group_id}" )
       fi
 
-      if [ -n "$host_config" ] && [ -d "$host_config" ]; then
-        args+=( -v "$host_config:$container_config:rw" )
-        if [ -n "$config_env_var" ]; then
-          args+=( -e "''${config_env_var}=$container_config" )
+      # ---------------- Engine config/profile mounting ----------------
+
+      # Mount a config directory and (optionally) mount a selected profile JSON as the active credential file.
+      # For Codex: profile JSON replaces auth.json.
+      mount_engine() {
+        local engine="$1"
+        local host_config_dir="$2"
+        local container_config_dir="$3"
+        local env_pairs="$4"            # comma-separated KEY=VALUE pairs to export in container
+        local profile_env_name="$5"
+        local profile_base_dir="$6"     # base directory containing profiles (host)
+        local active_credentials_file="$7"
+
+        # Export env vars into the container.
+        if [ -n "$env_pairs" ]; then
+          IFS=',' read -ra kvs <<< "$env_pairs"
+          for kv in "''${kvs[@]}"; do
+            [ -z "$kv" ] && continue
+            args+=( -e "$kv" )
+          done
         fi
 
-        if [ -n "$profile_var" ]; then
-          profile_name="''${!profile_var:-}"
+        # Ensure the container config dir always exists by always mounting *some* host dir there.
+        # If the real host config dir doesn't exist, mount a per-engine empty dir under $cache_dir.
+        local mount_source="$host_config_dir"
+        if [ -z "$mount_source" ] || [ ! -d "$mount_source" ]; then
+          mount_source="$cache_dir/empty-config/$engine"
+          mkdir -p "$mount_source"
+        fi
+
+        # 1) Mount config directory.
+        args+=( -v "''${mount_source}:''${container_config_dir}:rw" )
+
+        # 2) If a profile is selected, mount it over the active credentials file (replace semantics).
+        if [ -n "$profile_env_name" ]; then
+          local profile_name="''${!profile_env_name:-}"
           if [ -n "$profile_name" ]; then
-            if [ -n "$profile_base" ]; then
-              profile_path="$profile_base/$profile_name.json"
-            else
-              profile_path="$host_config/$profile_dir/$profile_name.json"
-            fi
-            if [ -f "$profile_path" ]; then
-              args+=( -v "$profile_path:$container_config/$profile_target:rw" )
-            else
-              echo "ERROR: ''${profile_var} is set to ''${profile_name}' but profile not found at ''$profile_path'." >&2
+            if [ -z "$profile_base_dir" ]; then
+              echo "ERROR: profile base dir is empty for $engine" >&2
               exit 1
             fi
+
+            local profile_path="''${profile_base_dir}/''${profile_name}.json"
+            if [ ! -f "$profile_path" ]; then
+              echo "ERROR: ''${profile_env_name} is set to "''${profile_name}" but profile not found at ''${profile_path}." >&2
+              exit 1
+            fi
+
+            # Mount the selected profile JSON over the active credential file inside the config dir.
+            # This obscures whatever file existed there, without modifying the host config. [web:43]
+            args+=( -v "''${profile_path}:''${container_config_dir}/''${active_credentials_file}:ro" )
           fi
         fi
+      }
+
+      # ---------------------------------------------------------------
+
+      # Canonical host-side config vars (standardized):
+      # - CODEX_CONFIG_DIR (wrapper canonical) -> sets CODEX_HOME in container because Codex expects CODEX_HOME.
+      # - OPENCODE_CONFIG_DIR, CLAUDE_CONFIG_DIR (native)
+      codex_host_config="''${CODEX_CONFIG_DIR:-''${HOME}/.codex}"
+      opencode_host_config="''${OPENCODE_CONFIG_DIR:-''${HOME}/.config/opencode}"
+      claude_host_config="''${CLAUDE_CONFIG_DIR:-''${HOME}/.claude}"
+
+      # Canonical host-side profile base dirs:
+      codex_profile_base="''${CODEX_PROFILE_BASE_DIR:-''${HOME}/.codex/profiles}"
+      opencode_profile_base="''${OPENCODE_PROFILE_BASE_DIR:-''${opencode_host_config}/profiles}"
+      claude_profile_base="''${CLAUDE_PROFILE_BASE_DIR:-''${claude_host_config}/profiles}"
+
+      # Standalone wrappers
+      if [ "${toolName}" = "codex" ]; then
+        mount_engine "codex" "$codex_host_config" "/config/.codex" \
+          "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
+          "CODEX_PROFILE" "$codex_profile_base" "auth.json"
       fi
+
+      if [ "${toolName}" = "opencode" ]; then
+        mount_engine "opencode" "$opencode_host_config" "/config/.opencode" \
+          "OPENCODE_CONFIG_DIR=/config/.opencode" \
+          "OPENCODE_PROFILE" "$opencode_profile_base" "opencode.json"
+      fi
+
+      if [ "${toolName}" = "claude" ]; then
+        mount_engine "claude" "$claude_host_config" "/config/.claude" \
+          "CLAUDE_CONFIG_DIR=/config/.claude" \
+          "CLAUDE_PROFILE" "$claude_profile_base" ".credentials.json"
+      fi
+
+      # Codemachine wrapper: mount ALL engines so codemachine-launched subagents reuse and switch profiles.
+      if [ "${toolName}" = "codemachine" ]; then
+        # Codex: must set CODEX_HOME for credential path (auth.json under CODEX_HOME).
+        mount_engine "codex" "$codex_host_config" "/config/.codex" \
+          "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
+          "CODEX_PROFILE" "$codex_profile_base" "auth.json"
+
+        # OpenCode: codemachine defaults OPENCODE_CONFIG_DIR=$HOME/.codemachine/opencode but docs say it can be overridden;
+        # set it explicitly so profile switching works with your host dir.[page:2]
+        mount_engine "opencode" "$opencode_host_config" "/config/.opencode" \
+          "OPENCODE_CONFIG_DIR=/config/.opencode" \
+          "OPENCODE_PROFILE" "$opencode_profile_base" "opencode.json"
+
+        mount_engine "claude" "$claude_host_config" "/config/.claude" \
+          "CLAUDE_CONFIG_DIR=/config/.claude" \
+          "CLAUDE_PROFILE" "$claude_profile_base" ".credentials.json"
+      fi
+
+      # ---------------------------------------------------------------
 
       if [ "$runtime" = docker ] && [ -S "/var/run/docker.sock" ]; then
         args+=( -v "/var/run/docker.sock:/var/run/docker.sock" )
@@ -593,6 +668,7 @@ require-sigs = false"
 
       args+=( --entrypoint "$entrypoint" )
       args+=( "''${image_ref}" )
+      args+=( "${toolName}" )
       if [ "$#" -gt 0 ]; then
         args+=( "$@" )
       fi
@@ -602,7 +678,6 @@ require-sigs = false"
     '';
 
   toolWrappers = builtins.mapAttrs (name: _: mkToolWrapper name) toolsWithName;
-
 
 in builtins.mapAttrs (_: wrapper: {
   image   = toolsImage;

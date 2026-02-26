@@ -17,13 +17,15 @@ fi
 agent_root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 project_root="${AGENT_PROJECT_ROOT:-$PWD}"
 entry_nix="${AGENT_NIX_ENTRY:-$agent_root/nix/tool-images.nix}"
-cache_dir="${AGENT_CACHE_DIR:-$project_root/.cache/agent-tools}"
+cache_dir="${AGENT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/agent-tools}"
 tools_list="${AGENT_TOOLS:-codex claude opencode codemachine}"
 project_nix_dir="${AGENT_PROJECT_NIX_DIR:-$project_root/nix}"
 project_dev_packages_file="${AGENT_PROJECT_DEV_PACKAGES_FILE:-$project_nix_dir/dev-packages.nix}"
 project_locked_pkgs_file="${AGENT_PROJECT_LOCKED_PKGS_FILE:-$project_nix_dir/locked-pkgs.nix}"
 project_nixpkgs_lock_file="${AGENT_PROJECT_NIXPKGS_LOCK_FILE:-$project_nix_dir/nixpkgs.lock}"
 project_unstable_lock_file="${AGENT_PROJECT_UNSTABLE_LOCK_FILE:-$project_nix_dir/unstable.lock}"
+default_nixpkgs_url="https://nixos.org/channels/nixos-25.11/nixexprs.tar.xz"
+default_unstable_url="https://nixos.org/channels/nixos-unstable/nixexprs.tar.xz"
 
 export AGENT_PROJECT_NIX_DIR="$project_nix_dir"
 export AGENT_PROJECT_DEV_PACKAGES_FILE="$project_dev_packages_file"
@@ -31,16 +33,95 @@ export AGENT_PROJECT_LOCKED_PKGS_FILE="$project_locked_pkgs_file"
 export AGENT_PROJECT_NIXPKGS_LOCK_FILE="$project_nixpkgs_lock_file"
 export AGENT_PROJECT_UNSTABLE_LOCK_FILE="$project_unstable_lock_file"
 
+extract_locked_tarball_url() {
+  local symbol="$1"
+  local source_file="$2"
+
+  if [ ! -f "$source_file" ]; then
+    return 0
+  fi
+
+  awk -v symbol="$symbol" '
+    $0 ~ "^[[:space:]]*" symbol "[[:space:]]*=[[:space:]]*lockedTarball[[:space:]]*\\{" {
+      in_block = 1
+      next
+    }
+    in_block && $0 ~ /^[[:space:]]*url[[:space:]]*=/ {
+      gsub(/^[[:space:]]*url[[:space:]]*=[[:space:]]*"/, "", $0)
+      gsub(/".*$/, "", $0)
+      print $0
+      exit
+    }
+    in_block && $0 ~ /^[[:space:]]*};[[:space:]]*$/ {
+      in_block = 0
+    }
+  ' "$source_file"
+}
+
+project_nixpkgs_url="${AGENT_PROJECT_NIXPKGS_URL:-}"
+project_unstable_url="${AGENT_PROJECT_UNSTABLE_URL:-}"
+
+if [ -z "$project_nixpkgs_url" ]; then
+  project_nixpkgs_url="$(extract_locked_tarball_url "nixpkgsSrc" "$project_locked_pkgs_file")"
+fi
+if [ -z "$project_unstable_url" ]; then
+  project_unstable_url="$(extract_locked_tarball_url "unstableSrc" "$project_locked_pkgs_file")"
+fi
+
+project_nixpkgs_url="${project_nixpkgs_url:-$default_nixpkgs_url}"
+project_unstable_url="${project_unstable_url:-$default_unstable_url}"
+
+mkdir -p "$cache_dir"
+
+ensure_lock_file() {
+  local lock_name="$1"
+  local lock_url="$2"
+  local lock_file="$3"
+  local refresh="${AGENT_REFRESH_LOCKS:-0}"
+
+  if [ "$refresh" != "1" ] && [ -s "$lock_file" ]; then
+    return 0
+  fi
+
+  if [ -z "$lock_url" ]; then
+    echo "[agent] unable to resolve URL for $lock_name lock file: $lock_file" >&2
+    exit 1
+  fi
+  if ! command -v nix-prefetch-url >/dev/null 2>&1; then
+    echo "[agent] nix-prefetch-url is required to generate $lock_name lock file" >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$lock_file")"
+  mkdir -p "$cache_dir/tmp-prefetch"
+  echo "[agent] refreshing $lock_name lock: $lock_file" >&2
+  lock_hash="$(TMPDIR="$cache_dir/tmp-prefetch" nix-prefetch-url --type sha256 --unpack "$lock_url" 2>/dev/null | tail -n1 || true)"
+
+  if [ -z "$lock_hash" ]; then
+    if [ -s "$lock_file" ]; then
+      echo "[agent] warning: failed to refresh $lock_name lock; keeping existing value" >&2
+      return 0
+    fi
+    echo "[agent] failed to generate $lock_name lock from: $lock_url" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$lock_hash" >"$lock_file"
+}
+
+ensure_lock_file "nixpkgs" "$project_nixpkgs_url" "$project_nixpkgs_lock_file"
+ensure_lock_file "unstable" "$project_unstable_url" "$project_unstable_lock_file"
+
 if [ "${AGENT_DEBUG:-0}" = "1" ]; then
   echo "[agent] project_nix_dir=$project_nix_dir" >&2
   echo "[agent] project_dev_packages_file=$project_dev_packages_file" >&2
   echo "[agent] project_locked_pkgs_file=$project_locked_pkgs_file" >&2
   echo "[agent] project_nixpkgs_lock_file=$project_nixpkgs_lock_file" >&2
   echo "[agent] project_unstable_lock_file=$project_unstable_lock_file" >&2
+  echo "[agent] project_nixpkgs_url=$project_nixpkgs_url" >&2
+  echo "[agent] project_unstable_url=$project_unstable_url" >&2
   echo "[agent] entry_nix=$entry_nix" >&2
 fi
-
-mkdir -p "$cache_dir"
 
 has_tool=0
 for candidate in $tools_list; do
@@ -89,6 +170,8 @@ hash_inputs() {
     printf 'project_locked_pkgs_file=%s\n' "$project_locked_pkgs_file"
     printf 'project_nixpkgs_lock_file=%s\n' "$project_nixpkgs_lock_file"
     printf 'project_unstable_lock_file=%s\n' "$project_unstable_lock_file"
+    printf 'project_nixpkgs_url=%s\n' "$project_nixpkgs_url"
+    printf 'project_unstable_url=%s\n' "$project_unstable_url"
 
     if [ -n "${AGENT_HASH_FILES:-}" ]; then
       while IFS= read -r f; do
@@ -148,6 +231,12 @@ if [ -n "$cache_file" ]; then
   : >"$tmp_cache"
 fi
 
+gcroots_dir=""
+if [ -n "$hash" ]; then
+  gcroots_dir="$cache_dir/gcroots/$hash"
+  mkdir -p "$gcroots_dir"
+fi
+
 for t in $tools_list; do
   path="${paths[$idx]:-}"
   if [ -z "$path" ]; then
@@ -165,6 +254,15 @@ for t in $tools_list; do
 
   if [ -n "$cache_file" ]; then
     printf '%s %s\n' "$t" "$path" >>"$tmp_cache"
+  fi
+  if [ -n "$gcroots_dir" ]; then
+    root_link="$gcroots_dir/$t"
+    rm -f "$root_link"
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store --add-root "$root_link" --indirect "$path" >/dev/null 2>&1 || ln -sfn "$path" "$root_link"
+    else
+      ln -sfn "$path" "$root_link"
+    fi
   fi
 
   idx=$((idx + 1))
