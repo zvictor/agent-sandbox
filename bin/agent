@@ -1,0 +1,603 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KNOWN_TOOLS="codex claude opencode codemachine"
+NIX_FEATURES="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+
+contains_word() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+split_csv_or_lines() {
+  local value="$1"
+  printf '%s\n' "$value" | tr ',' '\n' | sed '/^[[:space:]]*$/d'
+}
+
+nix_cmd() {
+  env -u NIX_CONFIG nix --extra-experimental-features "$NIX_FEATURES" "$@"
+}
+
+normalize_flake_ref() {
+  local ref="$1"
+  local path_ref=""
+
+  case "$ref" in
+    path:*)
+      path_ref="${ref#path:}"
+      if [ -d "$path_ref" ]; then
+        printf 'path:%s\n' "$(cd "$path_ref" && pwd -P)"
+      else
+        printf '%s\n' "$ref"
+      fi
+      return
+      ;;
+    /*|./*|../*)
+      if [ -d "$ref" ] && [ -f "$ref/flake.nix" ]; then
+        printf 'path:%s\n' "$(cd "$ref" && pwd -P)"
+      else
+        printf '%s\n' "$ref"
+      fi
+      return
+      ;;
+    *)
+      if [ -d "$ref" ] && [ -f "$ref/flake.nix" ]; then
+        printf 'path:%s\n' "$(cd "$ref" && pwd -P)"
+      else
+        printf '%s\n' "$ref"
+      fi
+      return
+      ;;
+  esac
+}
+
+resolve_tool() {
+  local argv0
+  argv0="$(basename "$0")"
+
+  if contains_word "$argv0" $KNOWN_TOOLS; then
+    TOOL="$argv0"
+    REMAINING_ARGS=("$@")
+    return
+  fi
+
+  if [ "${1:-}" = "--version" ]; then
+    TOOL=""
+    return
+  fi
+
+  if [ "$#" -lt 1 ]; then
+    echo "usage: agent <tool> [args...]" >&2
+    exit 1
+  fi
+
+  TOOL="$1"
+  shift
+  REMAINING_ARGS=("$@")
+}
+
+TOOL=""
+REMAINING_ARGS=()
+resolve_tool "$@"
+
+if [ -z "$TOOL" ] && [ "${1:-}" = "--version" ]; then
+  SANDBOX_FLAKE="${AGENT_SANDBOX_FLAKE_REF:-${AGENT_SANDBOX_FLAKE:-}}"
+  if [ -z "$SANDBOX_FLAKE" ]; then
+    LOCAL_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+    if [ -f "$LOCAL_ROOT/flake.nix" ]; then
+      SANDBOX_FLAKE="path:$LOCAL_ROOT"
+    else
+      SANDBOX_FLAKE="github:zvictor/agent-sandbox"
+    fi
+  fi
+  SANDBOX_FLAKE="$(normalize_flake_ref "$SANDBOX_FLAKE")"
+  nix_cmd flake metadata "$SANDBOX_FLAKE" --json | jq -r '.locked.rev // .revision // "unknown"'
+  exit 0
+fi
+
+if ! contains_word "$TOOL" $KNOWN_TOOLS; then
+  echo "[agent] unsupported tool '$TOOL' (supported: $KNOWN_TOOLS)" >&2
+  exit 1
+fi
+
+TOOLS_LIST="${AGENT_TOOLS:-$KNOWN_TOOLS}"
+if ! contains_word "$TOOL" $TOOLS_LIST; then
+  echo "[agent] tool '$TOOL' is disabled by AGENT_TOOLS='$TOOLS_LIST'" >&2
+  exit 1
+fi
+
+RUNTIME="${AGENT_RUNTIME:-${CODEX_RUNTIME:-}}"
+if [ -z "$RUNTIME" ]; then
+  if command -v podman >/dev/null 2>&1; then
+    RUNTIME="podman"
+  elif command -v docker >/dev/null 2>&1; then
+    RUNTIME="docker"
+  else
+    echo "[agent] neither podman nor docker is available in PATH" >&2
+    exit 1
+  fi
+fi
+
+if ! command -v "$RUNTIME" >/dev/null 2>&1; then
+  echo "[agent] requested runtime '$RUNTIME' is not available" >&2
+  exit 1
+fi
+
+SANDBOX_FLAKE="${AGENT_SANDBOX_FLAKE_REF:-${AGENT_SANDBOX_FLAKE:-}}"
+if [ -z "$SANDBOX_FLAKE" ]; then
+  LOCAL_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+  if [ -f "$LOCAL_ROOT/flake.nix" ]; then
+    SANDBOX_FLAKE="path:$LOCAL_ROOT"
+  else
+    SANDBOX_FLAKE="github:zvictor/agent-sandbox"
+  fi
+fi
+SANDBOX_FLAKE="$(normalize_flake_ref "$SANDBOX_FLAKE")"
+
+LOCK_ARGS=()
+SANDBOX_LOCK_PATH=""
+case "$SANDBOX_FLAKE" in
+  path:*)
+    SANDBOX_LOCK_PATH="${SANDBOX_FLAKE#path:}"
+    ;;
+  /*|./*|../*)
+    SANDBOX_LOCK_PATH="$SANDBOX_FLAKE"
+    ;;
+esac
+if [ -n "$SANDBOX_LOCK_PATH" ] && [ -f "$SANDBOX_LOCK_PATH/flake.lock" ]; then
+  LOCK_ARGS+=(--no-update-lock-file)
+fi
+
+PROJECT_ROOT="${AGENT_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+PROJECT_NIX_DIR="${AGENT_PROJECT_NIX_DIR:-$PROJECT_ROOT/nix}"
+
+# Derive a stable host HOME for config/profile mounts. Some execution contexts
+# set HOME=/cache, which is a container path and not useful on host.
+HOST_HOME="${AGENT_HOST_HOME:-$HOME}"
+if [ "$HOST_HOME" = "/cache" ] || [ ! -d "$HOST_HOME" ]; then
+  if command -v getent >/dev/null 2>&1; then
+    HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+  fi
+fi
+if [ -z "$HOST_HOME" ] || [ ! -d "$HOST_HOME" ]; then
+  HOST_HOME="$PROJECT_ROOT"
+fi
+
+TMP_DIR=""
+cleanup() {
+  if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+  fi
+}
+trap cleanup EXIT
+
+STORE_INPUT_PATH=""
+STORE_INPUT_NAME=""
+if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
+  STORE_INPUT_PATH="$PROJECT_NIX_DIR"
+  STORE_INPUT_NAME="project-nix"
+elif [ -f "$PROJECT_NIX_DIR/dev-packages.nix" ]; then
+  STORE_INPUT_PATH="$PROJECT_NIX_DIR"
+  STORE_INPUT_NAME="project-nix-legacy"
+elif [ -f "$PROJECT_ROOT/shell.nix" ]; then
+  TMP_DIR="$(mktemp -d)"
+  cp -a "$PROJECT_ROOT/shell.nix" "$TMP_DIR/shell.nix"
+  if [ -d "$PROJECT_ROOT/nix" ]; then
+    cp -a "$PROJECT_ROOT/nix" "$TMP_DIR/nix"
+  fi
+  if [ -f "$PROJECT_ROOT/flake.nix" ]; then
+    cp -a "$PROJECT_ROOT/flake.nix" "$TMP_DIR/flake.nix"
+  fi
+  if [ -f "$PROJECT_ROOT/flake.lock" ]; then
+    cp -a "$PROJECT_ROOT/flake.lock" "$TMP_DIR/flake.lock"
+  fi
+  STORE_INPUT_PATH="$TMP_DIR"
+  STORE_INPUT_NAME="project-shell"
+else
+  echo "[agent] no package source found in project root: $PROJECT_ROOT" >&2
+  echo "        expected '$PROJECT_NIX_DIR/packages.nix' or '$PROJECT_NIX_DIR/dev-packages.nix' or '$PROJECT_ROOT/shell.nix'" >&2
+  exit 1
+fi
+
+DEFAULT_CACHE_BASE="${XDG_CACHE_HOME:-$HOST_HOME/.cache}"
+if ! mkdir -p "$DEFAULT_CACHE_BASE" >/dev/null 2>&1; then
+  DEFAULT_CACHE_BASE="$PROJECT_ROOT/.cache-agent"
+fi
+CACHE_DIR="${AGENT_CACHE_DIR:-$DEFAULT_CACHE_BASE/agent-sandbox}"
+GCROOTS_DIR="$CACHE_DIR/gcroots"
+IMAGES_DIR="$CACHE_DIR/images"
+mkdir -p "$CACHE_DIR" "$GCROOTS_DIR" "$IMAGES_DIR"
+
+if [ "${AGENT_DEBUG:-0}" = "1" ]; then
+  echo "[agent] TOOL=$TOOL" >&2
+  echo "[agent] RUNTIME=$RUNTIME" >&2
+  echo "[agent] SANDBOX_FLAKE=$SANDBOX_FLAKE" >&2
+  echo "[agent] PROJECT_ROOT=$PROJECT_ROOT" >&2
+  echo "[agent] STORE_INPUT_PATH=$STORE_INPUT_PATH" >&2
+fi
+
+PROJECT_STORE_PATH=""
+if PROJECT_STORE_PATH="$(nix_cmd store add --mode nar --name "$STORE_INPUT_NAME" "$STORE_INPUT_PATH" 2>/dev/null)"; then
+  :
+else
+  PROJECT_STORE_PATH="$(nix_cmd store add-path "$STORE_INPUT_PATH" --name "$STORE_INPUT_NAME")"
+fi
+
+STORE_KEY="${PROJECT_STORE_PATH##*/}"
+IMAGE_TARGET="${AGENT_IMAGE_TARGET:-archiveImage}"
+case "$IMAGE_TARGET" in
+  archiveImage|layeredImage|streamImage) ;;
+  *)
+    echo "[agent] invalid AGENT_IMAGE_TARGET='$IMAGE_TARGET' (allowed: archiveImage, layeredImage, streamImage)" >&2
+    exit 1
+    ;;
+esac
+IMAGE_GCROOT="$GCROOTS_DIR/${STORE_KEY}--${IMAGE_TARGET}"
+IMAGE_ID_FILE="$IMAGES_DIR/${RUNTIME}-${STORE_KEY}-${IMAGE_TARGET}.image-id"
+
+if [ "${AGENT_FORCE_REBUILD:-0}" = "1" ]; then
+  rm -f "$IMAGE_GCROOT" "$IMAGE_ID_FILE"
+fi
+
+IMAGE_OUT=""
+if [ -L "$IMAGE_GCROOT" ] && [ -e "$IMAGE_GCROOT" ]; then
+  IMAGE_OUT="$(readlink -f "$IMAGE_GCROOT")"
+fi
+
+if [ -z "$IMAGE_OUT" ] || [ ! -e "$IMAGE_OUT" ]; then
+  echo "[agent] building $IMAGE_TARGET (first run or package graph changed)..." >&2
+  START_TS="$(date +%s)"
+
+  IMAGE_OUT="$(
+    nix_cmd build "${SANDBOX_FLAKE}#${IMAGE_TARGET}" \
+      --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+      --print-out-paths \
+      --no-link \
+      "${LOCK_ARGS[@]}"
+  )"
+
+  END_TS="$(date +%s)"
+  echo "[agent] image build completed in $((END_TS - START_TS))s" >&2
+
+  TMP_ROOT="${IMAGE_GCROOT}.tmp.$$"
+  if command -v nix-store >/dev/null 2>&1; then
+    nix-store --add-root "$TMP_ROOT" --indirect "$IMAGE_OUT" >/dev/null 2>&1 || ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
+  else
+    ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
+  fi
+  mv -f "$TMP_ROOT" "$IMAGE_GCROOT"
+fi
+
+IMAGE_ID=""
+if [ -f "$IMAGE_ID_FILE" ]; then
+  IMAGE_ID="$(cat "$IMAGE_ID_FILE")"
+  if [ -n "$IMAGE_ID" ] && ! "$RUNTIME" image inspect "$IMAGE_ID" >/dev/null 2>&1; then
+    IMAGE_ID=""
+  fi
+fi
+
+if [ -z "$IMAGE_ID" ]; then
+  echo "[agent] loading image into $RUNTIME..." >&2
+  if [ "$IMAGE_TARGET" = "streamImage" ]; then
+    STREAM_EXEC=""
+    if [ -x "$IMAGE_OUT" ] && [ ! -d "$IMAGE_OUT" ]; then
+      STREAM_EXEC="$IMAGE_OUT"
+    elif [ -d "$IMAGE_OUT/bin" ]; then
+      STREAM_EXEC="$(find "$IMAGE_OUT/bin" -maxdepth 1 -type f -name 'stream-*' | head -n1 || true)"
+    fi
+    if [ -z "$STREAM_EXEC" ] || [ ! -x "$STREAM_EXEC" ]; then
+      echo "[agent] could not find stream executable for $IMAGE_OUT" >&2
+      exit 1
+    fi
+
+    set +o pipefail
+    LOAD_OUTPUT="$($STREAM_EXEC | "$RUNTIME" load 2>&1)"
+    LOAD_STATUS=$?
+    set -o pipefail
+  else
+    LOAD_OUTPUT="$("$RUNTIME" load -i "$IMAGE_OUT" 2>&1)"
+    LOAD_STATUS=$?
+  fi
+
+  if [ "$LOAD_STATUS" -ne 0 ]; then
+    echo "$LOAD_OUTPUT" >&2
+    echo "[agent] image load failed with runtime '$RUNTIME' (status=$LOAD_STATUS)" >&2
+    exit "$LOAD_STATUS"
+  fi
+  echo "$LOAD_OUTPUT" >&2
+
+  LOADED_REF="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/^Loaded image(s):[[:space:]]*//p; s/^Loaded image:[[:space:]]*//p' | tail -n1 | tr -d '\r')"
+
+  if [ -n "$LOADED_REF" ]; then
+    IMAGE_ID="$($RUNTIME image inspect "$LOADED_REF" --format '{{.Id}}' 2>/dev/null || true)"
+  fi
+
+  if [ -z "$IMAGE_ID" ]; then
+    IMAGE_ID="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/.*\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n1)"
+  fi
+
+  if [ -z "$IMAGE_ID" ]; then
+    IMAGE_ID="$($RUNTIME image inspect agent-base:latest --format '{{.Id}}' 2>/dev/null || true)"
+  fi
+
+  if [ -z "$IMAGE_ID" ]; then
+    echo "[agent] failed to resolve image id after load" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$IMAGE_ID" > "$IMAGE_ID_FILE"
+fi
+
+TOOL_CACHE_DIR="$CACHE_DIR/tools/$TOOL"
+mkdir -p "$TOOL_CACHE_DIR"
+mkdir -p "$CACHE_DIR/.config/direnv"
+cat > "$CACHE_DIR/.config/direnv/direnvrc" <<'EOF_DIRENV'
+source /etc/direnv/direnvrc
+EOF_DIRENV
+
+OS_NAME="$(uname -s)"
+Z_SUFFIX=""
+if [ "$OS_NAME" = "Linux" ]; then
+  Z_SUFFIX=",Z"
+fi
+
+WORKSPACE_HOST_PATH="${AGENT_WORKSPACE_HOST_PATH:-$PWD}"
+
+NIX_CONFIG="sandbox = false
+substituters = https://cache.nixos.org
+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY"
+if [ "${AGENT_USE_LOCAL_BINCACHE:-1}" = "1" ]; then
+  NIX_CONFIG="$NIX_CONFIG
+extra-substituters = file:///nixcache"
+fi
+if [ "${AGENT_LOCAL_BINCACHE_ALLOW_UNSIGNED:-0}" = "1" ]; then
+  NIX_CONFIG="$NIX_CONFIG
+require-sigs = false"
+fi
+
+CONTAINER_NAME="agent-${TOOL}-$(printf '%s%s' "${RANDOM:-0}" "${RANDOM:-0}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
+CONTAINER_NAME="${CONTAINER_NAME:0:63}"
+
+ARGS=(
+  --rm
+  --name "$CONTAINER_NAME"
+  --cap-drop=ALL
+  --security-opt=no-new-privileges
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m
+  --memory="${AGENT_MEMORY_LIMIT:-4g}"
+  --cpus="${AGENT_CPU_LIMIT:-2}"
+  --pids-limit="${AGENT_PIDS_LIMIT:-512}"
+  -w /workspace
+  -v "$TOOL_CACHE_DIR:/cache:rw${Z_SUFFIX}"
+  -v "$WORKSPACE_HOST_PATH:/workspace:rw${Z_SUFFIX}"
+  -e HOME=/cache
+  -e XDG_CACHE_HOME=/cache
+  -e TOOL_CACHE=/cache
+  -e CODEX_CACHE=/cache
+  -e WORKSPACE_HOST_PATH="$WORKSPACE_HOST_PATH"
+  -e NIX_CONFIG="$NIX_CONFIG"
+)
+
+if [ -n "${AGENT_NIX_BINCACHE_DIR:-}" ]; then
+  ARGS+=( -v "${AGENT_NIX_BINCACHE_DIR}:/nixcache:ro${Z_SUFFIX}" )
+else
+  ARGS+=( -v "agent-nix-bincache:/nixcache:rw" )
+fi
+
+if [ "$RUNTIME" = "podman" ]; then
+  if [ "$OS_NAME" = "Darwin" ]; then
+    ARGS+=( --network=host )
+  else
+    USERNS_MODE="${AGENT_USERNS:-keep-id}"
+    ARGS+=( --userns="$USERNS_MODE" )
+
+    if [ -n "${AGENT_NETWORK_MODE:-}" ]; then
+      ARGS+=( --network="${AGENT_NETWORK_MODE}" )
+    elif podman info --format '{{.Host.Slirp4NetNS.Executable}}' 2>/dev/null | grep -q slirp4netns; then
+      ARGS+=( --network=slirp4netns:allow_host_loopback=true )
+    else
+      ARGS+=( --network=host )
+      echo "[agent] warning: slirp4netns unavailable, falling back to --network=host" >&2
+    fi
+  fi
+else
+  ARGS+=( --user "$(id -u):$(id -g)" )
+  if [ -n "${AGENT_NETWORK_MODE:-}" ]; then
+    ARGS+=( --network="${AGENT_NETWORK_MODE}" )
+  fi
+fi
+
+if [ -f "$HOST_HOME/.gitconfig" ]; then
+  ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
+fi
+
+if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+  ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
+  ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock:rw${Z_SUFFIX}" )
+  ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
+  ARGS+=( -e CONTAINER_HOST=unix:///run/podman/podman.sock )
+elif [ -S /var/run/docker.sock ]; then
+  ARGS+=( -v "/var/run/docker.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
+  ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
+fi
+
+if [ -S /nix/var/nix/daemon-socket/socket ]; then
+  ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
+fi
+
+if [ -f "$WORKSPACE_HOST_PATH/.git" ]; then
+  GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_HOST_PATH/.git" | head -n1 || true)"
+  if [ -n "$GITDIR_REL" ]; then
+    if [ "${GITDIR_REL#/}" != "$GITDIR_REL" ]; then
+      MAIN_GIT_DIR="$GITDIR_REL"
+    else
+      MAIN_GIT_DIR="$(cd "$WORKSPACE_HOST_PATH" && cd "$GITDIR_REL" && pwd -P)"
+    fi
+    if [ -d "$MAIN_GIT_DIR" ]; then
+      ARGS+=( -v "$MAIN_GIT_DIR:$MAIN_GIT_DIR:rw${Z_SUFFIX}" )
+    fi
+  fi
+fi
+
+if [ -n "${AGENT_EXTRA_ENV:-}" ]; then
+  while IFS= read -r ENV_SPEC; do
+    [ -z "$ENV_SPEC" ] && continue
+    ARGS+=( -e "$ENV_SPEC" )
+  done < <(split_csv_or_lines "$AGENT_EXTRA_ENV")
+fi
+
+if [ -n "${AGENT_AUTO_MOUNT_DIRS:-}" ]; then
+  while IFS= read -r MOUNT_NAME; do
+    [ -z "$MOUNT_NAME" ] && continue
+    MOUNT_DIR=""
+    SEARCH_DIR="$PWD"
+    while [ "$SEARCH_DIR" != "/" ]; do
+      if [ -d "$SEARCH_DIR/$MOUNT_NAME" ]; then
+        MOUNT_DIR="$SEARCH_DIR/$MOUNT_NAME"
+        break
+      fi
+      SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+    done
+    if [ -n "$MOUNT_DIR" ]; then
+      ARGS+=( -v "$MOUNT_DIR:/$MOUNT_NAME:rw${Z_SUFFIX}" )
+    fi
+  done < <(split_csv_or_lines "$AGENT_AUTO_MOUNT_DIRS")
+fi
+
+if [ -n "${AGENT_EXTRA_MOUNTS:-}" ]; then
+  while IFS= read -r MOUNT_SPEC; do
+    [ -z "$MOUNT_SPEC" ] && continue
+    ARGS+=( -v "$MOUNT_SPEC" )
+  done < <(split_csv_or_lines "$AGENT_EXTRA_MOUNTS")
+fi
+
+DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nCODEX_PROFILE\nOPENCODE_PROFILE\nCLAUDE_PROFILE\nCODEX_CONFIG_DIR\nOPENCODE_CONFIG_DIR\nCLAUDE_CONFIG_DIR\nCODEX_PROFILE_BASE_DIR\nOPENCODE_PROFILE_BASE_DIR\nCLAUDE_PROFILE_BASE_DIR\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nAGENT_'
+PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
+
+while IFS='=' read -r KEY VAL; do
+  while IFS= read -r PREFIX; do
+    [ -z "$PREFIX" ] && continue
+    case "$KEY" in
+      "$PREFIX"*)
+        ARGS+=( -e "$KEY=$VAL" )
+        break
+        ;;
+    esac
+  done < <(split_csv_or_lines "$PASS_ENV_PREFIXES")
+done < <(env)
+
+if [ -n "${AGENT_PASS_ENV_NAMES:-}" ]; then
+  while IFS= read -r ENV_NAME; do
+    [ -z "$ENV_NAME" ] && continue
+    if [ -n "${!ENV_NAME+x}" ]; then
+      ARGS+=( -e "$ENV_NAME=${!ENV_NAME}" )
+    fi
+  done < <(split_csv_or_lines "$AGENT_PASS_ENV_NAMES")
+fi
+
+mount_engine() {
+  local engine="$1"
+  local host_config_dir="$2"
+  local container_config_dir="$3"
+  local env_pairs="$4"
+  local profile_env_name="$5"
+  local profile_base_dir="$6"
+  local active_credentials_file="$7"
+
+  if [ -n "$env_pairs" ]; then
+    local kv
+    while IFS= read -r kv; do
+      [ -z "$kv" ] && continue
+      ARGS+=( -e "$kv" )
+    done < <(split_csv_or_lines "$env_pairs")
+  fi
+
+  local mount_source="$host_config_dir"
+  if [ -z "$mount_source" ] || [ ! -d "$mount_source" ]; then
+    mount_source="$CACHE_DIR/empty-config/$engine"
+    mkdir -p "$mount_source"
+  fi
+
+  ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
+
+  if [ -n "$profile_env_name" ]; then
+    local profile_name="${!profile_env_name:-}"
+    if [ -n "$profile_name" ]; then
+      if [ -z "$profile_base_dir" ]; then
+        echo "[agent] ERROR: profile base dir is empty for $engine" >&2
+        exit 1
+      fi
+      local profile_path="$profile_base_dir/$profile_name.json"
+      if [ ! -f "$profile_path" ]; then
+        echo "[agent] ERROR: profile '$profile_name' not found at $profile_path" >&2
+        exit 1
+      fi
+      ARGS+=( -v "$profile_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
+    fi
+  fi
+}
+
+CODEX_HOST_CONFIG="${CODEX_CONFIG_DIR:-$HOST_HOME/.codex}"
+OPENCODE_HOST_CONFIG="${OPENCODE_CONFIG_DIR:-$HOST_HOME/.config/opencode}"
+CLAUDE_HOST_CONFIG="${CLAUDE_CONFIG_DIR:-$HOST_HOME/.claude}"
+
+CODEX_PROFILE_BASE="${CODEX_PROFILE_BASE_DIR:-$HOST_HOME/.codex/profiles}"
+OPENCODE_PROFILE_BASE="${OPENCODE_PROFILE_BASE_DIR:-$OPENCODE_HOST_CONFIG/profiles}"
+CLAUDE_PROFILE_BASE="${CLAUDE_PROFILE_BASE_DIR:-$CLAUDE_HOST_CONFIG/profiles}"
+
+if [ "$TOOL" = "codex" ]; then
+  mount_engine "codex" "$CODEX_HOST_CONFIG" "/config/.codex" \
+    "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
+    "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
+fi
+
+if [ "$TOOL" = "opencode" ]; then
+  mount_engine "opencode" "$OPENCODE_HOST_CONFIG" "/config/.opencode" \
+    "OPENCODE_CONFIG_DIR=/config/.opencode" \
+    "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
+fi
+
+if [ "$TOOL" = "claude" ]; then
+  mount_engine "claude" "$CLAUDE_HOST_CONFIG" "/config/.claude" \
+    "CLAUDE_CONFIG_DIR=/config/.claude" \
+    "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
+fi
+
+if [ "$TOOL" = "codemachine" ]; then
+  mount_engine "codex" "$CODEX_HOST_CONFIG" "/config/.codex" \
+    "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
+    "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
+
+  mount_engine "opencode" "$OPENCODE_HOST_CONFIG" "/config/.opencode" \
+    "OPENCODE_CONFIG_DIR=/config/.opencode" \
+    "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
+
+  mount_engine "claude" "$CLAUDE_HOST_CONFIG" "/config/.claude" \
+    "CLAUDE_CONFIG_DIR=/config/.claude" \
+    "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
+fi
+
+ARGS+=( -i )
+if [ "${AGENT_FORCE_TTY:-0}" = "1" ] || { [ -t 0 ] && [ -t 1 ]; }; then
+  ARGS+=( -t )
+fi
+
+ARGS+=( --entrypoint /usr/bin/env )
+ARGS+=( "$IMAGE_ID" )
+ARGS+=( "$TOOL" )
+if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  ARGS+=( "${REMAINING_ARGS[@]}" )
+fi
+
+if [ "${AGENT_DEBUG:-0}" = "1" ]; then
+  printf '[agent] running: %s run %q\n' "$RUNTIME" "${ARGS[*]}" >&2
+fi
+
+exec "$RUNTIME" run "${ARGS[@]}"

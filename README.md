@@ -8,32 +8,48 @@ Reusable sandbox project for running `codex`, `claude`, `opencode`, and `codemac
 - Flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`
 - Scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`
 
+## Architecture
+
+- `nix/image.nix`: pure Nix image definitions (`archiveImage`, `layeredImage`, `streamImage`)
+- `nix/detect-packages.nix`: host project package contract detection
+- `bin/agent`: runtime orchestrator (container runtime selection, mounts, profiles, sockets, env passthrough)
+
 ## Host project contract
 
-This sandbox is generic. The host project must provide these files:
+The sandbox auto-detects package sources in this order:
 
-- `<project-root>/nix/dev-packages.nix`
-- `<project-root>/nix/locked-pkgs.nix`
-- `<project-root>/nix/nixpkgs.lock`
-- `<project-root>/nix/unstable.lock`
+1. `<project-root>/nix/packages.nix` (recommended)
+2. `<project-root>/nix/dev-packages.nix` (legacy compatibility)
+3. `<project-root>/shell.nix` (fallback)
 
-The preferred integration variable is:
+### Option 1: `nix/packages.nix` (recommended)
 
-- `AGENT_PROJECT_ROOT=/path/to/host-project`
+```nix
+{ pkgs, unstable }:
+[
+  pkgs.bun
+  pkgs.nodejs
+  pkgs.git
+]
+```
 
-Optional overrides:
+You may also return `{ devPackages = [ ... ]; }` for compatibility.
 
-- `AGENT_PROJECT_NIX_DIR`
-- `AGENT_PROJECT_DEV_PACKAGES_FILE`
-- `AGENT_PROJECT_LOCKED_PKGS_FILE`
-- `AGENT_PROJECT_NIXPKGS_LOCK_FILE`
-- `AGENT_PROJECT_UNSTABLE_LOCK_FILE`
-- `AGENT_PROJECT_NIXPKGS_URL`
-- `AGENT_PROJECT_UNSTABLE_URL`
+### Option 2: existing `shell.nix`
 
-If lock files are missing, `scripts/agent` auto-generates them from the URLs in
-`locked-pkgs.nix` (`nixpkgsSrc` / `unstableSrc`) or from the default channel URLs.
-Use `AGENT_REFRESH_LOCKS=1` to force lock refresh.
+The shell is imported and packages are extracted from `buildInputs`, `nativeBuildInputs`, and `packages`.
+
+```nix
+{ pkgs ? import <nixpkgs> {} }:
+pkgs.mkShell {
+  packages = [ pkgs.bun pkgs.nodejs pkgs.git ];
+}
+```
+
+Limitations:
+
+- `shell.nix` with complex relative imports should prefer explicit `nix/packages.nix`
+- `shell.nix` that evaluates its own `<nixpkgs>` at top-level may fail under pure evaluation
 
 ## Install system-wide (NixOS)
 
@@ -51,7 +67,6 @@ Add this project as a flake input in your NixOS configuration and install packag
         ({ pkgs, ... }: {
           environment.systemPackages = [
             agent-sandbox.packages.${pkgs.system}.agent
-            # optional convenience wrappers
             agent-sandbox.packages.${pkgs.system}.codex
             agent-sandbox.packages.${pkgs.system}.claude
             agent-sandbox.packages.${pkgs.system}.opencode
@@ -128,32 +143,36 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 
 ## Additional knobs
 
-- `AGENT_CACHE_DIR`: wrapper cache directory
-- `AGENT_TOOLS`: tools built/cached by `scripts/agent` (default: `codex claude opencode codemachine`)
-- `AGENT_PASS_ENV_PREFIXES`: comma-separated env prefixes forwarded to container
-- `AGENT_PASS_ENV_NAMES`: comma-separated exact env names forwarded to container
+- `AGENT_PROJECT_ROOT`: host project root (defaults to current git top-level / cwd)
+- `AGENT_PROJECT_NIX_DIR`: override project nix dir (defaults to `$AGENT_PROJECT_ROOT/nix`)
+- `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake reference (example: `path:/abs/path/to/agent-sandbox`)
+- `AGENT_RUNTIME`: `podman` or `docker` (default auto-detect)
+- `AGENT_TOOLS`: allowed tool list (default: `codex claude opencode codemachine`)
+- `AGENT_CACHE_DIR`: runtime cache directory
+- `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `.gitconfig`, etc.)
+- `AGENT_FORCE_REBUILD=1`: ignore cached stream image and reload
+- `AGENT_IMAGE_TARGET`: image output to build/load (`archiveImage` default, or `layeredImage`/`streamImage`)
+- `AGENT_FORCE_TTY=1`: force `-t` even in non-tty pipelines
+- `AGENT_USERNS`: podman user namespace mode (default `keep-id`)
+- `AGENT_NETWORK_MODE`: explicit container network mode override
+- `AGENT_MEMORY_LIMIT`, `AGENT_CPU_LIMIT`, `AGENT_PIDS_LIMIT`: container limits
+- `AGENT_USE_LOCAL_BINCACHE=1|0`: enable/disable `/nixcache` substituter
+- `AGENT_NIX_BINCACHE_DIR`: host local Nix cache bind mount (read-only)
+- `AGENT_LOCAL_BINCACHE_ALLOW_UNSIGNED=1`: allow unsigned local substitutes
+- `AGENT_PASS_ENV_PREFIXES`: newline/comma-separated env prefixes to forward
+- `AGENT_PASS_ENV_NAMES`: comma-separated exact env names to forward
 - `AGENT_AUTO_MOUNT_DIRS`: comma-separated dir names auto-mounted from ancestors
 - `AGENT_EXTRA_MOUNTS`: comma-separated `host:container[:options]` mounts
-- `AGENT_EXTRA_ENV`: comma-separated `KEY=VALUE` container env assignments
-- `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace`
-- `AGENT_HASH_FILES`: comma-separated extra files included in wrapper cache hash
-- `AGENT_REFRESH_LOCKS=1`: force regenerate `nix/*.lock` from channel URLs
-- `AGENT_DEBUG=1`: prints resolved project paths before build
+- `AGENT_EXTRA_ENV`: comma-separated `KEY=VALUE` env pairs passed to container
+- `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace` (defaults to `$PWD`)
+- `AGENT_DEBUG=1`: print resolved paths and runtime details
 
-Wrapper outputs are stored as real Nix GC roots under the agent cache, so periodic
-`nix-collect-garbage` runs do not invalidate the wrapper cache by default.
-
-## Legacy nix-build entry
-
-`default.nix` is kept for compatibility:
-
-```sh
-nix-build . -A codex.wrapper
-```
+Wrapper outputs are registered as GC roots under `AGENT_CACHE_DIR`, so periodic
+`nix-collect-garbage` runs do not invalidate the cached stream image derivation.
 
 ## Release checklist
 
 ```sh
 nix --extra-experimental-features 'nix-command flakes' flake show path:.
-nix --extra-experimental-features 'nix-command flakes' flake lock --update-input nixpkgs
+nix --extra-experimental-features 'nix-command flakes' flake update
 ```
