@@ -151,7 +151,7 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_CACHE_DIR`: runtime cache directory
 - `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `.gitconfig`, etc.)
 - `AGENT_FORCE_REBUILD=1`: ignore cached stream image and reload
-- `AGENT_IMAGE_TARGET`: image output to build/load (`archiveImage` default, or `layeredImage`/`streamImage`)
+- `AGENT_IMAGE_TARGET`: image output to build/load (`streamImage` default, or `archiveImage`/`layeredImage`)
 - `AGENT_FORCE_TTY=1`: force `-t` even in non-tty pipelines
 - `AGENT_USERNS`: podman user namespace mode (default `keep-id`)
 - `AGENT_NETWORK_MODE`: explicit container network mode override

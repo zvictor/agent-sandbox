@@ -231,7 +231,7 @@ else
 fi
 
 STORE_KEY="${PROJECT_STORE_PATH##*/}"
-IMAGE_TARGET="${AGENT_IMAGE_TARGET:-archiveImage}"
+IMAGE_TARGET="${AGENT_IMAGE_TARGET:-streamImage}"
 case "$IMAGE_TARGET" in
   archiveImage|layeredImage|streamImage) ;;
   *)

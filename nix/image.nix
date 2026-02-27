@@ -143,9 +143,11 @@ let
     ln -s ${pkgs.nix-direnv}/share/nix-direnv/direnvrc "$out/etc/direnv/direnvrc"
   '';
 
-  imageRoot = pkgs.buildEnv {
-    name = "agent-rootfs";
-    paths =
+  imageSpec = {
+    name = "agent-base";
+    tag = "latest";
+    maxLayers = 120;
+    contents =
       [
         gitWrapper
         pkgs.nix
@@ -169,24 +171,6 @@ let
       ++ helpers
       ++ devPackagesFinal
       ++ toolLaunchers;
-
-    pathsToLink = [
-      "/bin"
-      "/usr/bin"
-      "/lib"
-      "/libexec"
-      "/share"
-      "/etc"
-    ];
-
-    ignoreCollisions = true;
-  };
-
-  imageSpec = {
-    name = "agent-base";
-    tag = "latest";
-    maxLayers = 64;
-    contents = [ imageRoot ];
     includeNixDB = true;
 
     fakeRootCommands = ''
@@ -221,32 +205,10 @@ let
     };
   };
 in
-{
+rec {
   inherit tools;
 
-  archiveImage = pkgs.dockerTools.buildImage {
-    name = imageSpec.name;
-    tag = imageSpec.tag;
-    copyToRoot = imageRoot;
-    includeNixDB = true;
-    extraCommands = ''
-      mkdir -p lib64
-      ln -sf ${pkgs.glibc.out}/lib/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2
-
-      mkdir -p nix/store nix/var/nix nix/var/log/nix nix/var/db
-      rm -rf nix/var/nix/profiles nix/var/nix/gcroots
-      ln -s /cache/nix/profiles nix/var/nix/profiles
-      ln -s /cache/nix/gcroots nix/var/nix/gcroots
-      chmod -R 0777 nix
-
-      mkdir -p nixcache && chmod 0777 nixcache
-      mkdir -p tmp && chmod 1777 tmp
-      mkdir -p config && chmod 0777 config
-      mkdir -p workspace
-    '';
-    config = imageSpec.config;
-  };
-
-  layeredImage = pkgs.dockerTools.buildLayeredImage imageSpec;
+  archiveImage = pkgs.dockerTools.buildLayeredImage imageSpec;
+  layeredImage = archiveImage;
   streamImage = pkgs.dockerTools.streamLayeredImage imageSpec;
 }
