@@ -103,8 +103,6 @@
             };
         in
         {
-          archiveImage = images.archiveImage;
-          layeredImage = images.layeredImage;
           streamImage = images.streamImage;
           rootfs = images.rootfs;
 

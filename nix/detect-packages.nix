@@ -25,20 +25,11 @@ let
     "${projectPkgs}/nix/packages.nix"
   ];
 
-  legacyDevPackagesPath = firstExisting [
-    "${projectPkgs}/dev-packages.nix"
-    "${projectPkgs}/nix/dev-packages.nix"
-  ];
-
   shellPath = firstExisting [
     "${projectPkgs}/shell.nix"
   ];
 
   fromPackages = asList (import packagesPath {
-    inherit pkgs unstable;
-  });
-
-  fromLegacyDevPackages = asList (import legacyDevPackagesPath {
     inherit pkgs unstable;
   });
 
@@ -65,8 +56,6 @@ let
 in
 if packagesPath != null then
   fromPackages
-else if legacyDevPackagesPath != null then
-  fromLegacyDevPackages
 else if shellPath != null then
   fromShell
 else

@@ -10,19 +10,20 @@ Reusable sandbox project for running `codex`, `claude`, `opencode`, and `codemac
 
 ## Architecture
 
-- `nix/image.nix`: `nix2container` image definitions (`streamImage` is canonical; `archiveImage`/`layeredImage` are compatibility aliases) and `rootfs` output for podman `--rootfs`
+- `nix/image.nix`: `nix2container` `streamImage` output (Docker path) and `rootfs` output (Podman path)
 - `nix/detect-packages.nix`: host project package contract detection
 - `bin/agent`: runtime orchestrator (container runtime selection, mounts, profiles, sockets, env passthrough)
 
 The base image intentionally stays lean (shell, bun, nix/direnv, network/debug tools). Heavy or project-specific tooling should come from host project `devPackages`.
+
+Runtime modes are intentionally minimal: Podman uses a single `--rootfs ...:O` path on local Linux, and Docker uses a single `streamImage.copyToDockerDaemon` path.
 
 ## Host project contract
 
 The sandbox auto-detects package sources in this order:
 
 1. `<project-root>/nix/packages.nix` (recommended)
-2. `<project-root>/nix/dev-packages.nix` (legacy compatibility)
-3. `<project-root>/shell.nix` (fallback)
+2. `<project-root>/shell.nix` (fallback)
 
 ### Option 1: `nix/packages.nix` (recommended)
 
@@ -153,18 +154,12 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_CACHE_DIR`: runtime cache directory
 - `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `.gitconfig`, etc.)
 - `AGENT_FORCE_REBUILD=1`: ignore cached stream image and reload
-- `AGENT_IMAGE_TARGET`: image output to build/load (`streamImage` default; `archiveImage`/`layeredImage` are compatibility aliases)
-- `AGENT_USE_ROOTFS`: `1|0` force podman `--rootfs` mode (default `1` only on local Linux podman with `/nix/store` and no `CONTAINER_HOST`)
-- `AGENT_ROOTFS_OVERLAY`: `1|0` append `:O` overlay suffix for `--rootfs` target (default `1`)
 - `AGENT_FORCE_TTY=1`: force `-t` even in non-tty pipelines
-- `AGENT_USERNS`: podman user namespace mode (default `keep-id`)
-- `AGENT_NETWORK_MODE`: explicit container network mode override
 - `AGENT_MEMORY_LIMIT`, `AGENT_CPU_LIMIT`, `AGENT_PIDS_LIMIT`: container limits
 - `AGENT_USE_LOCAL_BINCACHE=1|0`: enable/disable `/nixcache` substituter
 - `AGENT_NIX_BINCACHE_DIR`: host local Nix cache bind mount (read-only)
 - `AGENT_LOCAL_BINCACHE_ALLOW_UNSIGNED=1`: allow unsigned local substitutes
 - `AGENT_PASS_ENV_PREFIXES`: newline/comma-separated env prefixes to forward
-- `AGENT_PASS_ENV_NAMES`: comma-separated exact env names to forward
 - `AGENT_AUTO_MOUNT_DIRS`: comma-separated dir names auto-mounted from ancestors
 - `AGENT_EXTRA_MOUNTS`: comma-separated `host:container[:options]` mounts
 - `AGENT_EXTRA_ENV`: comma-separated `KEY=VALUE` env pairs passed to container

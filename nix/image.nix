@@ -244,10 +244,5 @@ rec {
     '';
   };
 
-  # nix2container exposes daemon loader helpers via passthru. The three names
-  # remain as compatibility aliases for existing callers/scripts.
-  baseImage = n2c.buildImage imageSpec;
-  archiveImage = baseImage;
-  layeredImage = baseImage;
-  streamImage = baseImage;
+  streamImage = n2c.buildImage imageSpec;
 }
