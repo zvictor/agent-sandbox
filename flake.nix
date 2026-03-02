@@ -4,6 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix2container = {
+      url = "github:nlewo/nix2container";
+    };
 
     # Always overridden by bin/agent using --override-input projectPkgs path:<store-path>
     projectPkgs = {
@@ -17,6 +20,7 @@
       self,
       nixpkgs,
       unstable,
+      nix2container,
       projectPkgs,
       ...
     }:
@@ -47,7 +51,7 @@
 
           images = import ./nix/image.nix {
             inherit pkgs devPackages;
-            unstable = upkgs;
+            nix2containerPkgs = nix2container.packages.${system};
           };
 
           sandboxRoot = pkgs.stdenvNoCC.mkDerivation {
@@ -102,6 +106,7 @@
           archiveImage = images.archiveImage;
           layeredImage = images.layeredImage;
           streamImage = images.streamImage;
+          rootfs = images.rootfs;
 
           agent-cli = mkTool "agent";
           agent = mkTool "agent";

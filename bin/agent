@@ -3,6 +3,36 @@ set -euo pipefail
 
 KNOWN_TOOLS="codex claude opencode codemachine"
 NIX_FEATURES="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+PERF_LOG="${AGENT_PERF_LOG:-1}"
+
+now_ms() {
+  local ts
+  ts="$(date +%s%3N 2>/dev/null || true)"
+  case "$ts" in
+    *N*|"")
+      echo "$(( $(date +%s) * 1000 ))"
+      ;;
+    *)
+      echo "$ts"
+      ;;
+  esac
+}
+
+format_duration_ms() {
+  local ms="$1"
+  if [ "$ms" -ge 1000 ]; then
+    printf '%d.%03ds' $((ms / 1000)) $((ms % 1000))
+  else
+    printf '%dms' "$ms"
+  fi
+}
+
+perf_log() {
+  if [ "$PERF_LOG" = "0" ]; then
+    return
+  fi
+  echo "[perf] $*" >&2
+}
 
 contains_word() {
   local needle="$1"
@@ -21,8 +51,34 @@ split_csv_or_lines() {
   printf '%s\n' "$value" | tr ',' '\n' | sed '/^[[:space:]]*$/d'
 }
 
+hash_short() {
+  local value="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$value" | sha256sum | awk '{print substr($1,1,16)}'
+  elif command -v sha1sum >/dev/null 2>&1; then
+    printf '%s' "$value" | sha1sum | awk '{print substr($1,1,16)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$value" | shasum -a 256 | awk '{print substr($1,1,16)}'
+  else
+    printf '%s' "$value" | tr -cd 'a-zA-Z0-9' | head -c 16
+  fi
+}
+
 nix_cmd() {
   env -u NIX_CONFIG nix --extra-experimental-features "$NIX_FEATURES" "$@"
+}
+
+run_image_helper() {
+  local image_target="$1"
+  local helper_attr="$2"
+  shift 2
+
+  local helper_tmpdir="${AGENT_HELPER_TMPDIR:-${CACHE_DIR:-${TMPDIR:-/tmp}}/tmp}"
+  mkdir -p "$helper_tmpdir" >/dev/null 2>&1 || true
+
+  TMPDIR="$helper_tmpdir" nix_cmd run "${SANDBOX_FLAKE}#${image_target}.${helper_attr}" \
+    --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+    "${LOCK_ARGS[@]}" -- "$@"
 }
 
 normalize_flake_ref() {
@@ -86,6 +142,7 @@ resolve_tool() {
 TOOL=""
 REMAINING_ARGS=()
 resolve_tool "$@"
+RUN_START_MS="$(now_ms)"
 
 if [ -z "$TOOL" ] && [ "${1:-}" = "--version" ]; then
   SANDBOX_FLAKE="${AGENT_SANDBOX_FLAKE_REF:-${AGENT_SANDBOX_FLAKE:-}}"
@@ -129,6 +186,11 @@ if ! command -v "$RUNTIME" >/dev/null 2>&1; then
   echo "[agent] requested runtime '$RUNTIME' is not available" >&2
   exit 1
 fi
+
+OS_NAME="$(uname -s)"
+
+mkdir -p "${TMPDIR:-/tmp}" >/dev/null 2>&1 || true
+mkdir -p /var/tmp >/dev/null 2>&1 || true
 
 SANDBOX_FLAKE="${AGENT_SANDBOX_FLAKE_REF:-${AGENT_SANDBOX_FLAKE:-}}"
 if [ -z "$SANDBOX_FLAKE" ]; then
@@ -213,7 +275,8 @@ fi
 CACHE_DIR="${AGENT_CACHE_DIR:-$DEFAULT_CACHE_BASE/agent-sandbox}"
 GCROOTS_DIR="$CACHE_DIR/gcroots"
 IMAGES_DIR="$CACHE_DIR/images"
-mkdir -p "$CACHE_DIR" "$GCROOTS_DIR" "$IMAGES_DIR"
+HELPER_TMPDIR="${AGENT_HELPER_TMPDIR:-$CACHE_DIR/tmp}"
+mkdir -p "$CACHE_DIR" "$GCROOTS_DIR" "$IMAGES_DIR" "$HELPER_TMPDIR"
 
 if [ "${AGENT_DEBUG:-0}" = "1" ]; then
   echo "[agent] TOOL=$TOOL" >&2
@@ -224,13 +287,46 @@ if [ "${AGENT_DEBUG:-0}" = "1" ]; then
 fi
 
 PROJECT_STORE_PATH=""
+STORE_ADD_MS=0
+STORE_ADD_START_MS="$(now_ms)"
 if PROJECT_STORE_PATH="$(nix_cmd store add --mode nar --name "$STORE_INPUT_NAME" "$STORE_INPUT_PATH" 2>/dev/null)"; then
   :
 else
   PROJECT_STORE_PATH="$(nix_cmd store add-path "$STORE_INPUT_PATH" --name "$STORE_INPUT_NAME")"
 fi
+STORE_ADD_END_MS="$(now_ms)"
+STORE_ADD_MS="$((STORE_ADD_END_MS - STORE_ADD_START_MS))"
+perf_log "project store input (${STORE_INPUT_NAME}) resolved in $(format_duration_ms "$STORE_ADD_MS")"
 
 STORE_KEY="${PROJECT_STORE_PATH##*/}"
+SANDBOX_META_KEY="$SANDBOX_FLAKE"
+case "$SANDBOX_FLAKE" in
+  path:*)
+    SANDBOX_PATH="${SANDBOX_FLAKE#path:}"
+    if [ -d "$SANDBOX_PATH" ]; then
+      SANDBOX_META_KEY="$(
+        {
+          printf '%s\n' "$SANDBOX_FLAKE"
+          for f in flake.nix flake.lock nix/image.nix bin/agent; do
+            if [ -f "$SANDBOX_PATH/$f" ]; then
+              printf '>>> %s\n' "$f"
+              cat "$SANDBOX_PATH/$f"
+            fi
+          done
+        } | sha256sum | awk '{print $1}'
+      )"
+    fi
+    ;;
+  *)
+    if SANDBOX_META_JSON="$(nix_cmd flake metadata "$SANDBOX_FLAKE" --json "${LOCK_ARGS[@]}" 2>/dev/null)"; then
+      SANDBOX_META_KEY="$(printf '%s\n' "$SANDBOX_META_JSON" | jq -r '.locked.narHash // .locked.rev // .narHash // .revision // .path // .resolvedUrl // .url // empty')"
+      if [ -z "$SANDBOX_META_KEY" ] || [ "$SANDBOX_META_KEY" = "null" ]; then
+        SANDBOX_META_KEY="$SANDBOX_FLAKE"
+      fi
+    fi
+    ;;
+esac
+SANDBOX_KEY="$(hash_short "$SANDBOX_META_KEY")"
 IMAGE_TARGET="${AGENT_IMAGE_TARGET:-streamImage}"
 case "$IMAGE_TARGET" in
   archiveImage|layeredImage|streamImage) ;;
@@ -239,100 +335,231 @@ case "$IMAGE_TARGET" in
     exit 1
     ;;
 esac
-IMAGE_GCROOT="$GCROOTS_DIR/${STORE_KEY}--${IMAGE_TARGET}"
-IMAGE_ID_FILE="$IMAGES_DIR/${RUNTIME}-${STORE_KEY}-${IMAGE_TARGET}.image-id"
+
+ROOTFS_ALLOWED=0
+if [ "$RUNTIME" = "podman" ] && [ "$OS_NAME" = "Linux" ] && [ -d "/nix/store" ] && [ -z "${CONTAINER_HOST:-}" ]; then
+  ROOTFS_ALLOWED=1
+fi
+USE_ROOTFS="${AGENT_USE_ROOTFS:-$ROOTFS_ALLOWED}"
+case "$USE_ROOTFS" in
+  0|1) ;;
+  *)
+    echo "[agent] invalid AGENT_USE_ROOTFS='$USE_ROOTFS' (allowed: 0, 1)" >&2
+    exit 1
+    ;;
+esac
+ROOTFS_OVERLAY="${AGENT_ROOTFS_OVERLAY:-1}"
+case "$ROOTFS_OVERLAY" in
+  0|1) ;;
+  *)
+    echo "[agent] invalid AGENT_ROOTFS_OVERLAY='$ROOTFS_OVERLAY' (allowed: 0, 1)" >&2
+    exit 1
+    ;;
+esac
+if [ "$USE_ROOTFS" = "1" ] && [ "$ROOTFS_ALLOWED" != "1" ]; then
+  echo "[agent] AGENT_USE_ROOTFS=1 requires local Linux podman with /nix/store and no CONTAINER_HOST." >&2
+  exit 1
+fi
+
+IMAGE_GCROOT="$GCROOTS_DIR/${SANDBOX_KEY}--${STORE_KEY}--${IMAGE_TARGET}"
+IMAGE_ID_FILE="$IMAGES_DIR/${RUNTIME}-${SANDBOX_KEY}-${STORE_KEY}-${IMAGE_TARGET}.image-id"
+ROOTFS_GCROOT="$GCROOTS_DIR/${SANDBOX_KEY}--${STORE_KEY}--rootfs"
 
 if [ "${AGENT_FORCE_REBUILD:-0}" = "1" ]; then
-  rm -f "$IMAGE_GCROOT" "$IMAGE_ID_FILE"
+  rm -f "$IMAGE_GCROOT" "$IMAGE_ID_FILE" "$ROOTFS_GCROOT"
 fi
 
 IMAGE_OUT=""
-if [ -L "$IMAGE_GCROOT" ] && [ -e "$IMAGE_GCROOT" ]; then
-  IMAGE_OUT="$(readlink -f "$IMAGE_GCROOT")"
-fi
-
-if [ -z "$IMAGE_OUT" ] || [ ! -e "$IMAGE_OUT" ]; then
-  echo "[agent] building $IMAGE_TARGET (first run or package graph changed)..." >&2
-  START_TS="$(date +%s)"
-
-  IMAGE_OUT="$(
-    nix_cmd build "${SANDBOX_FLAKE}#${IMAGE_TARGET}" \
-      --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
-      --print-out-paths \
-      --no-link \
-      "${LOCK_ARGS[@]}"
-  )"
-
-  END_TS="$(date +%s)"
-  echo "[agent] image build completed in $((END_TS - START_TS))s" >&2
-
-  TMP_ROOT="${IMAGE_GCROOT}.tmp.$$"
-  if command -v nix-store >/dev/null 2>&1; then
-    nix-store --add-root "$TMP_ROOT" --indirect "$IMAGE_OUT" >/dev/null 2>&1 || ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
-  else
-    ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
-  fi
-  mv -f "$TMP_ROOT" "$IMAGE_GCROOT"
-fi
-
+BUILD_MS=0
 IMAGE_ID=""
-if [ -f "$IMAGE_ID_FILE" ]; then
-  IMAGE_ID="$(cat "$IMAGE_ID_FILE")"
-  if [ -n "$IMAGE_ID" ] && ! "$RUNTIME" image inspect "$IMAGE_ID" >/dev/null 2>&1; then
-    IMAGE_ID=""
+ROOTFS_OUT=""
+ROOTFS_IMAGE_ARG=""
+LOAD_MS=0
+if [ "$USE_ROOTFS" = "1" ]; then
+  if [ -L "$ROOTFS_GCROOT" ] && [ -e "$ROOTFS_GCROOT" ]; then
+    ROOTFS_OUT="$(readlink -f "$ROOTFS_GCROOT")"
+    perf_log "rootfs derivation cache hit"
   fi
-fi
 
-if [ -z "$IMAGE_ID" ]; then
-  echo "[agent] loading image into $RUNTIME..." >&2
-  if [ "$IMAGE_TARGET" = "streamImage" ]; then
-    STREAM_EXEC=""
-    if [ -x "$IMAGE_OUT" ] && [ ! -d "$IMAGE_OUT" ]; then
-      STREAM_EXEC="$IMAGE_OUT"
-    elif [ -d "$IMAGE_OUT/bin" ]; then
-      STREAM_EXEC="$(find "$IMAGE_OUT/bin" -maxdepth 1 -type f -name 'stream-*' | head -n1 || true)"
-    fi
-    if [ -z "$STREAM_EXEC" ] || [ ! -x "$STREAM_EXEC" ]; then
-      echo "[agent] could not find stream executable for $IMAGE_OUT" >&2
+  if [ -z "$ROOTFS_OUT" ] || [ ! -e "$ROOTFS_OUT" ]; then
+    echo "[agent] building rootfs (first run or package graph changed)..." >&2
+    BUILD_START_MS="$(now_ms)"
+    if ! ROOTFS_OUT="$(
+      nix_cmd build "${SANDBOX_FLAKE}#rootfs" \
+        --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+        --print-out-paths \
+        --no-link \
+        "${LOCK_ARGS[@]}"
+    )"; then
+      echo "[agent] rootfs build failed with AGENT_USE_ROOTFS=1. Refusing OCI fallback." >&2
       exit 1
     fi
 
-    set +o pipefail
-    LOAD_OUTPUT="$($STREAM_EXEC | "$RUNTIME" load 2>&1)"
-    LOAD_STATUS=$?
-    set -o pipefail
-  else
-    LOAD_OUTPUT="$("$RUNTIME" load -i "$IMAGE_OUT" 2>&1)"
-    LOAD_STATUS=$?
+    BUILD_END_MS="$(now_ms)"
+    BUILD_MS="$((BUILD_END_MS - BUILD_START_MS))"
+    echo "[agent] rootfs build completed in $(format_duration_ms "$BUILD_MS")" >&2
+    perf_log "nix build rootfs completed in $(format_duration_ms "$BUILD_MS")"
+
+    TMP_ROOT="${ROOTFS_GCROOT}.tmp.$$"
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store --add-root "$TMP_ROOT" --indirect "$ROOTFS_OUT" >/dev/null 2>&1 || ln -sfn "$ROOTFS_OUT" "$TMP_ROOT"
+    else
+      ln -sfn "$ROOTFS_OUT" "$TMP_ROOT"
+    fi
+    mv -f "$TMP_ROOT" "$ROOTFS_GCROOT"
   fi
 
-  if [ "$LOAD_STATUS" -ne 0 ]; then
+  ROOTFS_IMAGE_ARG="$ROOTFS_OUT"
+  if [ "$ROOTFS_OVERLAY" = "1" ]; then
+    ROOTFS_IMAGE_ARG="${ROOTFS_IMAGE_ARG}:O"
+  fi
+else
+  if [ -L "$IMAGE_GCROOT" ] && [ -e "$IMAGE_GCROOT" ]; then
+    IMAGE_OUT="$(readlink -f "$IMAGE_GCROOT")"
+    perf_log "image derivation cache hit for ${IMAGE_TARGET}"
+  fi
+
+  if [ -z "$IMAGE_OUT" ] || [ ! -e "$IMAGE_OUT" ]; then
+    echo "[agent] building $IMAGE_TARGET (first run or package graph changed)..." >&2
+    BUILD_START_MS="$(now_ms)"
+
+    IMAGE_OUT="$(
+      nix_cmd build "${SANDBOX_FLAKE}#${IMAGE_TARGET}" \
+        --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+        --print-out-paths \
+        --no-link \
+        "${LOCK_ARGS[@]}"
+    )"
+
+    BUILD_END_MS="$(now_ms)"
+    BUILD_MS="$((BUILD_END_MS - BUILD_START_MS))"
+    echo "[agent] image build completed in $(format_duration_ms "$BUILD_MS")" >&2
+    perf_log "nix build ${IMAGE_TARGET} completed in $(format_duration_ms "$BUILD_MS")"
+
+    TMP_ROOT="${IMAGE_GCROOT}.tmp.$$"
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store --add-root "$TMP_ROOT" --indirect "$IMAGE_OUT" >/dev/null 2>&1 || ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
+    else
+      ln -sfn "$IMAGE_OUT" "$TMP_ROOT"
+    fi
+    mv -f "$TMP_ROOT" "$IMAGE_GCROOT"
+  fi
+
+  if [ -f "$IMAGE_ID_FILE" ]; then
+    IMAGE_ID="$(cat "$IMAGE_ID_FILE")"
+    if [ -n "$IMAGE_ID" ] && ! "$RUNTIME" image inspect "$IMAGE_ID" >/dev/null 2>&1; then
+      IMAGE_ID=""
+    elif [ -n "$IMAGE_ID" ]; then
+      perf_log "runtime image id cache hit for ${IMAGE_TARGET}"
+    fi
+  fi
+
+  if [ -z "$IMAGE_ID" ]; then
+    echo "[agent] loading image into $RUNTIME..." >&2
+    LOAD_START_MS="$(now_ms)"
+    LOAD_STATUS=0
+    LOAD_OUTPUT=""
+    LOAD_METHOD=""
+
+    if [ "$RUNTIME" = "podman" ]; then
+      HELPER_RESOLVE_START_MS="$(now_ms)"
+      if LOAD_OUTPUT="$(run_image_helper "$IMAGE_TARGET" "copyToPodman" 2>&1)"; then
+        LOAD_STATUS=0
+      else
+        LOAD_STATUS=$?
+      fi
+      HELPER_RESOLVE_END_MS="$(now_ms)"
+      perf_log "copyToPodman helper completed in $(format_duration_ms "$((HELPER_RESOLVE_END_MS - HELPER_RESOLVE_START_MS))")"
+      LOAD_METHOD="nix run ${IMAGE_TARGET}.copyToPodman"
+      if [ "$LOAD_STATUS" -ne 0 ] && printf '%s' "$LOAD_OUTPUT" | rg -q "subuid|subgid|newuidmap|newgidmap|UID ranges|GID ranges"; then
+        TMP_ARCHIVE="$(mktemp -p "${TMPDIR:-/tmp}" "agent-image.XXXXXX")"
+        HELPER_RESOLVE_START_MS="$(now_ms)"
+        if ARCHIVE_HELPER_OUTPUT="$(run_image_helper "$IMAGE_TARGET" "copyTo" "--tmpdir" "$HELPER_TMPDIR" "docker-archive:${TMP_ARCHIVE}:agent-base:latest" 2>&1)"; then
+          if ARCHIVE_LOAD_OUTPUT="$("$RUNTIME" load -i "$TMP_ARCHIVE" 2>&1)"; then
+            LOAD_STATUS=0
+            LOAD_METHOD="nix run ${IMAGE_TARGET}.copyTo (docker-archive) + ${RUNTIME} load -i"
+            LOAD_OUTPUT="${LOAD_OUTPUT}
+${ARCHIVE_HELPER_OUTPUT}
+${ARCHIVE_LOAD_OUTPUT}"
+          else
+            LOAD_STATUS=$?
+            LOAD_OUTPUT="${LOAD_OUTPUT}
+${ARCHIVE_HELPER_OUTPUT}
+${ARCHIVE_LOAD_OUTPUT}"
+          fi
+        else
+          LOAD_STATUS=$?
+          LOAD_OUTPUT="${LOAD_OUTPUT}
+${ARCHIVE_HELPER_OUTPUT}"
+        fi
+        rm -f "$TMP_ARCHIVE"
+        HELPER_RESOLVE_END_MS="$(now_ms)"
+        perf_log "copyTo docker-archive fallback completed in $(format_duration_ms "$((HELPER_RESOLVE_END_MS - HELPER_RESOLVE_START_MS))")"
+      fi
+    else
+      HELPER_RESOLVE_START_MS="$(now_ms)"
+      if LOAD_OUTPUT="$(run_image_helper "$IMAGE_TARGET" "copyToDockerDaemon" 2>&1)"; then
+        LOAD_STATUS=0
+      else
+        LOAD_STATUS=$?
+      fi
+      HELPER_RESOLVE_END_MS="$(now_ms)"
+      perf_log "copyToDockerDaemon helper completed in $(format_duration_ms "$((HELPER_RESOLVE_END_MS - HELPER_RESOLVE_START_MS))")"
+      LOAD_METHOD="nix run ${IMAGE_TARGET}.copyToDockerDaemon"
+      if [ "$LOAD_STATUS" -ne 0 ]; then
+        HELPER_RESOLVE_START_MS="$(now_ms)"
+        if LOAD_OUTPUT="$(run_image_helper "$IMAGE_TARGET" "copyToDocker" "--tmpdir" "$HELPER_TMPDIR" "docker-daemon:agent-base:latest" 2>&1)"; then
+          LOAD_STATUS=0
+        else
+          LOAD_STATUS=$?
+        fi
+        HELPER_RESOLVE_END_MS="$(now_ms)"
+        perf_log "copyToDocker helper completed in $(format_duration_ms "$((HELPER_RESOLVE_END_MS - HELPER_RESOLVE_START_MS))")"
+        LOAD_METHOD="nix run ${IMAGE_TARGET}.copyToDocker"
+      fi
+    fi
+
+    if [ "$LOAD_STATUS" -ne 0 ]; then
+      echo "$LOAD_OUTPUT" >&2
+      echo "[agent] image load failed with runtime '$RUNTIME' (status=$LOAD_STATUS)" >&2
+      exit "$LOAD_STATUS"
+    fi
+    LOAD_END_MS="$(now_ms)"
+    LOAD_MS="$((LOAD_END_MS - LOAD_START_MS))"
+    perf_log "image load via ${LOAD_METHOD} completed in $(format_duration_ms "$LOAD_MS")"
     echo "$LOAD_OUTPUT" >&2
-    echo "[agent] image load failed with runtime '$RUNTIME' (status=$LOAD_STATUS)" >&2
-    exit "$LOAD_STATUS"
-  fi
-  echo "$LOAD_OUTPUT" >&2
 
-  LOADED_REF="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/^Loaded image(s):[[:space:]]*//p; s/^Loaded image:[[:space:]]*//p' | tail -n1 | tr -d '\r')"
-
-  if [ -n "$LOADED_REF" ]; then
-    IMAGE_ID="$($RUNTIME image inspect "$LOADED_REF" --format '{{.Id}}' 2>/dev/null || true)"
-  fi
-
-  if [ -z "$IMAGE_ID" ]; then
-    IMAGE_ID="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/.*\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n1)"
-  fi
-
-  if [ -z "$IMAGE_ID" ]; then
     IMAGE_ID="$($RUNTIME image inspect agent-base:latest --format '{{.Id}}' 2>/dev/null || true)"
-  fi
 
-  if [ -z "$IMAGE_ID" ]; then
-    echo "[agent] failed to resolve image id after load" >&2
-    exit 1
-  fi
+    LOADED_REF="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/^Loaded image(s):[[:space:]]*//p; s/^Loaded image:[[:space:]]*//p' | tail -n1 | tr -d '\r')"
 
-  printf '%s\n' "$IMAGE_ID" > "$IMAGE_ID_FILE"
+    if [ -z "$IMAGE_ID" ] && [ -n "$LOADED_REF" ]; then
+      IMAGE_ID="$($RUNTIME image inspect "$LOADED_REF" --format '{{.Id}}' 2>/dev/null || true)"
+    fi
+
+    if [ -z "$IMAGE_ID" ]; then
+      IMAGE_ID="$(printf '%s\n' "$LOAD_OUTPUT" | sed -n 's/.*\(sha256:[0-9a-f]\{64\}\).*/\1/p' | head -n1)"
+    fi
+
+    if [ -z "$IMAGE_ID" ]; then
+      IMAGE_ID="$($RUNTIME image inspect agent-base:latest --format '{{.Id}}' 2>/dev/null || true)"
+    fi
+
+    if [ -z "$IMAGE_ID" ]; then
+      echo "[agent] failed to resolve image id after load" >&2
+      exit 1
+    fi
+
+    printf '%s\n' "$IMAGE_ID" > "$IMAGE_ID_FILE"
+  fi
+fi
+
+PREP_END_MS="$(now_ms)"
+PREP_TOTAL_MS="$((PREP_END_MS - RUN_START_MS))"
+if [ "$USE_ROOTFS" = "1" ]; then
+  perf_log "prep total: $(format_duration_ms "$PREP_TOTAL_MS") (store=$(format_duration_ms "$STORE_ADD_MS"), build=$(format_duration_ms "$BUILD_MS"), rootfs=enabled)"
+else
+  perf_log "prep total: $(format_duration_ms "$PREP_TOTAL_MS") (store=$(format_duration_ms "$STORE_ADD_MS"), build=$(format_duration_ms "$BUILD_MS"), load=$(format_duration_ms "$LOAD_MS"))"
 fi
 
 TOOL_CACHE_DIR="$CACHE_DIR/tools/$TOOL"
@@ -342,7 +569,6 @@ cat > "$CACHE_DIR/.config/direnv/direnvrc" <<'EOF_DIRENV'
 source /etc/direnv/direnvrc
 EOF_DIRENV
 
-OS_NAME="$(uname -s)"
 Z_SUFFIX=""
 if [ "$OS_NAME" = "Linux" ]; then
   Z_SUFFIX=",Z"
@@ -384,6 +610,10 @@ ARGS=(
   -e WORKSPACE_HOST_PATH="$WORKSPACE_HOST_PATH"
   -e NIX_CONFIG="$NIX_CONFIG"
 )
+
+if [ "$OS_NAME" = "Linux" ] && [ -d "/nix/store" ]; then
+  ARGS+=( -v "/nix/store:/nix/store:ro" )
+fi
 
 if [ -n "${AGENT_NIX_BINCACHE_DIR:-}" ]; then
   ARGS+=( -v "${AGENT_NIX_BINCACHE_DIR}:/nixcache:ro${Z_SUFFIX}" )
@@ -590,7 +820,12 @@ if [ "${AGENT_FORCE_TTY:-0}" = "1" ] || { [ -t 0 ] && [ -t 1 ]; }; then
 fi
 
 ARGS+=( --entrypoint /usr/bin/env )
-ARGS+=( "$IMAGE_ID" )
+RUN_TARGET="$IMAGE_ID"
+if [ "$USE_ROOTFS" = "1" ]; then
+  ARGS+=( --rootfs )
+  RUN_TARGET="$ROOTFS_IMAGE_ARG"
+fi
+ARGS+=( "$RUN_TARGET" )
 ARGS+=( "$TOOL" )
 if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
   ARGS+=( "${REMAINING_ARGS[@]}" )
@@ -598,6 +833,16 @@ fi
 
 if [ "${AGENT_DEBUG:-0}" = "1" ]; then
   printf '[agent] running: %s run %q\n' "$RUNTIME" "${ARGS[*]}" >&2
+fi
+
+if [ "$USE_ROOTFS" = "1" ]; then
+  "$RUNTIME" run "${ARGS[@]}"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "[agent] podman --rootfs run failed with AGENT_USE_ROOTFS=1. Refusing OCI fallback." >&2
+    exit "$status"
+  fi
+  exit 0
 fi
 
 exec "$RUNTIME" run "${ARGS[@]}"

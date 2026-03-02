@@ -10,9 +10,11 @@ Reusable sandbox project for running `codex`, `claude`, `opencode`, and `codemac
 
 ## Architecture
 
-- `nix/image.nix`: pure Nix image definitions (`archiveImage`, `layeredImage`, `streamImage`)
+- `nix/image.nix`: `nix2container` image definitions (`streamImage` is canonical; `archiveImage`/`layeredImage` are compatibility aliases) and `rootfs` output for podman `--rootfs`
 - `nix/detect-packages.nix`: host project package contract detection
 - `bin/agent`: runtime orchestrator (container runtime selection, mounts, profiles, sockets, env passthrough)
+
+The base image intentionally stays lean (shell, bun, nix/direnv, network/debug tools). Heavy or project-specific tooling should come from host project `devPackages`.
 
 ## Host project contract
 
@@ -151,7 +153,9 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_CACHE_DIR`: runtime cache directory
 - `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `.gitconfig`, etc.)
 - `AGENT_FORCE_REBUILD=1`: ignore cached stream image and reload
-- `AGENT_IMAGE_TARGET`: image output to build/load (`streamImage` default, or `archiveImage`/`layeredImage`)
+- `AGENT_IMAGE_TARGET`: image output to build/load (`streamImage` default; `archiveImage`/`layeredImage` are compatibility aliases)
+- `AGENT_USE_ROOTFS`: `1|0` force podman `--rootfs` mode (default `1` only on local Linux podman with `/nix/store` and no `CONTAINER_HOST`)
+- `AGENT_ROOTFS_OVERLAY`: `1|0` append `:O` overlay suffix for `--rootfs` target (default `1`)
 - `AGENT_FORCE_TTY=1`: force `-t` even in non-tty pipelines
 - `AGENT_USERNS`: podman user namespace mode (default `keep-id`)
 - `AGENT_NETWORK_MODE`: explicit container network mode override
@@ -166,6 +170,7 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_EXTRA_ENV`: comma-separated `KEY=VALUE` env pairs passed to container
 - `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace` (defaults to `$PWD`)
 - `AGENT_DEBUG=1`: print resolved paths and runtime details
+- `AGENT_PERF_LOG=0|1`: enable/disable build/load timing logs (`1` by default)
 
 Wrapper outputs are registered as GC roots under `AGENT_CACHE_DIR`, so periodic
 `nix-collect-garbage` runs do not invalidate the cached stream image derivation.
