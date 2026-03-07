@@ -1,12 +1,12 @@
 # Agent Sandbox
 
-Reusable sandbox project for running `codex`, `claude`, `opencode`, and `codemachine` in a containerized environment.
+Reusable sandbox project for running `codex`, `claude`, `opencode`, `codemachine`, and `omp` in a containerized environment.
 
 ## Entry points
 
-- Flake packages: `agent`, `codex`, `claude`, `opencode`, `codemachine`
-- Flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`
-- Scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`
+- Flake packages: `agent`, `codex`, `claude`, `opencode`, `codemachine`, `omp`
+- Flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`, `#omp`
+- Scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`, `./scripts/omp`
 
 ## Architecture
 
@@ -74,6 +74,7 @@ Add this project as a flake input in your NixOS configuration and install packag
             agent-sandbox.packages.${pkgs.system}.claude
             agent-sandbox.packages.${pkgs.system}.opencode
             agent-sandbox.packages.${pkgs.system}.codemachine
+            agent-sandbox.packages.${pkgs.system}.omp
           ];
         })
       ];
@@ -142,6 +143,7 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/claude
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/opencode
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/omp
 ```
 
 ## Additional knobs
@@ -150,9 +152,9 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 - `AGENT_PROJECT_NIX_DIR`: override project nix dir (defaults to `$AGENT_PROJECT_ROOT/nix`)
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake reference (example: `path:/abs/path/to/agent-sandbox`)
 - `AGENT_RUNTIME`: `podman` or `docker` (default auto-detect)
-- `AGENT_TOOLS`: allowed tool list (default: `codex claude opencode codemachine`)
+- `AGENT_TOOLS`: allowed tool list (default: `codex claude opencode codemachine omp`)
 - `AGENT_CACHE_DIR`: runtime cache directory
-- `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `.gitconfig`, etc.)
+- `AGENT_HOST_HOME`: host home override for profile/config discovery (`~/.codex`, `~/.claude`, `~/.omp`, `.gitconfig`, etc.)
 - `AGENT_FORCE_REBUILD=1`: ignore cached stream image and reload
 - `AGENT_FORCE_TTY=1`: force `-t` even in non-tty pipelines
 - `AGENT_MEMORY_LIMIT`, `AGENT_CPU_LIMIT`, `AGENT_PIDS_LIMIT`: container limits

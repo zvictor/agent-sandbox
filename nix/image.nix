@@ -82,6 +82,11 @@ let
       bin = "codemachine";
       latest = true;
     };
+    omp = {
+      pkg = "@oh-my-pi/pi-coding-agent";
+      bin = "omp";
+      latest = true;
+    };
   };
 
   mkBunToolLauncher =
