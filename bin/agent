@@ -190,7 +190,7 @@ run_stream_image_helper() {
   mkdir -p "$helper_tmpdir" >/dev/null 2>&1 || true
 
   TMPDIR="$helper_tmpdir" nix_cmd run "${SANDBOX_FLAKE}#streamImage.${helper_attr}" \
-    --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+    "${PROJECT_OVERRIDE_ARGS[@]}" \
     "${LOCK_ARGS[@]}" -- "$@"
 }
 
@@ -355,6 +355,7 @@ trap cleanup EXIT
 
 STORE_INPUT_PATH=""
 STORE_INPUT_NAME=""
+PROJECT_OVERRIDE_ARGS=()
 if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
   STORE_INPUT_PATH="$PROJECT_NIX_DIR"
   STORE_INPUT_NAME="project-nix"
@@ -374,8 +375,7 @@ elif [ -f "$PROJECT_ROOT/shell.nix" ]; then
   STORE_INPUT_NAME="project-shell"
 else
   echo "[agent] no package source found in project root: $PROJECT_ROOT" >&2
-  echo "        expected '$PROJECT_NIX_DIR/packages.nix' or '$PROJECT_ROOT/shell.nix'" >&2
-  exit 1
+  STORE_INPUT_NAME="empty-project"
 fi
 
 DEFAULT_CACHE_BASE="${XDG_CACHE_HOME:-$HOST_HOME/.cache}"
@@ -398,17 +398,25 @@ fi
 
 PROJECT_STORE_PATH=""
 STORE_ADD_MS=0
-STORE_ADD_START_MS="$(now_ms)"
-if PROJECT_STORE_PATH="$(nix_cmd store add --mode nar --name "$STORE_INPUT_NAME" "$STORE_INPUT_PATH" 2>/dev/null)"; then
-  :
+if [ -n "$STORE_INPUT_PATH" ]; then
+  STORE_ADD_START_MS="$(now_ms)"
+  if PROJECT_STORE_PATH="$(nix_cmd store add --mode nar --name "$STORE_INPUT_NAME" "$STORE_INPUT_PATH" 2>/dev/null)"; then
+    :
+  else
+    PROJECT_STORE_PATH="$(nix_cmd store add-path "$STORE_INPUT_PATH" --name "$STORE_INPUT_NAME")"
+  fi
+  STORE_ADD_END_MS="$(now_ms)"
+  STORE_ADD_MS="$((STORE_ADD_END_MS - STORE_ADD_START_MS))"
+  PROJECT_OVERRIDE_ARGS=( --override-input projectPkgs "path:${PROJECT_STORE_PATH}" )
+  perf_log "project store input (${STORE_INPUT_NAME}) resolved in $(format_duration_ms "$STORE_ADD_MS")"
 else
-  PROJECT_STORE_PATH="$(nix_cmd store add-path "$STORE_INPUT_PATH" --name "$STORE_INPUT_NAME")"
+  perf_log "project store input (${STORE_INPUT_NAME}) resolved in 0ms"
 fi
-STORE_ADD_END_MS="$(now_ms)"
-STORE_ADD_MS="$((STORE_ADD_END_MS - STORE_ADD_START_MS))"
-perf_log "project store input (${STORE_INPUT_NAME}) resolved in $(format_duration_ms "$STORE_ADD_MS")"
 
 STORE_KEY="${PROJECT_STORE_PATH##*/}"
+if [ -z "$STORE_KEY" ]; then
+  STORE_KEY="$STORE_INPUT_NAME"
+fi
 SANDBOX_META_KEY="$SANDBOX_FLAKE"
 case "$SANDBOX_FLAKE" in
   path:*)
@@ -474,7 +482,7 @@ if [ "$MODE" = "podman-rootfs" ]; then
     BUILD_START_MS="$(now_ms)"
     if ! ROOTFS_OUT="$(
       nix_cmd build "${SANDBOX_FLAKE}#rootfs" \
-        --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+        "${PROJECT_OVERRIDE_ARGS[@]}" \
         --print-out-paths \
         --no-link \
         "${LOCK_ARGS[@]}"
@@ -519,7 +527,7 @@ else
 
     IMAGE_OUT="$(
       nix_cmd build "${SANDBOX_FLAKE}#streamImage" \
-        --override-input projectPkgs "path:${PROJECT_STORE_PATH}" \
+        "${PROJECT_OVERRIDE_ARGS[@]}" \
         --print-out-paths \
         --no-link \
         "${LOCK_ARGS[@]}"

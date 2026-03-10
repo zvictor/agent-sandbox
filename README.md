@@ -43,6 +43,7 @@ Practical consequences:
 The launcher looks for the host project's package contract in this order:
 1. `$AGENT_PROJECT_NIX_DIR/packages.nix`
 2. `<project-root>/shell.nix`
+3. built-in empty project contract
 
 Default `AGENT_PROJECT_NIX_DIR` is `<project-root>/nix`.
 
@@ -90,6 +91,14 @@ pkgs.mkShell {
 ```
 
 Use `nix/packages.nix` if your `shell.nix` is complex or relies on evaluation patterns that do not import cleanly.
+
+### No Nix files present
+
+If neither `nix/packages.nix` nor `shell.nix` exists, the launcher still starts the sandbox.
+
+- the built-in base sandbox environment is used
+- no extra project-specific dev packages are added
+- the workspace is still mounted normally
 
 ## Installation
 
