@@ -26,7 +26,9 @@ It also exposes runnable wrappers:
 
 The runtime paths are intentionally minimal.
 
-- `podman` uses one path only: local Linux `--rootfs ...:O`
+- `podman` uses the local Linux `--rootfs` fast path
+- default: `--rootfs ...:O`
+  - on rootless native overlay hosts that break `:O`, the launcher falls back to a cached local writable rootfs mirror and still uses `--rootfs ...:O`
 - `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`
 
 There is no compatibility matrix beyond that.
@@ -222,19 +224,17 @@ AGENT_FORCE_REBUILD=1
 
 ## Environment Variables
 
-### Core
+### Primary Launcher Knobs
 
 - `AGENT_PROJECT_ROOT`: host project root; defaults to current git top-level or cwd
 - `AGENT_PROJECT_NIX_DIR`: package contract directory; defaults to `$AGENT_PROJECT_ROOT/nix`
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake source
-- `AGENT_SANDBOX_FLAKE`: compatibility alias for `AGENT_SANDBOX_FLAKE_REF`
 - `AGENT_RUNTIME`: `podman` or `docker`; defaults to auto-detect
-- `CODEX_RUNTIME`: compatibility alias for `AGENT_RUNTIME`
 - `AGENT_TOOLS`: allowlist of enabled tools; defaults to `codex claude opencode codemachine omp`
 - `AGENT_CACHE_DIR`: cache directory for GC roots, tool installs, and helper temp files
 - `AGENT_HOST_HOME`: host home used for discovering `~/.codex`, `~/.claude`, `~/.omp`, `.gitconfig`, and similar paths
 
-### Build and logs
+### Build, Cache, and Logs
 
 - `AGENT_FORCE_REBUILD=1`: discard cached `rootfs` or `streamImage` artifact and rebuild it
 - `AGENT_PERF_LOG=0|1`: disable or enable timing logs; default `1`
@@ -248,6 +248,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_CPU_LIMIT`: container CPU limit; default `2`
 - `AGENT_PIDS_LIMIT`: container PID limit; default `512`
 - `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace`; defaults to current directory
+- `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`
 
 ### Nix binary cache inside container
 
@@ -274,7 +275,6 @@ AGENT_FORCE_REBUILD=1
 - `OPENCODE_PROFILE_BASE_DIR`: override OpenCode profile directory
 - `CLAUDE_PROFILE_BASE_DIR`: override Claude profile directory
 - `PI_CODING_AGENT_DIR`: host oh-my-pi agent directory; defaults to `~/.omp/agent`
-- `OMP_CODING_AGENT_DIR`: compatibility alias for `PI_CODING_AGENT_DIR`
 
 Default forwarded prefixes include:
 - `OPENAI_`
@@ -291,9 +291,17 @@ Default forwarded prefixes include:
 
 - `AGENT_DEBUG=1`: print resolved paths, selected runtime, and final execution details
 
-## Runtime-sensitive Host Environment
+### Compatibility Aliases
 
-These are not sandbox-specific knobs, but the launcher does react to them:
+These are still accepted by the launcher, but they are not the preferred interface:
+
+- `AGENT_SANDBOX_FLAKE`: compatibility alias for `AGENT_SANDBOX_FLAKE_REF`
+- `CODEX_RUNTIME`: compatibility alias for `AGENT_RUNTIME`
+- `OMP_CODING_AGENT_DIR`: compatibility alias for `PI_CODING_AGENT_DIR`
+
+## Ambient Host Environment
+
+The launcher also reacts to a few standard host environment variables. These are not treated as part of the primary sandbox API:
 
 - `CONTAINER_HOST`: if set, Podman rootfs mode is rejected; use Docker path instead
 - `XDG_RUNTIME_DIR`: used to discover and mount the host Podman socket when present
