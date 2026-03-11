@@ -425,10 +425,19 @@ case "$SANDBOX_FLAKE" in
       SANDBOX_META_KEY="$(
         {
           printf '%s\n' "$SANDBOX_FLAKE"
-          for f in flake.nix flake.lock nix/image.nix bin/agent; do
+          for f in flake.nix flake.lock; do
             if [ -f "$SANDBOX_PATH/$f" ]; then
               printf '>>> %s\n' "$f"
               cat "$SANDBOX_PATH/$f"
+            fi
+          done
+          for dir in bin nix scripts; do
+            if [ -d "$SANDBOX_PATH/$dir" ]; then
+              while IFS= read -r file; do
+                rel_path="${file#"$SANDBOX_PATH/"}"
+                printf '>>> %s\n' "$rel_path"
+                cat "$file"
+              done < <(find "$SANDBOX_PATH/$dir" -type f | LC_ALL=C sort)
             fi
           done
         } | sha256sum | awk '{print $1}'

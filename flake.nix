@@ -54,15 +54,26 @@
             nix2containerPkgs = nix2container.packages.${system};
           };
 
+          sandboxSource = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./flake.nix
+              ./flake.lock
+              ./bin
+              ./nix
+              ./scripts
+            ];
+          };
+
           sandboxRoot = pkgs.stdenvNoCC.mkDerivation {
             pname = "agent-sandbox-root";
             version = "0.2.0";
-            src = self;
+            src = sandboxSource;
             dontBuild = true;
             installPhase = ''
               runHook preInstall
               mkdir -p "$out"
-              cp -r flake.nix flake.lock README.md bin nix scripts "$out/"
+              cp -r flake.nix flake.lock bin nix scripts "$out/"
               chmod +x "$out/bin/agent" \
                 "$out/scripts/agent" \
                 "$out/scripts/codex" \
