@@ -8,6 +8,7 @@ ROOTFS_MIRROR_FORMAT=3
 ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/podman\nrun/secrets\nvar\nvar/run\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
 ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gitconfig\nrun/.containerenv\nvar/run/docker.sock\nrun/podman/podman.sock\nnix/var/nix/daemon-socket/socket'
+PROJECT_CONTRACT_ALLOWLIST_FILE_NAME=agent-sandbox.paths
 
 now_ms() {
   local ts
@@ -53,6 +54,100 @@ contains_word() {
 split_csv_or_lines() {
   local value="$1"
   printf '%s\n' "$value" | tr ',' '\n' | sed '/^[[:space:]]*$/d'
+}
+
+copy_if_present() {
+  local source_path="$1"
+  local target_path="$2"
+
+  if [ -f "$source_path" ]; then
+    mkdir -p "$(dirname "$target_path")"
+    cp -a "$source_path" "$target_path"
+  fi
+}
+
+normalize_project_contract_path() {
+  local rel_path="$1"
+
+  rel_path="$(printf '%s' "$rel_path" | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+  case "$rel_path" in
+    ./*)
+      rel_path="${rel_path#./}"
+      ;;
+  esac
+
+  case "$rel_path" in
+    "")
+      printf '\n'
+      return
+      ;;
+    "."|".."|/*|../*|*/../*|*"/.."|*"/../"* )
+      echo "[agent] ERROR: invalid project contract path '$1'" >&2
+      exit 1
+      ;;
+  esac
+
+  printf '%s\n' "$rel_path"
+}
+
+stage_project_contract_path() {
+  local target_dir="$1"
+  local rel_path="$2"
+  local source_path="$PROJECT_ROOT/$rel_path"
+  local target_path="$target_dir/$rel_path"
+
+  if [ ! -e "$source_path" ]; then
+    echo "[agent] ERROR: project contract path '$rel_path' not found at $source_path" >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$target_path")"
+  cp -a "$source_path" "$target_path"
+}
+
+stage_project_contract_allowlist() {
+  local target_dir="$1"
+  local allowlist_path="$PROJECT_NIX_DIR/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+  local rel_path=""
+
+  copy_if_present "$allowlist_path" "$target_dir/nix/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+
+  if [ -f "$allowlist_path" ]; then
+    while IFS= read -r rel_path; do
+      rel_path="$(normalize_project_contract_path "$rel_path")"
+      [ -n "$rel_path" ] || continue
+      stage_project_contract_path "$target_dir" "$rel_path"
+    done < "$allowlist_path"
+  fi
+
+  if [ -n "${AGENT_PROJECT_CONTRACT_FILES:-}" ]; then
+    while IFS= read -r rel_path; do
+      rel_path="$(normalize_project_contract_path "$rel_path")"
+      [ -n "$rel_path" ] || continue
+      stage_project_contract_path "$target_dir" "$rel_path"
+    done < <(split_csv_or_lines "$AGENT_PROJECT_CONTRACT_FILES")
+  fi
+}
+
+stage_project_contract_input() {
+  local target_dir="$1"
+  local file_path=""
+
+  copy_if_present "$PROJECT_ROOT/shell.nix" "$target_dir/shell.nix"
+  copy_if_present "$PROJECT_ROOT/default.nix" "$target_dir/default.nix"
+  copy_if_present "$PROJECT_ROOT/flake.nix" "$target_dir/flake.nix"
+  copy_if_present "$PROJECT_ROOT/flake.lock" "$target_dir/flake.lock"
+
+  if [ -d "$PROJECT_NIX_DIR" ]; then
+    while IFS= read -r file_path; do
+      mkdir -p "$target_dir/nix/$(dirname "$file_path")"
+      cp -a "$PROJECT_NIX_DIR/$file_path" "$target_dir/nix/$file_path"
+    done < <(
+      cd "$PROJECT_NIX_DIR" && find . -type f \( -name '*.nix' -o -name '*.lock' \) -print | sed 's#^\./##' | LC_ALL=C sort
+    )
+  fi
+
+  stage_project_contract_allowlist "$target_dir"
 }
 
 hash_short() {
@@ -357,24 +452,16 @@ STORE_INPUT_PATH=""
 STORE_INPUT_NAME=""
 PROJECT_OVERRIDE_ARGS=()
 if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
-  STORE_INPUT_PATH="$PROJECT_NIX_DIR"
+  TMP_DIR="$(mktemp -d)"
+  stage_project_contract_input "$TMP_DIR"
+  STORE_INPUT_PATH="$TMP_DIR"
   STORE_INPUT_NAME="project-nix"
 elif [ -f "$PROJECT_ROOT/shell.nix" ]; then
   TMP_DIR="$(mktemp -d)"
-  cp -a "$PROJECT_ROOT/shell.nix" "$TMP_DIR/shell.nix"
-  if [ -d "$PROJECT_ROOT/nix" ]; then
-    cp -a "$PROJECT_ROOT/nix" "$TMP_DIR/nix"
-  fi
-  if [ -f "$PROJECT_ROOT/flake.nix" ]; then
-    cp -a "$PROJECT_ROOT/flake.nix" "$TMP_DIR/flake.nix"
-  fi
-  if [ -f "$PROJECT_ROOT/flake.lock" ]; then
-    cp -a "$PROJECT_ROOT/flake.lock" "$TMP_DIR/flake.lock"
-  fi
+  stage_project_contract_input "$TMP_DIR"
   STORE_INPUT_PATH="$TMP_DIR"
   STORE_INPUT_NAME="project-shell"
 else
-  echo "[agent] no package source found in project root: $PROJECT_ROOT" >&2
   STORE_INPUT_NAME="empty-project"
 fi
 

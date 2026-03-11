@@ -100,6 +100,31 @@ If neither `nix/packages.nix` nor `shell.nix` exists, the launcher still starts 
 - no extra project-specific dev packages are added
 - the workspace is still mounted normally
 
+### Invalidation scope
+
+When the launcher stages project package inputs for Nix evaluation, it copies only contract-related files:
+
+- top-level `shell.nix`, `default.nix`, `flake.nix`, `flake.lock`
+- files under `nix/` matching `*.nix` or `*.lock`
+- extra project files listed in `nix/agent-sandbox.paths`
+- extra project files listed in `AGENT_PROJECT_CONTRACT_FILES`
+
+Changes outside that set do not invalidate the sandbox package input.
+
+If your Nix contract depends on non-Nix files, list them explicitly in `nix/agent-sandbox.paths`:
+
+```text
+package.json
+tool-versions.json
+config/versions.lock
+```
+
+Rules:
+- paths are relative to the project root
+- blank lines and `#` comments are ignored
+- `..` and absolute paths are rejected
+- directories are allowed, but they widen invalidation to that entire subtree
+
 ## Installation
 
 ### NixOS or any flake-based host
@@ -249,6 +274,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_PERF_LOG=0|1`: disable or enable timing logs; default `1`
 - `AGENT_NIX_EXPERIMENTAL_FEATURES`: override extra Nix experimental features; default `nix-command flakes`
 - `AGENT_HELPER_TMPDIR`: temp directory for helper runs
+- `AGENT_PROJECT_CONTRACT_FILES`: extra project-relative files or directories to stage for package evaluation
 
 ### Runtime behavior
 
