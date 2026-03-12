@@ -69,11 +69,12 @@ nix_cmd() {
 }
 
 AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-. "$AGENT_BIN_DIR/lib/bootstrap.sh"
+. "$AGENT_BIN_DIR/lib/cli.sh"
 . "$AGENT_BIN_DIR/lib/project_contract.sh"
 . "$AGENT_BIN_DIR/lib/rootfs.sh"
 . "$AGENT_BIN_DIR/lib/artifact_prep.sh"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
+. "$AGENT_BIN_DIR/lib/environment.sh"
 
 TOOL=""
 REMAINING_ARGS=()
