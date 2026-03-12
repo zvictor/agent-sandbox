@@ -159,16 +159,36 @@ agent-sandbox.packages.${system}.codemachine
 agent-sandbox.packages.${system}.omp
 ```
 
+These shortcut wrappers apply tool-specific defaults where supported:
+
+- `codex` adds `--yolo`
+- `claude` adds `--dangerously-skip-permissions`
+- `opencode` sets `OPENCODE_PERMISSION="allow"` if it is unset
+
+Use `agent` if you want the underlying tool invocation without those wrapper defaults.
+
 ### One-off run
 
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- codex
 ```
 
+Shortcut form with implicit Codex yolo mode:
+
+```sh
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
+```
+
 Local checkout:
 
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#agent -- codex
+```
+
+Shortcut form with implicit Codex yolo mode:
+
+```sh
+AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 ```
 
 ### Direct script usage from this repo
@@ -181,6 +201,8 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/opencode
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codemachine
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/omp
 ```
+
+The tool-specific scripts apply the same per-tool defaults as the flake shortcuts; `./scripts/agent <tool>` remains unchanged.
 
 ## Tool Configuration Mounts
 

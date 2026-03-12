@@ -2,4 +2,10 @@
 set -euo pipefail
 
 root_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-exec "$root_dir/bin/agent" claude "$@"
+for arg in "$@"; do
+  if [ "$arg" = "--dangerously-skip-permissions" ]; then
+    exec "$root_dir/bin/agent" claude "$@"
+  fi
+done
+
+exec "$root_dir/bin/agent" claude --dangerously-skip-permissions "$@"

@@ -2,4 +2,5 @@
 set -euo pipefail
 
 root_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+export OPENCODE_PERMISSION="${OPENCODE_PERMISSION:-\"allow\"}"
 exec "$root_dir/bin/agent" opencode "$@"
