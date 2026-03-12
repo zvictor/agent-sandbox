@@ -179,17 +179,19 @@ append_host_socket_args() {
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
-  if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+  if [ "${AGENT_ALLOW_PODMAN_SOCKET:-0}" = "1" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
     ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
     ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock:rw${Z_SUFFIX}" )
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
     ARGS+=( -e CONTAINER_HOST=unix:///run/podman/podman.sock )
-  elif [ -S /var/run/docker.sock ]; then
+  fi
+
+  if [ "${AGENT_ALLOW_DOCKER_SOCKET:-0}" = "1" ] && [ -S /var/run/docker.sock ]; then
     ARGS+=( -v "/var/run/docker.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
   fi
 
-  if [ -S /nix/var/nix/daemon-socket/socket ]; then
+  if [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] && [ -S /nix/var/nix/daemon-socket/socket ]; then
     ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
   fi
 }
