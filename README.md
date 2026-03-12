@@ -223,6 +223,8 @@ For `omp`, the launcher mounts the whole `~/.omp` tree. It does not implement a 
 
 ## Security and Behavior
 
+For a fuller threat model and a comparison with each supported agent's native safety model, see [docs/SANDBOX-SAFETY.md](docs/SANDBOX-SAFETY.md).
+
 ### Git inside the sandbox
 
 The sandbox replaces `git` with a wrapper that blocks side-effecting subcommands by default.
@@ -313,6 +315,14 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_NIX_BINCACHE_DIR`: host directory mounted read-only at `/nixcache`
 - `AGENT_LOCAL_BINCACHE_ALLOW_UNSIGNED=1`: allow unsigned local substitutes
 
+### Host socket opt-ins
+
+- `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`: mount the host Nix daemon socket into the container
+- `AGENT_ALLOW_PODMAN_SOCKET=1`: mount the rootless Podman API socket from `$XDG_RUNTIME_DIR/podman/podman.sock` when present
+- `AGENT_ALLOW_DOCKER_SOCKET=1`: mount `/var/run/docker.sock` when present
+
+These are disabled by default because they significantly widen the sandbox boundary.
+
 ### Mounts and environment passthrough
 
 - `AGENT_EXTRA_ENV`: extra `KEY=VALUE` pairs injected into the container
@@ -361,7 +371,7 @@ These are still accepted by the launcher, but they are not the preferred interfa
 The launcher also reacts to a few standard host environment variables. These are not treated as part of the primary sandbox API:
 
 - `CONTAINER_HOST`: if set, Podman rootfs mode is rejected; use Docker path instead
-- `XDG_RUNTIME_DIR`: used to discover and mount the host Podman socket when present
+- `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket when `AGENT_ALLOW_PODMAN_SOCKET=1`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
 
