@@ -83,6 +83,32 @@ prepare_cache_dirs() {
   mkdir -p "$CACHE_DIR" "$GCROOTS_DIR" "$IMAGES_DIR" "$HELPER_TMPDIR"
 }
 
+resolve_direnv_nix_path() {
+  local expr=""
+  local resolved_path=""
+
+  AGENT_DIRENV_NIX_PATH="${AGENT_DIRENV_NIX_PATH:-}"
+
+  if [ -n "$AGENT_DIRENV_NIX_PATH" ] && [ -e "$AGENT_DIRENV_NIX_PATH" ]; then
+    export AGENT_DIRENV_NIX_PATH
+    return 0
+  fi
+
+  AGENT_DIRENV_NIX_PATH=""
+
+  if ! command -v nix >/dev/null 2>&1; then
+    return 0
+  fi
+
+  expr="let flake = builtins.getFlake \"${SANDBOX_FLAKE}\"; in if flake.inputs ? nixpkgs then flake.inputs.nixpkgs.outPath else \"\""
+  resolved_path="$(nix_cmd eval --impure --raw --expr "$expr" 2>/dev/null || true)"
+
+  if [ -n "$resolved_path" ] && [ -e "$resolved_path" ]; then
+    AGENT_DIRENV_NIX_PATH="$resolved_path"
+    export AGENT_DIRENV_NIX_PATH
+  fi
+}
+
 log_debug_context() {
   if [ "${AGENT_DEBUG:-0}" = "1" ]; then
     echo "[agent] TOOL=$TOOL" >&2
@@ -90,6 +116,9 @@ log_debug_context() {
     echo "[agent] SANDBOX_FLAKE=$SANDBOX_FLAKE" >&2
     echo "[agent] PROJECT_ROOT=$PROJECT_ROOT" >&2
     echo "[agent] STORE_INPUT_PATH=$STORE_INPUT_PATH" >&2
+    echo "[agent] DEV_ENV_MODE=${DEV_ENV_MODE:-unset}" >&2
+    echo "[agent] DEV_ENV_ENV_FILE=${DEV_ENV_ENV_FILE:-}" >&2
+    echo "[agent] DIRENV_NIX_PATH=${AGENT_DIRENV_NIX_PATH:-}" >&2
   fi
 }
 
@@ -131,6 +160,8 @@ bootstrap_environment() {
   resolve_host_home
   prepare_project_contract_input
   prepare_cache_dirs
+  resolve_direnv_nix_path
+  prepare_dev_env_state
   log_debug_context
   prepare_project_store_input
 }

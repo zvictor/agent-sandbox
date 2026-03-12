@@ -74,6 +74,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/rootfs.sh"
 . "$AGENT_BIN_DIR/lib/artifact_prep.sh"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
+. "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
 
 TOOL=""
@@ -88,9 +89,13 @@ fi
 validate_tool_access
 
 TMP_DIR=""
+HELPER_STATE_DIR=""
 cleanup() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
+  fi
+  if [ -n "$HELPER_STATE_DIR" ] && [ -d "$HELPER_STATE_DIR" ]; then
+    rm -rf "$HELPER_STATE_DIR"
   fi
 }
 trap cleanup EXIT

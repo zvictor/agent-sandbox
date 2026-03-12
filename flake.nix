@@ -75,6 +75,7 @@
               mkdir -p "$out"
               cp -r flake.nix flake.lock bin nix scripts "$out/"
               chmod +x "$out/bin/agent" \
+                "$out/bin/agent-direnv-helper" \
                 "$out/scripts/agent" \
                 "$out/scripts/codex" \
                 "$out/scripts/claude" \

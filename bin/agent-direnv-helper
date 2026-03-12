@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: agent-direnv-helper <snapshot-env> <workspace>" >&2
+  exit 1
+}
+
+resolve_workspace() {
+  local workspace="$1"
+
+  if [ -z "$workspace" ] || [ ! -d "$workspace" ]; then
+    echo "[agent] direnv helper workspace not found: $workspace" >&2
+    exit 1
+  fi
+
+  (
+    cd "$workspace"
+    pwd -P
+  )
+}
+
+resolve_host_home() {
+  local host_home="${AGENT_HOST_HOME:-$HOME}"
+
+  if [ "$host_home" = "/cache" ] || [ ! -d "$host_home" ]; then
+    if command -v getent >/dev/null 2>&1; then
+      host_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    elif [ -r /etc/passwd ]; then
+      host_home="$(awk -F: -v uid="$(id -u)" '$3 == uid { print $6; exit }' /etc/passwd)"
+    fi
+  fi
+
+  if [ -z "$host_home" ] || [ ! -d "$host_home" ]; then
+    host_home="$WORKSPACE"
+  fi
+
+  printf '%s\n' "$host_home"
+}
+
+normalize_xdg_dir() {
+  local current="$1"
+  local fallback="$2"
+
+  case "$current" in
+    ""|"/cache"|"/cache/"|"/cache/"*)
+      printf '%s\n' "$fallback"
+      ;;
+    *)
+      printf '%s\n' "$current"
+      ;;
+  esac
+}
+
+normalize_tmpdir() {
+  local current="${TMPDIR:-}"
+  local fallback="$1"
+
+  case "$current" in
+    ""|"/tmp"|"/tmp/"|"/tmp/"*)
+      printf '%s\n' "$fallback"
+      ;;
+    *)
+      printf '%s\n' "$current"
+      ;;
+  esac
+}
+
+ensure_nix_path() {
+  local candidate=""
+  local nix_features
+  local nixpkgs_path=""
+  local user_name=""
+
+  if [ -n "${NIX_PATH:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${AGENT_DIRENV_NIX_PATH:-}" ] && [ -e "${AGENT_DIRENV_NIX_PATH}" ]; then
+    export NIX_PATH="nixpkgs=${AGENT_DIRENV_NIX_PATH}"
+    return 0
+  fi
+
+  user_name="$(id -un 2>/dev/null || true)"
+  for candidate in \
+    "$HOME/.nix-defexpr/channels/nixpkgs" \
+    "/nix/var/nix/profiles/per-user/${user_name}/channels/nixpkgs" \
+    "/nix/var/nix/profiles/per-user/root/channels/nixpkgs"
+  do
+    if [ -n "$candidate" ] && [ -e "$candidate" ]; then
+      export NIX_PATH="nixpkgs=$candidate"
+      return 0
+    fi
+  done
+
+  if ! command -v nix >/dev/null 2>&1; then
+    return 0
+  fi
+
+  nix_features="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+  nixpkgs_path="$(env -u NIX_PATH nix --extra-experimental-features "$nix_features" eval --raw nixpkgs#path 2>/dev/null || true)"
+
+  if [ -n "$nixpkgs_path" ]; then
+    export NIX_PATH="nixpkgs=$nixpkgs_path"
+  fi
+}
+
+exec_clean_direnv_env() {
+  local -a clean_env
+
+  clean_env=(
+    env -i
+    "HOME=$HOME"
+    "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
+    "XDG_DATA_HOME=$XDG_DATA_HOME"
+    "XDG_CACHE_HOME=$XDG_CACHE_HOME"
+    "TMPDIR=$TMPDIR"
+    "PATH=${PATH:-/usr/bin:/bin}"
+  )
+
+  if [ -n "${NIX_PATH:-}" ]; then
+    clean_env+=( "NIX_PATH=$NIX_PATH" )
+  fi
+
+  exec "${clean_env[@]}" direnv exec "$WORKSPACE" env -0
+}
+
+if [ "$#" -ne 2 ]; then
+  usage
+fi
+
+COMMAND="$1"
+WORKSPACE="$(resolve_workspace "$2")"
+HOST_HOME="$(resolve_host_home)"
+
+export HOME="$HOST_HOME"
+export XDG_CONFIG_HOME="$(normalize_xdg_dir "${XDG_CONFIG_HOME:-}" "$HOME/.config")"
+export XDG_DATA_HOME="$(normalize_xdg_dir "${XDG_DATA_HOME:-}" "$HOME/.local/share")"
+export XDG_CACHE_HOME="$(normalize_xdg_dir "${XDG_CACHE_HOME:-}" "$HOME/.cache")"
+export TMPDIR="$(normalize_tmpdir "${XDG_CACHE_HOME}/agent-sandbox/tmp")"
+
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$TMPDIR"
+ensure_nix_path
+
+if ! command -v direnv >/dev/null 2>&1; then
+  echo "[agent] direnv is not available on the host" >&2
+  exit 1
+fi
+
+case "$COMMAND" in
+  snapshot-env)
+    cd "$WORKSPACE"
+    exec_clean_direnv_env
+    ;;
+  *)
+    usage
+    ;;
+esac

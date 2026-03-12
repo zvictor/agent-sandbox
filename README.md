@@ -308,6 +308,11 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_PIDS_LIMIT`: container PID limit; default `512`
 - `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace`; defaults to current directory
 - `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`
+- `AGENT_DEV_ENV`: `host-helper` or `none`; default `host-helper`
+
+With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` environment snapshot for the project root before the container starts, caches the filtered result under `AGENT_CACHE_DIR`, and passes that environment into the sandbox at startup. There is no live host `direnv` bridge in the running container; if `.envrc` changes, restart the sandbox session to refresh the injected environment.
+
+For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input. If you need to force a specific `nixpkgs` tree for host-helper resolution, set `AGENT_DIRENV_NIX_PATH=/path/to/nixpkgs`.
 
 ### Nix binary cache inside container
 

@@ -176,8 +176,8 @@ let
     [
       skeleton
       gitWrapper
-      pkgs.nix
       pkgs.direnv
+      pkgs.nix
       pkgs.nix-direnv
       direnvEtc
       pkgs.bashInteractive

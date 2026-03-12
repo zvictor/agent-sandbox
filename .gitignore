@@ -1,4 +1,6 @@
 .cache/
 .direnv/
+.local/
+.tmp*
 result
 result-*

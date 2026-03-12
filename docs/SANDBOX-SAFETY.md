@@ -38,6 +38,8 @@ When the launcher evaluates the host project's Nix contract, it stages only the 
 
 This reduces accidental invalidation and limits what the Nix evaluation path can read from the host project.
 
+The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` mode, the launcher asks host `direnv` for the workspace environment at startup, caches the filtered result, and injects the resulting variables into the container. The running container does not keep a live bridge back to host `direnv`; restarting the session is the refresh path. That avoids granting the agent general access to the host Nix daemon just to get `.envrc` behavior.
+
 ### 4. Git writes are blocked by default inside the image
 
 The base image replaces `git` with a wrapper that allows common read-only subcommands and blocks side-effecting ones unless `GIT_ALLOW=1` is set. See:

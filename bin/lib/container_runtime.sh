@@ -196,6 +196,28 @@ append_host_socket_args() {
   fi
 }
 
+append_dev_env_args() {
+  local env_spec=""
+  local key=""
+  local value=""
+  local runtime_path="/bin:/usr/bin:/usr/local/bin:/workspace/node_modules/.bin"
+
+  if [ -n "${DEV_ENV_ENV_FILE:-}" ] && [ -f "$DEV_ENV_ENV_FILE" ]; then
+    while IFS= read -r env_spec; do
+      [ -n "$env_spec" ] || continue
+      key="${env_spec%%=*}"
+      value="${env_spec#*=}"
+
+      if [ "$key" = "PATH" ]; then
+        ARGS+=( -e "PATH=${runtime_path}:$value" )
+        continue
+      fi
+
+      ARGS+=( -e "$env_spec" )
+    done < "$DEV_ENV_ENV_FILE"
+  fi
+}
+
 append_workspace_git_args() {
   if [ -f "$WORKSPACE_HOST_PATH/.git" ]; then
     GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_HOST_PATH/.git" | head -n1 || true)"
@@ -269,14 +291,13 @@ append_stdio_and_target_args() {
     ARGS+=( -t )
   fi
 
-  ARGS+=( --entrypoint /usr/bin/env )
+  ARGS+=( --entrypoint "/bin/$TOOL" )
   RUN_TARGET="$IMAGE_ID"
   if [ "$MODE" = "podman-rootfs" ]; then
     ARGS+=( --rootfs )
     RUN_TARGET="$ROOTFS_IMAGE_ARG"
   fi
   ARGS+=( "$RUN_TARGET" )
-  ARGS+=( "$TOOL" )
   if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi
@@ -289,6 +310,7 @@ build_container_args() {
   append_nix_mount_args
   append_runtime_identity_args
   append_host_socket_args
+  append_dev_env_args
   append_workspace_git_args
 
   append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
