@@ -89,14 +89,16 @@ mount_tool_configs() {
   esac
 }
 
-build_container_args() {
+prepare_tool_cache_dirs() {
   TOOL_CACHE_DIR="$CACHE_DIR/tools/$TOOL"
   mkdir -p "$TOOL_CACHE_DIR"
   mkdir -p "$CACHE_DIR/.config/direnv"
   cat > "$CACHE_DIR/.config/direnv/direnvrc" <<'EOF_DIRENV'
 source /etc/direnv/direnvrc
 EOF_DIRENV
+}
 
+build_nix_config() {
   Z_SUFFIX=""
   if [ "$OS_NAME" = "Linux" ]; then
     Z_SUFFIX=",Z"
@@ -115,7 +117,9 @@ extra-substituters = file:///nixcache"
     NIX_CONFIG="$NIX_CONFIG
 require-sigs = false"
   fi
+}
 
+build_base_container_args() {
   CONTAINER_NAME="agent-${TOOL}-$(printf '%s%s' "${RANDOM:-0}" "${RANDOM:-0}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
   CONTAINER_NAME="${CONTAINER_NAME:0:63}"
 
@@ -138,7 +142,9 @@ require-sigs = false"
     -e WORKSPACE_HOST_PATH="$WORKSPACE_HOST_PATH"
     -e NIX_CONFIG="$NIX_CONFIG"
   )
+}
 
+append_nix_mount_args() {
   if [ "$OS_NAME" = "Linux" ] && [ -d "/nix/store" ]; then
     ARGS+=( -v "/nix/store:/nix/store:ro" )
   fi
@@ -148,7 +154,9 @@ require-sigs = false"
   else
     ARGS+=( -v "agent-nix-bincache:/nixcache:rw" )
   fi
+}
 
+append_runtime_identity_args() {
   if [ "$RUNTIME" = "podman" ]; then
     if [ "$OS_NAME" = "Darwin" ]; then
       ARGS+=( --network=host )
@@ -164,7 +172,9 @@ require-sigs = false"
   else
     ARGS+=( --user "$(id -u):$(id -g)" )
   fi
+}
 
+append_host_socket_args() {
   if [ -f "$HOST_HOME/.gitconfig" ]; then
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
@@ -182,7 +192,9 @@ require-sigs = false"
   if [ -S /nix/var/nix/daemon-socket/socket ]; then
     ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
   fi
+}
 
+append_workspace_git_args() {
   if [ -f "$WORKSPACE_HOST_PATH/.git" ]; then
     GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_HOST_PATH/.git" | head -n1 || true)"
     if [ -n "$GITDIR_REL" ]; then
@@ -196,44 +208,48 @@ require-sigs = false"
       fi
     fi
   fi
+}
 
-  append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
+append_auto_mount_dir_args() {
+  [ -n "${AGENT_AUTO_MOUNT_DIRS:-}" ] || return 0
 
-  if [ -n "${AGENT_AUTO_MOUNT_DIRS:-}" ]; then
-    while IFS= read -r MOUNT_NAME; do
-      [ -z "$MOUNT_NAME" ] && continue
-      MOUNT_DIR=""
-      SEARCH_DIR="$PWD"
-      while [ "$SEARCH_DIR" != "/" ]; do
-        if [ -d "$SEARCH_DIR/$MOUNT_NAME" ]; then
-          MOUNT_DIR="$SEARCH_DIR/$MOUNT_NAME"
-          break
-        fi
-        SEARCH_DIR="$(dirname "$SEARCH_DIR")"
-      done
-      if [ -n "$MOUNT_DIR" ]; then
-        ARGS+=( -v "$MOUNT_DIR:/$MOUNT_NAME:rw${Z_SUFFIX}" )
+  while IFS= read -r MOUNT_NAME; do
+    [ -z "$MOUNT_NAME" ] && continue
+    MOUNT_DIR=""
+    SEARCH_DIR="$PWD"
+    while [ "$SEARCH_DIR" != "/" ]; do
+      if [ -d "$SEARCH_DIR/$MOUNT_NAME" ]; then
+        MOUNT_DIR="$SEARCH_DIR/$MOUNT_NAME"
+        break
       fi
-    done < <(split_csv_or_lines "$AGENT_AUTO_MOUNT_DIRS")
-  fi
+      SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+    done
+    if [ -n "$MOUNT_DIR" ]; then
+      ARGS+=( -v "$MOUNT_DIR:/$MOUNT_NAME:rw${Z_SUFFIX}" )
+    fi
+  done < <(split_csv_or_lines "$AGENT_AUTO_MOUNT_DIRS")
+}
 
-  append_split_arg_values -v "${AGENT_EXTRA_MOUNTS:-}"
+append_passthrough_env_args() {
+  local key value prefix
 
   DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nCODEX_PROFILE\nOPENCODE_PROFILE\nCLAUDE_PROFILE\nCODEX_CONFIG_DIR\nOPENCODE_CONFIG_DIR\nCLAUDE_CONFIG_DIR\nCODEX_PROFILE_BASE_DIR\nOPENCODE_PROFILE_BASE_DIR\nCLAUDE_PROFILE_BASE_DIR\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nOMP_\nPI_\nAGENT_'
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
-  while IFS='=' read -r KEY VAL; do
-    while IFS= read -r PREFIX; do
-      [ -z "$PREFIX" ] && continue
-      case "$KEY" in
-        "$PREFIX"*)
-          ARGS+=( -e "$KEY=$VAL" )
+  while IFS='=' read -r key value; do
+    while IFS= read -r prefix; do
+      [ -z "$prefix" ] && continue
+      case "$key" in
+        "$prefix"*)
+          ARGS+=( -e "$key=$value" )
           break
           ;;
       esac
     done < <(split_csv_or_lines "$PASS_ENV_PREFIXES")
   done < <(env)
+}
 
+resolve_tool_config_roots() {
   CODEX_HOST_CONFIG="${CODEX_CONFIG_DIR:-$HOST_HOME/.codex}"
   OPENCODE_HOST_CONFIG="${OPENCODE_CONFIG_DIR:-$HOST_HOME/.config/opencode}"
   CLAUDE_HOST_CONFIG="${CLAUDE_CONFIG_DIR:-$HOST_HOME/.claude}"
@@ -243,9 +259,9 @@ require-sigs = false"
   CODEX_PROFILE_BASE="${CODEX_PROFILE_BASE_DIR:-$HOST_HOME/.codex/profiles}"
   OPENCODE_PROFILE_BASE="${OPENCODE_PROFILE_BASE_DIR:-$OPENCODE_HOST_CONFIG/profiles}"
   CLAUDE_PROFILE_BASE="${CLAUDE_PROFILE_BASE_DIR:-$CLAUDE_HOST_CONFIG/profiles}"
+}
 
-  mount_tool_configs
-
+append_stdio_and_target_args() {
   ARGS+=( -i )
   if [ "${AGENT_FORCE_TTY:-0}" = "1" ] || { [ -t 0 ] && [ -t 1 ]; }; then
     ARGS+=( -t )
@@ -262,4 +278,22 @@ require-sigs = false"
   if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi
+}
+
+build_container_args() {
+  prepare_tool_cache_dirs
+  build_nix_config
+  build_base_container_args
+  append_nix_mount_args
+  append_runtime_identity_args
+  append_host_socket_args
+  append_workspace_git_args
+
+  append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
+  append_auto_mount_dir_args
+  append_split_arg_values -v "${AGENT_EXTRA_MOUNTS:-}"
+  append_passthrough_env_args
+  resolve_tool_config_roots
+  mount_tool_configs
+  append_stdio_and_target_args
 }
