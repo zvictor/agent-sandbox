@@ -180,6 +180,12 @@ append_host_socket_args() {
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
+  if [ "${NIX_TOOL_HELPER_MODE:-0}" = "1" ] && [ -n "${NIX_TOOL_HELPER_DIR:-}" ] && [ -d "$NIX_TOOL_HELPER_DIR" ]; then
+    ARGS+=( -v "$NIX_TOOL_HELPER_DIR:/run/agent-nix-helper:rw${Z_SUFFIX}" )
+    ARGS+=( -e AGENT_NIX_TOOL_HELPER=1 )
+    ARGS+=( -e AGENT_NIX_TOOL_HELPER_DIR=/run/agent-nix-helper )
+  fi
+
   case "${CONTAINER_API_MODE:-none}" in
     podman-session)
       if [ -n "${CONTAINER_API_RUN_DIR:-}" ] && [ -d "$CONTAINER_API_RUN_DIR" ]; then

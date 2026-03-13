@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: agent-nix-helper <materialize|serve> ..." >&2
+  exit 1
+}
+
+resolve_host_home() {
+  local host_home="${AGENT_HOST_HOME:-$HOME}"
+
+  if [ "$host_home" = "/cache" ] || [ ! -d "$host_home" ]; then
+    if command -v getent >/dev/null 2>&1; then
+      host_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    elif [ -r /etc/passwd ]; then
+      host_home="$(awk -F: -v uid="$(id -u)" '$3 == uid { print $6; exit }' /etc/passwd)"
+    fi
+  fi
+
+  if [ -z "$host_home" ] || [ ! -d "$host_home" ]; then
+    host_home="$PWD"
+  fi
+
+  printf '%s\n' "$host_home"
+}
+
+normalize_xdg_dir() {
+  local current="$1"
+  local fallback="$2"
+
+  case "$current" in
+    ""|"/cache"|"/cache/"|"/cache/"*)
+      printf '%s\n' "$fallback"
+      ;;
+    *)
+      printf '%s\n' "$current"
+      ;;
+  esac
+}
+
+normalize_tmpdir() {
+  local current="${TMPDIR:-}"
+  local fallback="$1"
+
+  case "$current" in
+    ""|"/tmp"|"/tmp/"|"/tmp/"*)
+      printf '%s\n' "$fallback"
+      ;;
+    *)
+      printf '%s\n' "$current"
+      ;;
+  esac
+}
+
+prepare_host_env() {
+  local host_home
+
+  host_home="$(resolve_host_home)"
+  export HOME="$host_home"
+  export XDG_CONFIG_HOME="$(normalize_xdg_dir "${XDG_CONFIG_HOME:-}" "$HOME/.config")"
+  export XDG_DATA_HOME="$(normalize_xdg_dir "${XDG_DATA_HOME:-}" "$HOME/.local/share")"
+  export XDG_CACHE_HOME="$(normalize_xdg_dir "${XDG_CACHE_HOME:-}" "$HOME/.cache")"
+  export TMPDIR="$(normalize_tmpdir "${XDG_CACHE_HOME}/agent-sandbox/tmp")"
+
+  mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$TMPDIR"
+}
+
+validate_installable() {
+  local installable="$1"
+
+  if printf '%s\n' "$installable" | grep -Eq '^nixpkgs#[A-Za-z0-9._+-]+$'; then
+    return 0
+  fi
+
+  if printf '%s\n' "$installable" | grep -Eq '^github:NixOS/nixpkgs/[^[:space:]#]+#[A-Za-z0-9._+-]+$'; then
+    return 0
+  fi
+
+  echo "[agent] nix helper rejected installable '$installable'" >&2
+  return 1
+}
+
+materialize_installable() {
+  local installable="$1"
+  local out_path=""
+  local bin_path=""
+  local nix_features="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+
+  validate_installable "$installable" || return 1
+  prepare_host_env
+
+  out_path="$(env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$installable")" || return 1
+  [ -n "$out_path" ] || return 1
+
+  if [ -d "$out_path/bin" ]; then
+    bin_path="$out_path/bin"
+  fi
+
+  printf 'status=ok\n'
+  printf 'installable=%s\n' "$installable"
+  printf 'out_path=%s\n' "$out_path"
+  printf 'bin_path=%s\n' "$bin_path"
+}
+
+write_error_response() {
+  local target="$1"
+  local installable="$2"
+  local message="$3"
+  local tmp
+
+  tmp="$(mktemp "${target}.tmp.XXXXXX")"
+  {
+    printf 'status=error\n'
+    printf 'installable=%s\n' "$installable"
+    printf 'message=%s\n' "$message"
+  } > "$tmp"
+  mv -f "$tmp" "$target"
+}
+
+write_ok_response() {
+  local target="$1"
+  local source="$2"
+  local tmp
+
+  tmp="$(mktemp "${target}.tmp.XXXXXX")"
+  cat "$source" > "$tmp"
+  mv -f "$tmp" "$target"
+}
+
+serve_bridge() {
+  local bridge_dir="$1"
+  local ttl="${2:-900}"
+  local requests_dir="$bridge_dir/requests"
+  local processing_dir="$bridge_dir/processing"
+  local responses_dir="$bridge_dir/responses"
+  local request_file=""
+  local processing_file=""
+  local response_file=""
+  local result_file=""
+  local command=""
+  local installable=""
+  local now=0
+  local last_activity
+  local stderr_file=""
+
+  mkdir -p "$requests_dir" "$processing_dir" "$responses_dir"
+  last_activity="$(date +%s)"
+
+  while :; do
+    request_file=""
+    for request_file in "$requests_dir"/*.req; do
+      [ -f "$request_file" ] || continue
+
+      processing_file="$processing_dir/$(basename "$request_file")"
+      if ! mv "$request_file" "$processing_file" 2>/dev/null; then
+        continue
+      fi
+
+      command=""
+      installable=""
+      while IFS='=' read -r key value; do
+        case "$key" in
+          command) command="$value" ;;
+          installable) installable="$value" ;;
+        esac
+      done < "$processing_file"
+
+      response_file="$responses_dir/$(basename "${processing_file%.req}").resp"
+      result_file="$processing_dir/result.$$"
+      stderr_file="$processing_dir/stderr.$$"
+
+      case "$command" in
+        materialize)
+          if materialize_installable "$installable" >"$result_file" 2>"$stderr_file"; then
+            write_ok_response "$response_file" "$result_file"
+          else
+            write_error_response "$response_file" "$installable" "$(tr '\n' ' ' < "$stderr_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+          fi
+          ;;
+        *)
+          write_error_response "$response_file" "$installable" "unsupported command '$command'"
+          ;;
+      esac
+
+      rm -f "$processing_file" "$result_file" "$stderr_file"
+      last_activity="$(date +%s)"
+    done
+
+    now="$(date +%s)"
+    if [ "$ttl" -gt 0 ] && [ $((now - last_activity)) -ge "$ttl" ]; then
+      exit 0
+    fi
+
+    sleep 1
+  done
+}
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+  materialize)
+    [ "$#" -eq 1 ] || usage
+    materialize_installable "$1"
+    ;;
+  serve)
+    [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+    serve_bridge "$1" "${2:-900}"
+    ;;
+  *)
+    usage
+    ;;
+esac

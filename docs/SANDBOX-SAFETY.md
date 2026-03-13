@@ -71,6 +71,12 @@ The default launcher behavior is still no host container API access. For Testcon
 
 That is materially tighter than mounting the developer's real Podman or Docker socket directly, while still preserving a devbox-like container workflow.
 
+### 7. Host-side Nix tool expansion is now narrowed
+
+On-demand tool expansion no longer has to imply raw host Nix daemon access. The launcher can now start a narrow host-side helper worker that only materializes constrained installables and returns resulting store paths to the sandbox through a mounted request/response bridge.
+
+This is not as strong as a fully offline private store, but it is substantially tighter than giving the agent the full daemon socket while preserving host-store performance.
+
 ## What Our Sandbox Does Not Enforce
 
 These are the most important caveats.
@@ -140,6 +146,7 @@ For the current implementation, the runtime is best described like this:
 | Protection from accidental Git damage | Moderate |
 | Protection from hostile code with access to raw host sockets | Weak |
 | Protection from hostile code with `podman-session` access | Moderate |
+| Protection from hostile code with narrow host Nix helper access | Moderate |
 | Resource exhaustion protection | Moderate |
 
 ## Comparison With Each Agent
@@ -216,6 +223,7 @@ If you want the safest interpretation of this repository today:
 - prefer `agent -- <tool>` when you want to keep the tool's own permission model intact
 - prefer `AGENT_CONTAINER_API=podman-session` over raw host socket modes when container APIs are required
 - avoid enabling raw Docker, Podman, or Nix daemon socket mounts unless they are required
+- prefer the narrow host Nix helper over raw Nix daemon access when the agent only needs extra tools
 - keep `AGENT_EXTRA_MOUNTS`, `AGENT_AUTO_MOUNT_DIRS`, and `AGENT_PASS_ENV_PREFIXES` narrow
 - assume any mounted config directory may be modified or exfiltrated by the agent
 - remember that the workspace is intentionally writable

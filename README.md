@@ -340,6 +340,24 @@ In `podman-session` mode, the launcher starts a dedicated rootless Podman API se
 
 These are disabled by default because they significantly widen the sandbox boundary.
 
+For `nix-shell` and generic `nix shell` workflows inside the sandbox, the launcher now prepares the writable profile and gcroot directories under `/cache`. Materializing packages that are not already present in the mounted store still requires `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`, because the sandbox does not currently provide its own writable Nix store. If the goal is just to add a host-backed tool such as `podman` or `jq`, prefer `agent-nix-tool` instead of a full in-sandbox `nix shell`.
+
+### Host Nix tool helper
+
+- `AGENT_NIX_TOOL_HELPER=1|0`: enable or disable the narrow host-side Nix materialization helper; default `1`
+- `AGENT_NIX_TOOL_HELPER_TTL`: inactivity timeout in seconds for the helper worker; default `900`
+- `AGENT_NIX_TOOL_TIMEOUT`: request timeout in seconds for `agent-nix-tool`; default `600`
+
+When enabled, the launcher starts a small host-side helper worker in the background and mounts a request/response bridge into the sandbox. Inside the sandbox, use:
+
+```sh
+agent-nix-tool add nixpkgs#podman
+agent-nix-tool env nixpkgs#podman
+agent-nix-tool run nixpkgs#podman -- podman --version
+```
+
+The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent.
+
 ### Mounts and environment passthrough
 
 - `AGENT_EXTRA_ENV`: extra `KEY=VALUE` pairs injected into the container
