@@ -266,10 +266,11 @@ Use `agent doctor` to inspect the resolved sandbox state without starting a cont
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 ./scripts/agent doctor
+./scripts/agent doctor --verbose
 ./scripts/agent doctor --json
 ```
 
-It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, tool config/profile paths, and a short suggested-fixes section when it detects obvious setup gaps. Use `--json` for machine-readable output.
+By default it prints a short summary plus suggested fixes. Use `--verbose` for the full state dump and `--json` for machine-readable output.
 
 ## Tool Configuration Mounts
 

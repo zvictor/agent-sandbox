@@ -1,3 +1,6 @@
+DOCTOR_OUTPUT="text"
+DOCTOR_VERBOSE="0"
+
 doctor_line() {
   local key="$1"
   local value="$2"
@@ -6,6 +9,27 @@ doctor_line() {
 
 doctor_note() {
   printf -- '- %s\n' "$1"
+}
+
+resolve_doctor_args() {
+  DOCTOR_OUTPUT="text"
+  DOCTOR_VERBOSE="0"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        DOCTOR_OUTPUT="json"
+        ;;
+      --verbose)
+        DOCTOR_VERBOSE="1"
+        ;;
+      *)
+        echo "usage: agent doctor [--json] [--verbose]" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
 }
 
 doctor_path_state() {
@@ -91,9 +115,160 @@ resolve_runtime_for_doctor() {
   fi
 }
 
+doctor_json_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/\\/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/	/\\t/g' \
+    -e 's//\\r/g'
+}
+
+doctor_json_pair() {
+  local key="$1"
+  local value="$2"
+  printf '    "%s": "%s"' "$(doctor_json_escape "$key")" "$(doctor_json_escape "$value")"
+}
+
+print_doctor_json() {
+  local requested_container_api="$1"
+  local runtime_mode="$2"
+  local tools_list="$3"
+  local podman_socket_state="$4"
+  local docker_socket_state="$5"
+  local nix_daemon_socket_state="$6"
+  local codex_config_state="$7"
+  local codex_profile_state="$8"
+  local claude_config_state="$9"
+  local claude_profile_state="${10}"
+  local opencode_config_state="${11}"
+  local opencode_profile_state="${12}"
+  local omp_config_state="${13}"
+  local suggestions="${14}"
+
+  printf '{\n'
+  printf '  "project": {\n'
+  doctor_json_pair "root" "$PROJECT_ROOT"; printf ',\n'
+  doctor_json_pair "nix_dir" "$PROJECT_NIX_DIR"; printf ',\n'
+  doctor_json_pair "config_file" "${PROJECT_CONFIG_FILE:-none}"; printf ',\n'
+  doctor_json_pair "contract" "$(doctor_contract_source)"; printf ',\n'
+  doctor_json_pair "sandbox_flake" "$SANDBOX_FLAKE"; printf '\n'
+  printf '  },\n'
+  printf '  "runtime": {\n'
+  doctor_json_pair "runtime" "$RUNTIME"; printf ',\n'
+  doctor_json_pair "mode" "$runtime_mode"; printf ',\n'
+  doctor_json_pair "tools_enabled" "$tools_list"; printf '\n'
+  printf '  },\n'
+  printf '  "capabilities": {\n'
+  doctor_json_pair "container_api_requested" "$requested_container_api"; printf ',\n'
+  doctor_json_pair "container_api_resolved" "$CONTAINER_API_MODE"; printf ',\n'
+  doctor_json_pair "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"; printf ',\n'
+  doctor_json_pair "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"; printf ',\n'
+  doctor_json_pair "direnv_file" "$(doctor_path_state "$PROJECT_ROOT/.envrc")"; printf ',\n'
+  doctor_json_pair "direnv_nix_path" "${AGENT_DIRENV_NIX_PATH:-unset}"; printf '\n'
+  printf '  },\n'
+  printf '  "sockets": {\n'
+  doctor_json_pair "podman_host_socket" "$podman_socket_state"; printf ',\n'
+  doctor_json_pair "docker_host_socket" "$docker_socket_state"; printf ',\n'
+  doctor_json_pair "nix_daemon_socket" "$nix_daemon_socket_state"; printf '\n'
+  printf '  },\n'
+  printf '  "tool_config": {\n'
+  doctor_json_pair "codex_config" "$codex_config_state"; printf ',\n'
+  doctor_json_pair "codex_profile" "$codex_profile_state"; printf ',\n'
+  doctor_json_pair "claude_config" "$claude_config_state"; printf ',\n'
+  doctor_json_pair "claude_profile" "$claude_profile_state"; printf ',\n'
+  doctor_json_pair "opencode_config" "$opencode_config_state"; printf ',\n'
+  doctor_json_pair "opencode_profile" "$opencode_profile_state"; printf ',\n'
+  doctor_json_pair "omp_config" "$omp_config_state"; printf '\n'
+  printf '  },\n'
+  printf '  "suggestions": [\n'
+  if [ -n "$suggestions" ]; then
+    printf '%s\n' "$suggestions" | while IFS= read -r suggestion; do
+      [ -n "$suggestion" ] || continue
+      printf '    "%s"\n' "$(doctor_json_escape "$suggestion")"
+    done | sed '$!s/$/,/'
+  fi
+  printf '  ]\n'
+  printf '}\n'
+}
+
+print_doctor_text_summary() {
+  local runtime_mode="$1"
+  local requested_container_api="$2"
+  local suggestions="$3"
+
+  printf 'Agent Sandbox Doctor\n\n'
+
+  printf 'Summary\n'
+  doctor_line "project_root" "$PROJECT_ROOT"
+  doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
+  doctor_line "runtime" "$RUNTIME"
+  doctor_line "runtime_mode" "$runtime_mode"
+  doctor_line "container_api" "${requested_container_api} -> ${CONTAINER_API_MODE}"
+  doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
+  doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
+
+  printf '\nSuggested next steps\n'
+  printf '%s\n' "$suggestions" | sed 's/^/- /'
+}
+
+print_doctor_text_verbose() {
+  local requested_container_api="$1"
+  local runtime_mode="$2"
+  local tools_list="$3"
+  local podman_socket_state="$4"
+  local docker_socket_state="$5"
+  local nix_daemon_socket_state="$6"
+  local codex_config_state="$7"
+  local codex_profile_state="$8"
+  local claude_config_state="$9"
+  local claude_profile_state="${10}"
+  local opencode_config_state="${11}"
+  local opencode_profile_state="${12}"
+  local omp_config_state="${13}"
+  local suggestions="${14}"
+
+  printf 'Agent Sandbox Doctor\n\n'
+
+  printf 'Project\n'
+  doctor_line "project_root" "$PROJECT_ROOT"
+  doctor_line "project_nix_dir" "$PROJECT_NIX_DIR"
+  doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
+  doctor_line "project_contract" "$(doctor_contract_source)"
+  doctor_line "sandbox_flake" "$SANDBOX_FLAKE"
+
+  printf '\nRuntime\n'
+  doctor_line "runtime" "$RUNTIME"
+  doctor_line "runtime_mode" "$runtime_mode"
+  doctor_line "tools_enabled" "$tools_list"
+
+  printf '\nCapabilities\n'
+  doctor_line "container_api.requested" "$requested_container_api"
+  doctor_line "container_api.resolved" "$CONTAINER_API_MODE"
+  doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
+  doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
+  doctor_line "direnv_file" "$(doctor_path_state "$PROJECT_ROOT/.envrc")"
+  doctor_line "direnv_nix_path" "${AGENT_DIRENV_NIX_PATH:-unset}"
+
+  printf '\nSockets\n'
+  doctor_line "podman_host_socket" "$podman_socket_state"
+  doctor_line "docker_host_socket" "$docker_socket_state"
+  doctor_line "nix_daemon_socket" "$nix_daemon_socket_state"
+
+  printf '\nTool Config\n'
+  doctor_line "codex_config" "$codex_config_state"
+  doctor_line "codex_profile" "$codex_profile_state"
+  doctor_line "claude_config" "$claude_config_state"
+  doctor_line "claude_profile" "$claude_profile_state"
+  doctor_line "opencode_config" "$opencode_config_state"
+  doctor_line "opencode_profile" "$opencode_profile_state"
+  doctor_line "omp_config" "$omp_config_state"
+
+  printf '\nSuggested next steps\n'
+  printf '%s\n' "$suggestions" | sed 's/^/- /'
+}
+
 print_doctor_suggestions() {
   local printed="0"
-  local target_config=""
 
   if [ -z "${PROJECT_CONFIG_FILE:-}" ]; then
     doctor_note "Run 'agent init' to create a project defaults file under $PROJECT_NIX_DIR/agent-sandbox.env."
@@ -153,6 +328,17 @@ print_doctor_and_exit() {
   local podman_socket_path=""
   local docker_socket_path="/var/run/docker.sock"
   local nix_daemon_socket_path="/nix/var/nix/daemon-socket/socket"
+  local podman_socket_state=""
+  local docker_socket_state=""
+  local nix_daemon_socket_state=""
+  local codex_config_state=""
+  local codex_profile_state=""
+  local claude_config_state=""
+  local claude_profile_state=""
+  local opencode_config_state=""
+  local opencode_profile_state=""
+  local omp_config_state=""
+  local suggestions=""
 
   resolve_project_paths
   load_project_config
@@ -182,45 +368,56 @@ print_doctor_and_exit() {
   runtime_mode="$(doctor_runtime_mode)"
   runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   podman_socket_path="$runtime_dir/podman/podman.sock"
+  podman_socket_state="$(doctor_path_state "$podman_socket_path")"
+  docker_socket_state="$(doctor_path_state "$docker_socket_path")"
+  nix_daemon_socket_state="$(doctor_path_state "$nix_daemon_socket_path")"
+  codex_config_state="$(doctor_path_state "$CODEX_HOST_CONFIG")"
+  codex_profile_state="$(doctor_profile_state "${CODEX_PROFILE:-}" "$CODEX_PROFILE_BASE/${CODEX_PROFILE:-}.json")"
+  claude_config_state="$(doctor_path_state "$CLAUDE_HOST_CONFIG")"
+  claude_profile_state="$(doctor_profile_state "${CLAUDE_PROFILE:-}" "$CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE:-}.json")"
+  opencode_config_state="$(doctor_path_state "$OPENCODE_HOST_CONFIG")"
+  opencode_profile_state="$(doctor_profile_state "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE:-}.json")"
+  omp_config_state="$(doctor_path_state "$OMP_HOST_CONFIG")"
+  suggestions="$(print_doctor_suggestions | sed 's/^- //')"
 
-  printf 'Agent Sandbox Doctor\n\n'
+  if [ "$DOCTOR_OUTPUT" = "json" ]; then
+    print_doctor_json \
+      "$requested_container_api" \
+      "$runtime_mode" \
+      "$tools_list" \
+      "$podman_socket_state" \
+      "$docker_socket_state" \
+      "$nix_daemon_socket_state" \
+      "$codex_config_state" \
+      "$codex_profile_state" \
+      "$claude_config_state" \
+      "$claude_profile_state" \
+      "$opencode_config_state" \
+      "$opencode_profile_state" \
+      "$omp_config_state" \
+      "$suggestions"
+    exit 0
+  fi
 
-  printf 'Project\n'
-  doctor_line "project_root" "$PROJECT_ROOT"
-  doctor_line "project_nix_dir" "$PROJECT_NIX_DIR"
-  doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
-  doctor_line "project_contract" "$(doctor_contract_source)"
-  doctor_line "sandbox_flake" "$SANDBOX_FLAKE"
-
-  printf '\nRuntime\n'
-  doctor_line "runtime" "$RUNTIME"
-  doctor_line "runtime_mode" "$runtime_mode"
-  doctor_line "tools_enabled" "$tools_list"
-
-  printf '\nCapabilities\n'
-  doctor_line "container_api.requested" "$requested_container_api"
-  doctor_line "container_api.resolved" "$CONTAINER_API_MODE"
-  doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
-  doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
-  doctor_line "direnv_file" "$(doctor_path_state "$PROJECT_ROOT/.envrc")"
-  doctor_line "direnv_nix_path" "${AGENT_DIRENV_NIX_PATH:-unset}"
-
-  printf '\nSockets\n'
-  doctor_line "podman_host_socket" "$(doctor_path_state "$podman_socket_path")"
-  doctor_line "docker_host_socket" "$(doctor_path_state "$docker_socket_path")"
-  doctor_line "nix_daemon_socket" "$(doctor_path_state "$nix_daemon_socket_path")"
-
-  printf '\nTool Config\n'
-  doctor_line "codex_config" "$(doctor_path_state "$CODEX_HOST_CONFIG")"
-  doctor_line "codex_profile" "$(doctor_profile_state "${CODEX_PROFILE:-}" "$CODEX_PROFILE_BASE/${CODEX_PROFILE:-}.json")"
-  doctor_line "claude_config" "$(doctor_path_state "$CLAUDE_HOST_CONFIG")"
-  doctor_line "claude_profile" "$(doctor_profile_state "${CLAUDE_PROFILE:-}" "$CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE:-}.json")"
-  doctor_line "opencode_config" "$(doctor_path_state "$OPENCODE_HOST_CONFIG")"
-  doctor_line "opencode_profile" "$(doctor_profile_state "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE:-}.json")"
-  doctor_line "omp_config" "$(doctor_path_state "$OMP_HOST_CONFIG")"
-
-  printf '\nSuggested next steps\n'
-  print_doctor_suggestions
+  if [ "$DOCTOR_VERBOSE" = "1" ]; then
+    print_doctor_text_verbose \
+      "$requested_container_api" \
+      "$runtime_mode" \
+      "$tools_list" \
+      "$podman_socket_state" \
+      "$docker_socket_state" \
+      "$nix_daemon_socket_state" \
+      "$codex_config_state" \
+      "$codex_profile_state" \
+      "$claude_config_state" \
+      "$claude_profile_state" \
+      "$opencode_config_state" \
+      "$opencode_profile_state" \
+      "$omp_config_state" \
+      "$suggestions"
+  else
+    print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$suggestions"
+  fi
 
   exit 0
 }

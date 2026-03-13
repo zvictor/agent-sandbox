@@ -102,10 +102,7 @@ if [ -z "$TOOL" ] && [ "${1:-}" = "--version" ]; then
 fi
 
 if [ "$AGENT_COMMAND" = "doctor" ]; then
-  [ "${#REMAINING_ARGS[@]}" -eq 0 ] || {
-    echo "usage: agent doctor" >&2
-    exit 1
-  }
+  resolve_doctor_args "${REMAINING_ARGS[@]}"
   print_doctor_and_exit
 fi
 
