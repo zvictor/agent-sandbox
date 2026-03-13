@@ -19,7 +19,55 @@ resolve_init_args() {
   done
 }
 
+list_profile_names() {
+  local profile_base="$1"
+  local profile_file=""
+
+  [ -d "$profile_base" ] || return 0
+
+  for profile_file in "$profile_base"/*.json; do
+    [ -f "$profile_file" ] || continue
+    basename "$profile_file" .json
+  done
+}
+
+render_profile_setting() {
+  local env_name="$1"
+  local profile_base="$2"
+  local count=0
+  local first=""
+  local profiles=""
+  local detected=""
+
+  [ -d "$profile_base" ] || return 0
+
+  profiles="$(list_profile_names "$profile_base")"
+  while IFS= read -r detected; do
+    [ -n "$detected" ] || continue
+    count=$((count + 1))
+    if [ -z "$first" ]; then
+      first="$detected"
+    fi
+  done <<EOF
+$profiles
+EOF
+
+  if [ "$count" -eq 1 ]; then
+    printf '%s=%s\n' "$env_name" "$first"
+    return 0
+  fi
+
+  if [ "$count" -gt 1 ]; then
+    printf '# %s=<choose one of: %s>\n' "$env_name" "$(printf '%s\n' "$profiles" | paste -sd ',' - | sed 's/,/, /g')"
+    return 0
+  fi
+
+  printf '# %s=work\n' "$env_name"
+}
+
 render_project_config_template() {
+  local profile_lines=""
+
   cat <<'EOF'
 # Agent Sandbox project defaults
 #
@@ -36,10 +84,24 @@ AGENT_NIX_TOOL_HELPER=1
 # Keep the host direnv snapshot helper enabled when the project uses .envrc.
 AGENT_DEV_ENV=host-helper
 
-# Optional tool profiles:
-# CODEX_PROFILE=work
-# CLAUDE_PROFILE=work
-# OPENCODE_PROFILE=work
+EOF
+
+  profile_lines="$(
+    {
+      render_profile_setting "CODEX_PROFILE" "$CODEX_PROFILE_BASE"
+      render_profile_setting "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE"
+      render_profile_setting "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE"
+    } | sed '/^$/d'
+  )"
+
+  printf '\n# Optional tool profiles:\n'
+  if [ -n "$profile_lines" ]; then
+    printf '%s\n' "$profile_lines"
+  else
+    printf '# no host profiles detected\n'
+  fi
+
+  cat <<'EOF'
 
 # Optional tool allowlist:
 # AGENT_TOOLS="codex claude opencode"
@@ -51,6 +113,8 @@ print_init_and_exit() {
 
   resolve_project_paths
   resolve_project_config_file
+  resolve_host_home
+  resolve_tool_config_roots
 
   if [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ "$PROJECT_CONFIG_FILE" = "$PROJECT_NIX_DIR/agent-sandbox.env" ]; then
     target_file="$PROJECT_CONFIG_FILE"
