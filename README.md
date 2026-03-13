@@ -162,6 +162,7 @@ Example:
 ```sh
 AGENT_CONTAINER_API=auto
 AGENT_NIX_TOOL_HELPER=1
+CODEX_CONFIG=project
 CODEX_AUTH=work
 ```
 
@@ -279,18 +280,25 @@ By default it prints a short summary plus suggested fixes, including the effecti
 
 ## Tool Configuration Mounts
 
-The launcher mounts host config directories into the container for supported tools.
+The launcher mounts tool config directories into the container at the tools' normal home-relative locations.
 
-- `codex`: host `~/.codex` to container `/config/.codex`
-- `opencode`: host `~/.config/opencode` to container `/config/.opencode`
-- `claude`: host `~/.claude` to container `/config/.claude`
-- `omp`: host `~/.omp` to container `/cache/.omp`
+- `codex`: host config root to container `~/.codex`
+- `opencode`: host config root to container `~/.config/opencode`
+- `claude`: host config root to container `~/.claude`
+- `omp`: host `~/.omp` to container `~/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together
 
 Tool-specific auth selection:
 - `CODEX_AUTH=work` overlays `~/.local/share/agent-sandbox/auth/codex/work.json` as `auth.json`
 - `CODEX_AUTH=/path/to/auth.json` overlays that exact file as `auth.json`
 - `CLAUDE_AUTH` and `OPENCODE_AUTH` follow the same `name-or-path` model for their credential files
+
+Tool-specific config selection:
+- `CODEX_CONFIG=host`: use the host default `~/.codex`
+- `CODEX_CONFIG=project`: use `$PROJECT_ROOT/.codex`
+- `CODEX_CONFIG=fresh`: create a clean temporary config dir for this run
+- `CODEX_CONFIG=/path/to/.codex`: use that exact host directory
+- `CLAUDE_CONFIG` and `OPENCODE_CONFIG` follow the same `host|project|fresh|<path>` model
 
 Create a fresh named Codex login with:
 
@@ -470,9 +478,9 @@ The low-level `agent-nix-tool` command is still available as an escape hatch, bu
 
 ### Tool config overrides
 
-- `CODEX_CONFIG_DIR`: host Codex config root; defaults to `~/.codex`
-- `OPENCODE_CONFIG_DIR`: host OpenCode config root; defaults to `~/.config/opencode`
-- `CLAUDE_CONFIG_DIR`: host Claude config root; defaults to `~/.claude`
+- `CODEX_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
+- `OPENCODE_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
+- `CLAUDE_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
 - `CODEX_AUTH`: named managed slot like `work` or an explicit credential file path
 - `OPENCODE_AUTH`: named managed slot like `work` or an explicit credential file path
 - `CLAUDE_AUTH`: named managed slot like `work` or an explicit credential file path
@@ -480,6 +488,9 @@ The low-level `agent-nix-tool` command is still available as an escape hatch, bu
 - `CODEX_AUTH_BASE_DIR`: override the managed Codex auth slot directory
 - `OPENCODE_AUTH_BASE_DIR`: override the managed OpenCode auth slot directory
 - `CLAUDE_AUTH_BASE_DIR`: override the managed Claude auth slot directory
+- `CODEX_CONFIG_DIR`: legacy path-only alias for `CODEX_CONFIG`
+- `OPENCODE_CONFIG_DIR`: legacy path-only alias for `OPENCODE_CONFIG`
+- `CLAUDE_CONFIG_DIR`: legacy path-only alias for `CLAUDE_CONFIG`
 - `CODEX_PROFILE`: legacy compatibility alias for `CODEX_AUTH`
 - `OPENCODE_PROFILE`: legacy compatibility alias for `OPENCODE_AUTH`
 - `CLAUDE_PROFILE`: legacy compatibility alias for `CLAUDE_AUTH`

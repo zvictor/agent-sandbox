@@ -78,6 +78,28 @@ doctor_auth_state() {
   fi
 }
 
+doctor_config_state() {
+  local selector_value="$1"
+  local config_mode="$2"
+  local resolved_path="$3"
+
+  case "$config_mode" in
+    fresh)
+      printf 'fresh (created as a clean temp dir for each run)\n'
+      ;;
+    host|project|path|legacy-dir)
+      if [ -d "$resolved_path" ]; then
+        printf '%s (%s)\n' "${selector_value:-$config_mode}" "$resolved_path"
+      else
+        printf '%s (will create: %s)\n' "${selector_value:-$config_mode}" "$resolved_path"
+      fi
+      ;;
+    *)
+      printf 'unset\n'
+      ;;
+  esac
+}
+
 doctor_contract_source() {
   if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
     printf '%s\n' "$PROJECT_NIX_DIR/packages.nix"
@@ -359,13 +381,28 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
+  if [ -n "${CODEX_CONFIG_DIR:-}" ] && [ -z "${CODEX_CONFIG:-}" ]; then
+    doctor_note "CODEX_CONFIG_DIR is a legacy path-only alias. Prefer CODEX_CONFIG=host|project|fresh|<path> for new setups."
+    printed="1"
+  fi
+
   if [ -n "${CLAUDE_PROFILE:-}" ] && [ -z "${CLAUDE_AUTH:-}" ]; then
     doctor_note "CLAUDE_PROFILE is a legacy compatibility alias. Prefer CLAUDE_AUTH=<name-or-path> for new setups."
     printed="1"
   fi
 
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -z "${CLAUDE_CONFIG:-}" ]; then
+    doctor_note "CLAUDE_CONFIG_DIR is a legacy path-only alias. Prefer CLAUDE_CONFIG=host|project|fresh|<path> for new setups."
+    printed="1"
+  fi
+
   if [ -n "${OPENCODE_PROFILE:-}" ] && [ -z "${OPENCODE_AUTH:-}" ]; then
     doctor_note "OPENCODE_PROFILE is a legacy compatibility alias. Prefer OPENCODE_AUTH=<name-or-path> for new setups."
+    printed="1"
+  fi
+
+  if [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ -z "${OPENCODE_CONFIG:-}" ]; then
+    doctor_note "OPENCODE_CONFIG_DIR is a legacy path-only alias. Prefer OPENCODE_CONFIG=host|project|fresh|<path> for new setups."
     printed="1"
   fi
 
@@ -435,11 +472,11 @@ print_doctor_and_exit() {
   podman_socket_state="$(doctor_path_state "$podman_socket_path")"
   docker_socket_state="$(doctor_path_state "$docker_socket_path")"
   nix_daemon_socket_state="$(doctor_path_state "$nix_daemon_socket_path")"
-  codex_config_state="$(doctor_path_state "$CODEX_HOST_CONFIG")"
+  codex_config_state="$(doctor_config_state "$CODEX_CONFIG_SELECTOR" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG")"
   codex_auth_state="$(doctor_auth_state "${CODEX_AUTH:-}" "$CODEX_AUTH_BASE" "${CODEX_PROFILE:-}" "$CODEX_PROFILE_BASE")"
-  claude_config_state="$(doctor_path_state "$CLAUDE_HOST_CONFIG")"
+  claude_config_state="$(doctor_config_state "$CLAUDE_CONFIG_SELECTOR" "$CLAUDE_CONFIG_MODE" "$CLAUDE_HOST_CONFIG")"
   claude_auth_state="$(doctor_auth_state "${CLAUDE_AUTH:-}" "$CLAUDE_AUTH_BASE" "${CLAUDE_PROFILE:-}" "$CLAUDE_PROFILE_BASE")"
-  opencode_config_state="$(doctor_path_state "$OPENCODE_HOST_CONFIG")"
+  opencode_config_state="$(doctor_config_state "$OPENCODE_CONFIG_SELECTOR" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG")"
   opencode_auth_state="$(doctor_auth_state "${OPENCODE_AUTH:-}" "$OPENCODE_AUTH_BASE" "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE")"
   omp_config_state="$(doctor_path_state "$OMP_HOST_CONFIG")"
   suggestions="$(print_doctor_suggestions | sed 's/^- //')"

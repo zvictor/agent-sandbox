@@ -173,19 +173,19 @@ resolve_effective_tools_list() {
 
   resolve_tool_config_roots
 
-  if [ -d "$CODEX_HOST_CONFIG" ]; then
+  if [ -d "$CODEX_HOST_CONFIG" ] || [ "$CODEX_CONFIG_MODE" = "project" ] || [ "$CODEX_CONFIG_MODE" = "fresh" ] || [ -n "${CODEX_CONFIG:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codex"
   elif [ -n "${CODEX_AUTH:-}" ] || [ -d "${CODEX_AUTH_BASE:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codex"
   fi
 
-  if [ -d "$CLAUDE_HOST_CONFIG" ]; then
+  if [ -d "$CLAUDE_HOST_CONFIG" ] || [ "$CLAUDE_CONFIG_MODE" = "project" ] || [ "$CLAUDE_CONFIG_MODE" = "fresh" ] || [ -n "${CLAUDE_CONFIG:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }claude"
   elif [ -n "${CLAUDE_AUTH:-}" ] || [ -d "${CLAUDE_AUTH_BASE:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }claude"
   fi
 
-  if [ -d "$OPENCODE_HOST_CONFIG" ]; then
+  if [ -d "$OPENCODE_HOST_CONFIG" ] || [ "$OPENCODE_CONFIG_MODE" = "project" ] || [ "$OPENCODE_CONFIG_MODE" = "fresh" ] || [ -n "${OPENCODE_CONFIG:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }opencode"
   elif [ -n "${OPENCODE_AUTH:-}" ] || [ -d "${OPENCODE_AUTH_BASE:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }opencode"

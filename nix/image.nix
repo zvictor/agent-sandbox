@@ -147,7 +147,7 @@ let
       mkdir -p "$CACHE_DIR"
 
       if [ "${name}" = "codex" ]; then
-        export CODEX_HOME="''${CODEX_HOME:-/config/.codex}"
+        export CODEX_HOME="''${CODEX_HOME:-/cache/.codex}"
         export CODEX_CONFIG_DIR="''${CODEX_CONFIG_DIR:-''${CODEX_HOME}}"
       fi
 

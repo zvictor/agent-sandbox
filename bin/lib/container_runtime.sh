@@ -1,13 +1,14 @@
 mount_engine() {
   local engine="$1"
-  local host_config_dir="$2"
-  local container_config_dir="$3"
-  local env_pairs="$4"
-  local auth_env_name="$5"
-  local auth_base_dir="$6"
-  local profile_env_name="$7"
-  local profile_base_dir="$8"
-  local active_credentials_file="$9"
+  local config_mode="$2"
+  local host_config_dir="$3"
+  local container_config_dir="$4"
+  local env_pairs="$5"
+  local auth_env_name="$6"
+  local auth_base_dir="$7"
+  local profile_env_name="$8"
+  local profile_base_dir="$9"
+  local active_credentials_file="${10}"
   local mount_source=""
   local resolved_auth_path=""
   local selector_value=""
@@ -23,8 +24,8 @@ mount_engine() {
     return 0
   fi
 
-  mount_source="$host_config_dir"
-  if [ -z "$mount_source" ] || [ ! -d "$mount_source" ]; then
+  mount_source="$(ensure_runtime_config_dir "$engine" "$config_mode" "$host_config_dir")"
+  if [ -z "$mount_source" ]; then
     mount_source="$CACHE_DIR/empty-config/$engine"
     mkdir -p "$mount_source"
   fi
@@ -81,6 +82,112 @@ expand_host_selector_path() {
   esac
 }
 
+expand_host_config_path() {
+  local raw_path="$1"
+
+  case "$raw_path" in
+    "" )
+      printf '%s\n' ""
+      ;;
+    "~")
+      printf '%s\n' "$HOST_HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOST_HOME" "${raw_path#~/}"
+      ;;
+    /*)
+      printf '%s\n' "$raw_path"
+      ;;
+    ./*|../*)
+      printf '%s/%s\n' "$PROJECT_ROOT" "$raw_path"
+      ;;
+    *)
+      printf '%s/%s\n' "$PROJECT_ROOT" "$raw_path"
+      ;;
+  esac
+}
+
+ensure_config_state_dir() {
+  if [ -z "${CONFIG_STATE_DIR:-}" ]; then
+    CONFIG_STATE_DIR="$(mktemp -d "$HELPER_TMPDIR/config.XXXXXX")"
+  fi
+}
+
+ensure_runtime_config_dir() {
+  local engine="$1"
+  local config_mode="$2"
+  local resolved_path="$3"
+  local runtime_path=""
+
+  case "$config_mode" in
+    host|project|path|legacy-dir)
+      if [ -z "$resolved_path" ]; then
+        printf '%s\n' ""
+        return 0
+      fi
+      if [ -e "$resolved_path" ] && [ ! -d "$resolved_path" ]; then
+        echo "[agent] ERROR: config path for $engine is not a directory: $resolved_path" >&2
+        exit 1
+      fi
+      mkdir -p "$resolved_path"
+      printf '%s\n' "$resolved_path"
+      ;;
+    fresh)
+      ensure_config_state_dir
+      runtime_path="$CONFIG_STATE_DIR/$engine"
+      mkdir -p "$runtime_path"
+      printf '%s\n' "$runtime_path"
+      ;;
+    none|"")
+      printf '%s\n' ""
+      ;;
+    *)
+      echo "[agent] ERROR: unsupported config mode '$config_mode' for $engine" >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_config_root() {
+  local selector_value="$1"
+  local legacy_dir="$2"
+  local default_host_path="$3"
+  local project_path="$4"
+  local mode=""
+  local resolved_path=""
+  local effective_selector="$selector_value"
+
+  if [ -z "$effective_selector" ] && [ -n "$legacy_dir" ]; then
+    mode="legacy-dir"
+    resolved_path="$(expand_host_config_path "$legacy_dir")"
+    effective_selector="$legacy_dir"
+    printf '%s|%s|%s\n' "$mode" "$effective_selector" "$resolved_path"
+    return 0
+  fi
+
+  case "${effective_selector:-host}" in
+    host)
+      mode="host"
+      resolved_path="$default_host_path"
+      effective_selector="host"
+      ;;
+    project)
+      mode="project"
+      resolved_path="$project_path"
+      ;;
+    fresh)
+      mode="fresh"
+      resolved_path=""
+      ;;
+    *)
+      mode="path"
+      resolved_path="$(expand_host_config_path "$effective_selector")"
+      ;;
+  esac
+
+  printf '%s|%s|%s\n' "$mode" "$effective_selector" "$resolved_path"
+}
+
 resolve_auth_file_path() {
   local selector_value="$1"
   local auth_base_dir="$2"
@@ -134,22 +241,22 @@ mount_standard_engine() {
 
   case "$engine" in
     codex)
-      mount_engine "codex" "$CODEX_HOST_CONFIG" "/config/.codex" \
-        "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
+      mount_engine "codex" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG" "/cache/.codex" \
+        "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
         "CODEX_AUTH" "$CODEX_AUTH_BASE" "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
       ;;
     opencode)
-      mount_engine "opencode" "$OPENCODE_HOST_CONFIG" "/config/.opencode" \
-        "OPENCODE_CONFIG_DIR=/config/.opencode" \
+      mount_engine "opencode" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG" "/cache/.config/opencode" \
+        "OPENCODE_CONFIG_DIR=/cache/.config/opencode" \
         "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
       ;;
     claude)
-      mount_engine "claude" "$CLAUDE_HOST_CONFIG" "/config/.claude" \
-        "CLAUDE_CONFIG_DIR=/config/.claude" \
+      mount_engine "claude" "$CLAUDE_CONFIG_MODE" "$CLAUDE_HOST_CONFIG" "/cache/.claude" \
+        "CLAUDE_CONFIG_DIR=/cache/.claude" \
         "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
       ;;
     omp)
-      mount_engine "omp" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" ""
+      mount_engine "omp" "host" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" "" ""
       ;;
     *)
       echo "[agent] ERROR: unsupported engine mount '$engine'" >&2
@@ -175,7 +282,7 @@ prepare_tool_cache_dirs() {
   TOOL_CACHE_DIR="$CACHE_DIR/tools/$TOOL"
   mkdir -p "$TOOL_CACHE_DIR"
   mkdir -p "$TOOL_CACHE_DIR/nix/profiles" "$TOOL_CACHE_DIR/nix/gcroots"
-  mkdir -p "$CACHE_DIR/.config/direnv"
+  mkdir -p "$CACHE_DIR/.config/direnv" "$CACHE_DIR/.config"
   cat > "$CACHE_DIR/.config/direnv/direnvrc" <<'EOF_DIRENV'
 source /etc/direnv/direnvrc
 EOF_DIRENV
@@ -390,11 +497,26 @@ append_passthrough_env_args() {
 }
 
 resolve_tool_config_roots() {
-  CODEX_HOST_CONFIG="${CODEX_CONFIG_DIR:-$HOST_HOME/.codex}"
-  OPENCODE_HOST_CONFIG="${OPENCODE_CONFIG_DIR:-$HOST_HOME/.config/opencode}"
-  CLAUDE_HOST_CONFIG="${CLAUDE_CONFIG_DIR:-$HOST_HOME/.claude}"
   OMP_AGENT_HOST_DIR="${PI_CODING_AGENT_DIR:-${OMP_CODING_AGENT_DIR:-$HOST_HOME/.omp/agent}}"
   OMP_HOST_CONFIG="$(dirname "$OMP_AGENT_HOST_DIR")"
+
+  CODEX_CONFIG_DEFAULT_HOST="$HOST_HOME/.codex"
+  OPENCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.config/opencode"
+  CLAUDE_CONFIG_DEFAULT_HOST="$HOST_HOME/.claude"
+
+  CODEX_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.codex"
+  OPENCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.config/opencode"
+  CLAUDE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.claude"
+
+  IFS='|' read -r CODEX_CONFIG_MODE CODEX_CONFIG_SELECTOR CODEX_HOST_CONFIG <<EOF
+$(resolve_config_root "${CODEX_CONFIG:-}" "${CODEX_CONFIG_DIR:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_PROJECT_PATH")
+EOF
+  IFS='|' read -r OPENCODE_CONFIG_MODE OPENCODE_CONFIG_SELECTOR OPENCODE_HOST_CONFIG <<EOF
+$(resolve_config_root "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$OPENCODE_CONFIG_DEFAULT_HOST" "$OPENCODE_CONFIG_PROJECT_PATH")
+EOF
+  IFS='|' read -r CLAUDE_CONFIG_MODE CLAUDE_CONFIG_SELECTOR CLAUDE_HOST_CONFIG <<EOF
+$(resolve_config_root "${CLAUDE_CONFIG:-}" "${CLAUDE_CONFIG_DIR:-}" "$CLAUDE_CONFIG_DEFAULT_HOST" "$CLAUDE_CONFIG_PROJECT_PATH")
+EOF
 
   CODEX_PROFILE_BASE="${CODEX_PROFILE_BASE_DIR:-$HOST_HOME/.codex/profiles}"
   OPENCODE_PROFILE_BASE="${OPENCODE_PROFILE_BASE_DIR:-$OPENCODE_HOST_CONFIG/profiles}"

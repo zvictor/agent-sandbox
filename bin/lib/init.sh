@@ -69,17 +69,17 @@ render_tool_allowlist_setting() {
   local detected_tools=""
   local count=0
 
-  if [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ]; then
+  if [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ] || [ -d "$CODEX_CONFIG_PROJECT_PATH" ]; then
     detected_tools="${detected_tools:+$detected_tools }codex"
     count=$((count + 1))
   fi
 
-  if [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ]; then
+  if [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ] || [ -d "$CLAUDE_CONFIG_PROJECT_PATH" ]; then
     detected_tools="${detected_tools:+$detected_tools }claude"
     count=$((count + 1))
   fi
 
-  if [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ]; then
+  if [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ] || [ -d "$OPENCODE_CONFIG_PROJECT_PATH" ]; then
     detected_tools="${detected_tools:+$detected_tools }opencode"
     count=$((count + 1))
   fi
@@ -89,9 +89,9 @@ render_tool_allowlist_setting() {
     count=$((count + 1))
   fi
 
-  if { [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ]; } \
-    && { [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ]; } \
-    && { [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ]; }
+  if { [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ] || [ -d "$CODEX_CONFIG_PROJECT_PATH" ]; } \
+    && { [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ] || [ -d "$CLAUDE_CONFIG_PROJECT_PATH" ]; } \
+    && { [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ] || [ -d "$OPENCODE_CONFIG_PROJECT_PATH" ]; }
   then
     detected_tools="${detected_tools:+$detected_tools }codemachine"
   fi
@@ -103,8 +103,20 @@ render_tool_allowlist_setting() {
   fi
 }
 
+render_config_setting() {
+  local env_name="$1"
+  local project_path="$2"
+
+  if [ -d "$project_path" ]; then
+    printf '%s=project\n' "$env_name"
+  else
+    printf '# %s=host\n' "$env_name"
+  fi
+}
+
 render_project_config_template() {
   local auth_lines=""
+  local config_lines=""
 
   cat <<'EOF'
 # Agent Sandbox project defaults
@@ -122,6 +134,22 @@ AGENT_NIX_TOOL_HELPER=1
 # Keep the host direnv snapshot helper enabled when the project uses .envrc.
 AGENT_DEV_ENV=host-helper
 
+EOF
+
+  config_lines="$(
+    {
+      render_config_setting "CODEX_CONFIG" "$CODEX_CONFIG_PROJECT_PATH"
+      render_config_setting "CLAUDE_CONFIG" "$CLAUDE_CONFIG_PROJECT_PATH"
+      render_config_setting "OPENCODE_CONFIG" "$OPENCODE_CONFIG_PROJECT_PATH"
+    } | sed '/^$/d'
+  )"
+
+  printf '\n# Optional config scope:\n'
+  printf '%s\n' "$config_lines"
+
+  cat <<'EOF'
+# Use CODEX_CONFIG=fresh for an isolated one-off config dir.
+# Use CODEX_CONFIG=/some/path to point at another host config directory.
 EOF
 
   auth_lines="$(

@@ -91,9 +91,9 @@ login_active_credentials_file_for_tool() {
 
 login_config_dir_for_tool() {
   case "$1" in
-    codex) printf '%s\n' "/config/.codex" ;;
-    claude) printf '%s\n' "/config/.claude" ;;
-    opencode) printf '%s\n' "/config/.opencode" ;;
+    codex) printf '%s\n' "/cache/.codex" ;;
+    claude) printf '%s\n' "/cache/.claude" ;;
+    opencode) printf '%s\n' "/cache/.config/opencode" ;;
     *)
       return 1
       ;;
