@@ -80,6 +80,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/environment.sh"
 . "$AGENT_BIN_DIR/lib/doctor.sh"
 . "$AGENT_BIN_DIR/lib/init.sh"
+. "$AGENT_BIN_DIR/lib/login.sh"
 
 TOOL=""
 REMAINING_ARGS=()
@@ -93,6 +94,11 @@ if [ "$(basename "$0")" = "agent" ]; then
       ;;
     init)
       AGENT_COMMAND="init"
+      shift
+      REMAINING_ARGS=("$@")
+      ;;
+    login)
+      AGENT_COMMAND="login"
       shift
       REMAINING_ARGS=("$@")
       ;;
@@ -122,10 +128,15 @@ if [ "$AGENT_COMMAND" = "init" ]; then
   print_init_and_exit
 fi
 
-validate_tool_access
+if [ "$AGENT_COMMAND" = "login" ]; then
+  resolve_login_args "${REMAINING_ARGS[@]}"
+else
+  validate_tool_access
+fi
 
 TMP_DIR=""
 HELPER_STATE_DIR=""
+LOGIN_STATE_DIR=""
 cleanup() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
@@ -133,10 +144,16 @@ cleanup() {
   if [ -n "$HELPER_STATE_DIR" ] && [ -d "$HELPER_STATE_DIR" ]; then
     rm -rf "$HELPER_STATE_DIR"
   fi
+  if [ -n "$LOGIN_STATE_DIR" ] && [ -d "$LOGIN_STATE_DIR" ]; then
+    rm -rf "$LOGIN_STATE_DIR"
+  fi
 }
 trap cleanup EXIT
 
 bootstrap_environment
+if [ "$AGENT_COMMAND" = "login" ]; then
+  prepare_login_state
+fi
 prepare_runtime_artifacts
 prepare_container_api
 prepare_nix_tool_helper
@@ -147,15 +164,22 @@ if [ "${AGENT_DEBUG:-0}" = "1" ]; then
   printf '[agent] running: %s run %q\n' "$RUNTIME" "${ARGS[*]}" >&2
 fi
 
+set +e
 if [ "$MODE" = "podman-rootfs" ]; then
   perf_log "podman rootfs run mode: $ROOTFS_RUN_MODE"
   "$RUNTIME" run "${ARGS[@]}"
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "[agent] podman --rootfs run failed." >&2
-    exit "$status"
   fi
-  exit 0
+else
+  "$RUNTIME" run "${ARGS[@]}"
+  status=$?
+fi
+set -e
+
+if [ "$AGENT_COMMAND" = "login" ]; then
+  finalize_login "$status"
 fi
 
-exec "$RUNTIME" run "${ARGS[@]}"
+exit "$status"

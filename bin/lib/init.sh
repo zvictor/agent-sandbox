@@ -19,29 +19,29 @@ resolve_init_args() {
   done
 }
 
-list_profile_names() {
-  local profile_base="$1"
-  local profile_file=""
+list_named_json_slots() {
+  local slot_base="$1"
+  local slot_file=""
 
-  [ -d "$profile_base" ] || return 0
+  [ -d "$slot_base" ] || return 0
 
-  for profile_file in "$profile_base"/*.json; do
-    [ -f "$profile_file" ] || continue
-    basename "$profile_file" .json
+  for slot_file in "$slot_base"/*.json; do
+    [ -f "$slot_file" ] || continue
+    basename "$slot_file" .json
   done
 }
 
-render_profile_setting() {
+render_auth_setting() {
   local env_name="$1"
-  local profile_base="$2"
+  local auth_base="$2"
   local count=0
   local first=""
-  local profiles=""
+  local slots=""
   local detected=""
 
-  [ -d "$profile_base" ] || return 0
+  [ -d "$auth_base" ] || return 0
 
-  profiles="$(list_profile_names "$profile_base")"
+  slots="$(list_named_json_slots "$auth_base")"
   while IFS= read -r detected; do
     [ -n "$detected" ] || continue
     count=$((count + 1))
@@ -49,7 +49,7 @@ render_profile_setting() {
       first="$detected"
     fi
   done <<EOF
-$profiles
+$slots
 EOF
 
   if [ "$count" -eq 1 ]; then
@@ -58,7 +58,7 @@ EOF
   fi
 
   if [ "$count" -gt 1 ]; then
-    printf '# %s=<choose one of: %s>\n' "$env_name" "$(printf '%s\n' "$profiles" | paste -sd ',' - | sed 's/,/, /g')"
+    printf '# %s=<choose one of: %s>\n' "$env_name" "$(printf '%s\n' "$slots" | paste -sd ',' - | sed 's/,/, /g')"
     return 0
   fi
 
@@ -69,17 +69,17 @@ render_tool_allowlist_setting() {
   local detected_tools=""
   local count=0
 
-  if [ -d "$CODEX_HOST_CONFIG" ]; then
+  if [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ]; then
     detected_tools="${detected_tools:+$detected_tools }codex"
     count=$((count + 1))
   fi
 
-  if [ -d "$CLAUDE_HOST_CONFIG" ]; then
+  if [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ]; then
     detected_tools="${detected_tools:+$detected_tools }claude"
     count=$((count + 1))
   fi
 
-  if [ -d "$OPENCODE_HOST_CONFIG" ]; then
+  if [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ]; then
     detected_tools="${detected_tools:+$detected_tools }opencode"
     count=$((count + 1))
   fi
@@ -89,7 +89,10 @@ render_tool_allowlist_setting() {
     count=$((count + 1))
   fi
 
-  if [ -d "$CODEX_HOST_CONFIG" ] && [ -d "$CLAUDE_HOST_CONFIG" ] && [ -d "$OPENCODE_HOST_CONFIG" ]; then
+  if { [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ]; } \
+    && { [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ]; } \
+    && { [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ]; }
+  then
     detected_tools="${detected_tools:+$detected_tools }codemachine"
   fi
 
@@ -101,7 +104,7 @@ render_tool_allowlist_setting() {
 }
 
 render_project_config_template() {
-  local profile_lines=""
+  local auth_lines=""
 
   cat <<'EOF'
 # Agent Sandbox project defaults
@@ -121,26 +124,43 @@ AGENT_DEV_ENV=host-helper
 
 EOF
 
-  profile_lines="$(
+  auth_lines="$(
     {
-      render_profile_setting "CODEX_PROFILE" "$CODEX_PROFILE_BASE"
-      render_profile_setting "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE"
-      render_profile_setting "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE"
+      render_auth_setting "CODEX_AUTH" "$CODEX_AUTH_BASE"
+      render_auth_setting "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE"
+      render_auth_setting "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE"
     } | sed '/^$/d'
   )"
 
-  printf '\n# Optional tool profiles:\n'
-  if [ -n "$profile_lines" ]; then
-    printf '%s\n' "$profile_lines"
+  printf '\n# Optional named credential slots or explicit credential file paths:\n'
+  if [ -n "$auth_lines" ]; then
+    printf '%s\n' "$auth_lines"
   else
-    printf '# no host profiles detected\n'
+    printf '# CODEX_AUTH=work\n'
+    printf '# CLAUDE_AUTH=work\n'
+    printf '# OPENCODE_AUTH=work\n'
   fi
+
+  cat <<'EOF'
+# Create a fresh named Codex login with:
+# agent login codex work --use
+EOF
 
   cat <<'EOF'
 
 # Optional tool allowlist:
 EOF
   render_tool_allowlist_setting
+}
+
+resolve_project_config_target_file() {
+  if [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ "$PROJECT_CONFIG_FILE" = "$PROJECT_NIX_DIR/agent-sandbox.env" ]; then
+    printf '%s\n' "$PROJECT_CONFIG_FILE"
+  elif [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ -f "$PROJECT_CONFIG_FILE" ]; then
+    printf '%s\n' "$PROJECT_CONFIG_FILE"
+  else
+    printf '%s\n' "$PROJECT_NIX_DIR/agent-sandbox.env"
+  fi
 }
 
 print_init_and_exit() {
@@ -151,13 +171,7 @@ print_init_and_exit() {
   resolve_host_home
   resolve_tool_config_roots
 
-  if [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ "$PROJECT_CONFIG_FILE" = "$PROJECT_NIX_DIR/agent-sandbox.env" ]; then
-    target_file="$PROJECT_CONFIG_FILE"
-  elif [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ -f "$PROJECT_CONFIG_FILE" ]; then
-    target_file="$PROJECT_CONFIG_FILE"
-  else
-    target_file="$PROJECT_NIX_DIR/agent-sandbox.env"
-  fi
+  target_file="$(resolve_project_config_target_file)"
 
   if [ "$INIT_STDOUT" = "1" ]; then
     render_project_config_template

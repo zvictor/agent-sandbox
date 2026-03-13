@@ -44,16 +44,37 @@ doctor_path_state() {
   fi
 }
 
-doctor_profile_state() {
-  local profile_name="$1"
-  local profile_path="$2"
+doctor_auth_state() {
+  local selector_value="$1"
+  local auth_base_dir="$2"
+  local legacy_profile_name="$3"
+  local legacy_profile_base_dir="$4"
+  local resolved_path=""
 
-  if [ -z "$profile_name" ]; then
-    printf 'unset\n'
-  elif [ -f "$profile_path" ]; then
-    printf '%s (%s)\n' "$profile_name" "$profile_path"
+  resolved_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir" "$legacy_profile_name" "$legacy_profile_base_dir")"
+
+  if [ -n "$selector_value" ]; then
+    if [ -f "$resolved_path" ]; then
+      printf '%s (%s)\n' "$selector_value" "$resolved_path"
+    else
+      printf '%s (missing: %s)\n' "$selector_value" "$resolved_path"
+    fi
+    return 0
+  fi
+
+  if [ -n "$legacy_profile_name" ]; then
+    if [ -f "$resolved_path" ]; then
+      printf 'legacy:%s (%s)\n' "$legacy_profile_name" "$resolved_path"
+    else
+      printf 'legacy:%s (missing: %s)\n' "$legacy_profile_name" "$resolved_path"
+    fi
+    return 0
+  fi
+
+  if [ -d "$auth_base_dir" ]; then
+    printf 'unset (managed slots: %s)\n' "$auth_base_dir"
   else
-    printf '%s (missing: %s)\n' "$profile_name" "$profile_path"
+    printf 'unset\n'
   fi
 }
 
@@ -138,11 +159,11 @@ print_doctor_json() {
   local docker_socket_state="$6"
   local nix_daemon_socket_state="$7"
   local codex_config_state="$8"
-  local codex_profile_state="$9"
+  local codex_auth_state="$9"
   local claude_config_state="${10}"
-  local claude_profile_state="${11}"
+  local claude_auth_state="${11}"
   local opencode_config_state="${12}"
-  local opencode_profile_state="${13}"
+  local opencode_auth_state="${13}"
   local omp_config_state="${14}"
   local suggestions="${15}"
 
@@ -176,11 +197,11 @@ print_doctor_json() {
   printf '  },\n'
   printf '  "tool_config": {\n'
   doctor_json_pair "codex_config" "$codex_config_state"; printf ',\n'
-  doctor_json_pair "codex_profile" "$codex_profile_state"; printf ',\n'
+  doctor_json_pair "codex_auth" "$codex_auth_state"; printf ',\n'
   doctor_json_pair "claude_config" "$claude_config_state"; printf ',\n'
-  doctor_json_pair "claude_profile" "$claude_profile_state"; printf ',\n'
+  doctor_json_pair "claude_auth" "$claude_auth_state"; printf ',\n'
   doctor_json_pair "opencode_config" "$opencode_config_state"; printf ',\n'
-  doctor_json_pair "opencode_profile" "$opencode_profile_state"; printf ',\n'
+  doctor_json_pair "opencode_auth" "$opencode_auth_state"; printf ',\n'
   doctor_json_pair "omp_config" "$omp_config_state"; printf '\n'
   printf '  },\n'
   printf '  "suggestions": [\n'
@@ -226,11 +247,11 @@ print_doctor_text_verbose() {
   local docker_socket_state="$6"
   local nix_daemon_socket_state="$7"
   local codex_config_state="$8"
-  local codex_profile_state="$9"
+  local codex_auth_state="$9"
   local claude_config_state="${10}"
-  local claude_profile_state="${11}"
+  local claude_auth_state="${11}"
   local opencode_config_state="${12}"
-  local opencode_profile_state="${13}"
+  local opencode_auth_state="${13}"
   local omp_config_state="${14}"
   local suggestions="${15}"
 
@@ -265,11 +286,11 @@ print_doctor_text_verbose() {
 
   printf '\nTool Config\n'
   doctor_line "codex_config" "$codex_config_state"
-  doctor_line "codex_profile" "$codex_profile_state"
+  doctor_line "codex_auth" "$codex_auth_state"
   doctor_line "claude_config" "$claude_config_state"
-  doctor_line "claude_profile" "$claude_profile_state"
+  doctor_line "claude_auth" "$claude_auth_state"
   doctor_line "opencode_config" "$opencode_config_state"
-  doctor_line "opencode_profile" "$opencode_profile_state"
+  doctor_line "opencode_auth" "$opencode_auth_state"
   doctor_line "omp_config" "$omp_config_state"
 
   printf '\nSuggested next steps\n'
@@ -314,18 +335,37 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ -n "${CODEX_PROFILE:-}" ] && [ ! -f "$CODEX_PROFILE_BASE/${CODEX_PROFILE}.json" ]; then
-    doctor_note "Create the Codex profile file at $CODEX_PROFILE_BASE/${CODEX_PROFILE}.json or unset CODEX_PROFILE."
+  if [ -n "${CODEX_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CODEX_AUTH" "$CODEX_AUTH_BASE" "" "")" ]; then
+    if printf '%s\n' "$CODEX_AUTH" | grep -Eq '^(/|\./|\.\./|~|~/)'; then
+      doctor_note "Fix CODEX_AUTH=$CODEX_AUTH so it points to a readable credentials file, or unset it to use the default host Codex auth."
+    else
+      doctor_note "Create the named Codex login with 'agent login codex $CODEX_AUTH --use', or set CODEX_AUTH to a readable credential file path."
+    fi
     printed="1"
   fi
 
-  if [ -n "${CLAUDE_PROFILE:-}" ] && [ ! -f "$CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE}.json" ]; then
-    doctor_note "Create the Claude profile file at $CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE}.json or unset CLAUDE_PROFILE."
+  if [ -n "${CLAUDE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" "" "")" ]; then
+    doctor_note "Fix CLAUDE_AUTH=$CLAUDE_AUTH so it points to a readable credential file or named managed slot."
     printed="1"
   fi
 
-  if [ -n "${OPENCODE_PROFILE:-}" ] && [ ! -f "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE}.json" ]; then
-    doctor_note "Create the OpenCode profile file at $OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE}.json or unset OPENCODE_PROFILE."
+  if [ -n "${OPENCODE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "" "")" ]; then
+    doctor_note "Fix OPENCODE_AUTH=$OPENCODE_AUTH so it points to a readable credential file or named managed slot."
+    printed="1"
+  fi
+
+  if [ -n "${CODEX_PROFILE:-}" ] && [ -z "${CODEX_AUTH:-}" ]; then
+    doctor_note "CODEX_PROFILE is a legacy compatibility alias. Prefer CODEX_AUTH=<name-or-path> for new setups."
+    printed="1"
+  fi
+
+  if [ -n "${CLAUDE_PROFILE:-}" ] && [ -z "${CLAUDE_AUTH:-}" ]; then
+    doctor_note "CLAUDE_PROFILE is a legacy compatibility alias. Prefer CLAUDE_AUTH=<name-or-path> for new setups."
+    printed="1"
+  fi
+
+  if [ -n "${OPENCODE_PROFILE:-}" ] && [ -z "${OPENCODE_AUTH:-}" ]; then
+    doctor_note "OPENCODE_PROFILE is a legacy compatibility alias. Prefer OPENCODE_AUTH=<name-or-path> for new setups."
     printed="1"
   fi
 
@@ -351,11 +391,11 @@ print_doctor_and_exit() {
   local docker_socket_state=""
   local nix_daemon_socket_state=""
   local codex_config_state=""
-  local codex_profile_state=""
+  local codex_auth_state=""
   local claude_config_state=""
-  local claude_profile_state=""
+  local claude_auth_state=""
   local opencode_config_state=""
-  local opencode_profile_state=""
+  local opencode_auth_state=""
   local omp_config_state=""
   local suggestions=""
   local tools_source=""
@@ -396,11 +436,11 @@ print_doctor_and_exit() {
   docker_socket_state="$(doctor_path_state "$docker_socket_path")"
   nix_daemon_socket_state="$(doctor_path_state "$nix_daemon_socket_path")"
   codex_config_state="$(doctor_path_state "$CODEX_HOST_CONFIG")"
-  codex_profile_state="$(doctor_profile_state "${CODEX_PROFILE:-}" "$CODEX_PROFILE_BASE/${CODEX_PROFILE:-}.json")"
+  codex_auth_state="$(doctor_auth_state "${CODEX_AUTH:-}" "$CODEX_AUTH_BASE" "${CODEX_PROFILE:-}" "$CODEX_PROFILE_BASE")"
   claude_config_state="$(doctor_path_state "$CLAUDE_HOST_CONFIG")"
-  claude_profile_state="$(doctor_profile_state "${CLAUDE_PROFILE:-}" "$CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE:-}.json")"
+  claude_auth_state="$(doctor_auth_state "${CLAUDE_AUTH:-}" "$CLAUDE_AUTH_BASE" "${CLAUDE_PROFILE:-}" "$CLAUDE_PROFILE_BASE")"
   opencode_config_state="$(doctor_path_state "$OPENCODE_HOST_CONFIG")"
-  opencode_profile_state="$(doctor_profile_state "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE:-}.json")"
+  opencode_auth_state="$(doctor_auth_state "${OPENCODE_AUTH:-}" "$OPENCODE_AUTH_BASE" "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE")"
   omp_config_state="$(doctor_path_state "$OMP_HOST_CONFIG")"
   suggestions="$(print_doctor_suggestions | sed 's/^- //')"
 
@@ -414,11 +454,11 @@ print_doctor_and_exit() {
       "$docker_socket_state" \
       "$nix_daemon_socket_state" \
       "$codex_config_state" \
-      "$codex_profile_state" \
+      "$codex_auth_state" \
       "$claude_config_state" \
-      "$claude_profile_state" \
+      "$claude_auth_state" \
       "$opencode_config_state" \
-      "$opencode_profile_state" \
+      "$opencode_auth_state" \
       "$omp_config_state" \
       "$suggestions"
     exit 0
@@ -434,11 +474,11 @@ print_doctor_and_exit() {
       "$docker_socket_state" \
       "$nix_daemon_socket_state" \
       "$codex_config_state" \
-      "$codex_profile_state" \
+      "$codex_auth_state" \
       "$claude_config_state" \
-      "$claude_profile_state" \
+      "$claude_auth_state" \
       "$opencode_config_state" \
-      "$opencode_profile_state" \
+      "$opencode_auth_state" \
       "$omp_config_state" \
       "$suggestions"
   else

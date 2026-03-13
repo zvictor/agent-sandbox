@@ -29,6 +29,7 @@ For a new project:
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work --use
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- run codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
 ```
@@ -38,6 +39,7 @@ From a local checkout:
 ```sh
 ./scripts/agent init
 ./scripts/agent doctor
+./scripts/agent login codex work --use
 ./scripts/agent run codex
 ./scripts/codex
 ```
@@ -160,11 +162,10 @@ Example:
 ```sh
 AGENT_CONTAINER_API=auto
 AGENT_NIX_TOOL_HELPER=1
-CODEX_PROFILE=work
-CLAUDE_PROFILE=work
+CODEX_AUTH=work
 ```
 
-Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool profile/config keys, `TESTCONTAINERS_*`, and `GIT_ALLOW`.
+Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool auth/config keys, `TESTCONTAINERS_*`, and `GIT_ALLOW`.
 
 Bootstrap the file with:
 
@@ -178,7 +179,7 @@ Useful variants:
 - `agent init --force`: overwrite an existing defaults file
 - `agent init --stdout`: print the template instead of writing it
 
-When host tool profile directories already exist, `agent init` pre-fills or suggests those profile names instead of always emitting generic placeholders. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
+`agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
 
 ## Installation
 
@@ -251,6 +252,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 ```sh
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent run codex
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work --use
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent init
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
@@ -285,12 +287,18 @@ The launcher mounts host config directories into the container for supported too
 - `omp`: host `~/.omp` to container `/cache/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together
 
-Tool-specific profile overlays:
-- `CODEX_PROFILE` overlays `<host>/.codex/profiles/<name>.json` as `auth.json`
-- `OPENCODE_PROFILE` overlays `<host-config>/profiles/<name>.json` as `opencode.json`
-- `CLAUDE_PROFILE` overlays `<host>/.claude/profiles/<name>.json` as `.credentials.json`
+Tool-specific auth selection:
+- `CODEX_AUTH=work` overlays `~/.local/share/agent-sandbox/auth/codex/work.json` as `auth.json`
+- `CODEX_AUTH=/path/to/auth.json` overlays that exact file as `auth.json`
+- `CLAUDE_AUTH` and `OPENCODE_AUTH` follow the same `name-or-path` model for their credential files
 
-For `omp`, the launcher mounts the whole `~/.omp` tree. It does not implement a separate profile overlay layer.
+Create a fresh named Codex login with:
+
+```sh
+./scripts/agent login codex work --use
+```
+
+For `omp`, the launcher mounts the whole `~/.omp` tree. It does not implement a separate credential overlay layer.
 
 ## Security and Behavior
 
@@ -465,9 +473,16 @@ The low-level `agent-nix-tool` command is still available as an escape hatch, bu
 - `CODEX_CONFIG_DIR`: host Codex config root; defaults to `~/.codex`
 - `OPENCODE_CONFIG_DIR`: host OpenCode config root; defaults to `~/.config/opencode`
 - `CLAUDE_CONFIG_DIR`: host Claude config root; defaults to `~/.claude`
-- `CODEX_PROFILE`: Codex profile name to overlay from `<config>/profiles/<name>.json`
-- `OPENCODE_PROFILE`: OpenCode profile name to overlay from `<config>/profiles/<name>.json`
-- `CLAUDE_PROFILE`: Claude profile name to overlay from `<config>/profiles/<name>.json`
+- `CODEX_AUTH`: named managed slot like `work` or an explicit credential file path
+- `OPENCODE_AUTH`: named managed slot like `work` or an explicit credential file path
+- `CLAUDE_AUTH`: named managed slot like `work` or an explicit credential file path
+- `AGENT_AUTH_HOME`: base directory for managed credential slots; defaults to `~/.local/share/agent-sandbox/auth`
+- `CODEX_AUTH_BASE_DIR`: override the managed Codex auth slot directory
+- `OPENCODE_AUTH_BASE_DIR`: override the managed OpenCode auth slot directory
+- `CLAUDE_AUTH_BASE_DIR`: override the managed Claude auth slot directory
+- `CODEX_PROFILE`: legacy compatibility alias for `CODEX_AUTH`
+- `OPENCODE_PROFILE`: legacy compatibility alias for `OPENCODE_AUTH`
+- `CLAUDE_PROFILE`: legacy compatibility alias for `CLAUDE_AUTH`
 - `CODEX_PROFILE_BASE_DIR`: override Codex profile directory
 - `OPENCODE_PROFILE_BASE_DIR`: override OpenCode profile directory
 - `CLAUDE_PROFILE_BASE_DIR`: override Claude profile directory

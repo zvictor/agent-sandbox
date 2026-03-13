@@ -97,7 +97,7 @@ So this runtime is not equivalent to the built-in network restrictions offered b
 
 ### 3. Tool config mounts are writable
 
-For `codex`, `claude`, and `opencode`, the host config roots are mounted read-write. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
+For `codex`, `claude`, and `opencode`, the host config roots are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
 
 This is convenient, but it means tokens, auth files, and tool settings are inside the blast radius of the agent.
 

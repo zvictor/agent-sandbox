@@ -3,13 +3,27 @@ mount_engine() {
   local host_config_dir="$2"
   local container_config_dir="$3"
   local env_pairs="$4"
-  local profile_env_name="$5"
-  local profile_base_dir="$6"
-  local active_credentials_file="$7"
+  local auth_env_name="$5"
+  local auth_base_dir="$6"
+  local profile_env_name="$7"
+  local profile_base_dir="$8"
+  local active_credentials_file="$9"
+  local mount_source=""
+  local resolved_auth_path=""
+  local selector_value=""
+  local legacy_profile_name=""
+  local compatibility_note=""
 
   append_split_arg_values -e "$env_pairs"
 
-  local mount_source="$host_config_dir"
+  if [ "${LOGIN_TOOL:-}" = "$engine" ] && [ -n "${LOGIN_CONFIG_HOST_DIR:-}" ]; then
+    mount_source="$LOGIN_CONFIG_HOST_DIR"
+    mkdir -p "$mount_source"
+    ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
+    return 0
+  fi
+
+  mount_source="$host_config_dir"
   if [ -z "$mount_source" ] || [ ! -d "$mount_source" ]; then
     mount_source="$CACHE_DIR/empty-config/$engine"
     mkdir -p "$mount_source"
@@ -17,21 +31,89 @@ mount_engine() {
 
   ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
 
+  if [ -n "$auth_env_name" ]; then
+    selector_value="${!auth_env_name:-}"
+  fi
+
   if [ -n "$profile_env_name" ]; then
-    local profile_name="${!profile_env_name:-}"
-    if [ -n "$profile_name" ]; then
-      if [ -z "$profile_base_dir" ]; then
-        echo "[agent] ERROR: profile base dir is empty for $engine" >&2
-        exit 1
+    legacy_profile_name="${!profile_env_name:-}"
+  fi
+
+  resolved_auth_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir" "$legacy_profile_name" "$profile_base_dir")"
+  if [ -n "$resolved_auth_path" ]; then
+    if [ ! -f "$resolved_auth_path" ]; then
+      if [ -n "$selector_value" ]; then
+        echo "[agent] ERROR: auth selector '$selector_value' for $engine did not resolve to a readable file: $resolved_auth_path" >&2
+      else
+        echo "[agent] ERROR: legacy profile '$legacy_profile_name' for $engine was not found at $resolved_auth_path" >&2
       fi
-      local profile_path="$profile_base_dir/$profile_name.json"
-      if [ ! -f "$profile_path" ]; then
-        echo "[agent] ERROR: profile '$profile_name' not found at $profile_path" >&2
-        exit 1
-      fi
-      ARGS+=( -v "$profile_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
+      exit 1
+    fi
+    ARGS+=( -v "$resolved_auth_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
+    if [ -n "$selector_value" ]; then
+      ARGS+=( -e "${engine^^}_AUTH=$selector_value" )
+    elif [ -n "$legacy_profile_name" ]; then
+      compatibility_note="${engine^^}_PROFILE=$legacy_profile_name"
+      ARGS+=( -e "$compatibility_note" )
     fi
   fi
+}
+
+expand_host_selector_path() {
+  local raw_path="$1"
+
+  case "$raw_path" in
+    "~")
+      printf '%s\n' "$HOST_HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOST_HOME" "${raw_path#~/}"
+      ;;
+    /*)
+      printf '%s\n' "$raw_path"
+      ;;
+    ./*|../*)
+      printf '%s/%s\n' "$PROJECT_ROOT" "$raw_path"
+      ;;
+    *)
+      printf '%s\n' "$raw_path"
+      ;;
+  esac
+}
+
+resolve_auth_file_path() {
+  local selector_value="$1"
+  local auth_base_dir="$2"
+  local legacy_profile_name="$3"
+  local legacy_profile_base_dir="$4"
+
+  if [ -n "$selector_value" ]; then
+    case "$selector_value" in
+      /*|./*|../*|~|~/*)
+        expand_host_selector_path "$selector_value"
+        return 0
+        ;;
+      *)
+        if [ -z "$auth_base_dir" ]; then
+          printf '%s\n' ""
+        else
+          printf '%s/%s.json\n' "$auth_base_dir" "$selector_value"
+        fi
+        return 0
+        ;;
+    esac
+  fi
+
+  if [ -n "$legacy_profile_name" ]; then
+    if [ -z "$legacy_profile_base_dir" ]; then
+      printf '%s\n' ""
+    else
+      printf '%s/%s.json\n' "$legacy_profile_base_dir" "$legacy_profile_name"
+    fi
+    return 0
+  fi
+
+  printf '%s\n' ""
 }
 
 append_split_arg_values() {
@@ -54,17 +136,17 @@ mount_standard_engine() {
     codex)
       mount_engine "codex" "$CODEX_HOST_CONFIG" "/config/.codex" \
         "CODEX_HOME=/config/.codex,CODEX_CONFIG_DIR=/config/.codex" \
-        "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
+        "CODEX_AUTH" "$CODEX_AUTH_BASE" "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
       ;;
     opencode)
       mount_engine "opencode" "$OPENCODE_HOST_CONFIG" "/config/.opencode" \
         "OPENCODE_CONFIG_DIR=/config/.opencode" \
-        "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
+        "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
       ;;
     claude)
       mount_engine "claude" "$CLAUDE_HOST_CONFIG" "/config/.claude" \
         "CLAUDE_CONFIG_DIR=/config/.claude" \
-        "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
+        "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
       ;;
     omp)
       mount_engine "omp" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" ""
@@ -317,6 +399,11 @@ resolve_tool_config_roots() {
   CODEX_PROFILE_BASE="${CODEX_PROFILE_BASE_DIR:-$HOST_HOME/.codex/profiles}"
   OPENCODE_PROFILE_BASE="${OPENCODE_PROFILE_BASE_DIR:-$OPENCODE_HOST_CONFIG/profiles}"
   CLAUDE_PROFILE_BASE="${CLAUDE_PROFILE_BASE_DIR:-$CLAUDE_HOST_CONFIG/profiles}"
+
+  AGENT_AUTH_HOME="${AGENT_AUTH_HOME:-$HOST_HOME/.local/share/agent-sandbox/auth}"
+  CODEX_AUTH_BASE="${CODEX_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/codex}"
+  OPENCODE_AUTH_BASE="${OPENCODE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/opencode}"
+  CLAUDE_AUTH_BASE="${CLAUDE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/claude}"
 }
 
 append_stdio_and_target_args() {

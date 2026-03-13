@@ -175,13 +175,19 @@ resolve_effective_tools_list() {
 
   if [ -d "$CODEX_HOST_CONFIG" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codex"
+  elif [ -n "${CODEX_AUTH:-}" ] || [ -d "${CODEX_AUTH_BASE:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }codex"
   fi
 
   if [ -d "$CLAUDE_HOST_CONFIG" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }claude"
+  elif [ -n "${CLAUDE_AUTH:-}" ] || [ -d "${CLAUDE_AUTH_BASE:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }claude"
   fi
 
   if [ -d "$OPENCODE_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }opencode"
+  elif [ -n "${OPENCODE_AUTH:-}" ] || [ -d "${OPENCODE_AUTH_BASE:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }opencode"
   fi
 
