@@ -146,6 +146,18 @@ CLAUDE_PROFILE=work
 
 Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool profile/config keys, `TESTCONTAINERS_*`, and `GIT_ALLOW`.
 
+Bootstrap the file with:
+
+```sh
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
+./scripts/agent init
+```
+
+Useful variants:
+
+- `agent init --force`: overwrite an existing defaults file
+- `agent init --stdout`: print the template instead of writing it
+
 ## Installation
 
 ### NixOS or any flake-based host
@@ -216,6 +228,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 
 ```sh
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent init
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/claude
@@ -235,7 +248,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 ./scripts/agent doctor
 ```
 
-It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, and tool config/profile paths.
+It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, tool config/profile paths, and a short suggested-fixes section when it detects obvious setup gaps.
 
 ## Tool Configuration Mounts
 

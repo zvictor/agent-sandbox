@@ -79,12 +79,17 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
 . "$AGENT_BIN_DIR/lib/doctor.sh"
+. "$AGENT_BIN_DIR/lib/init.sh"
 
 TOOL=""
 REMAINING_ARGS=()
 AGENT_COMMAND="run"
 if [ "$(basename "$0")" = "agent" ] && [ "${1:-}" = "doctor" ]; then
   AGENT_COMMAND="doctor"
+  shift
+  REMAINING_ARGS=("$@")
+elif [ "$(basename "$0")" = "agent" ] && [ "${1:-}" = "init" ]; then
+  AGENT_COMMAND="init"
   shift
   REMAINING_ARGS=("$@")
 else
@@ -102,6 +107,11 @@ if [ "$AGENT_COMMAND" = "doctor" ]; then
     exit 1
   }
   print_doctor_and_exit
+fi
+
+if [ "$AGENT_COMMAND" = "init" ]; then
+  resolve_init_args "${REMAINING_ARGS[@]}"
+  print_init_and_exit
 fi
 
 validate_tool_access

@@ -4,6 +4,10 @@ doctor_line() {
   printf '%-24s %s\n' "$key" "$value"
 }
 
+doctor_note() {
+  printf -- '- %s\n' "$1"
+}
+
 doctor_path_state() {
   local path="$1"
 
@@ -87,6 +91,60 @@ resolve_runtime_for_doctor() {
   fi
 }
 
+print_doctor_suggestions() {
+  local printed="0"
+  local target_config=""
+
+  if [ -z "${PROJECT_CONFIG_FILE:-}" ]; then
+    doctor_note "Run 'agent init' to create a project defaults file under $PROJECT_NIX_DIR/agent-sandbox.env."
+    printed="1"
+  fi
+
+  if [ "$RUNTIME" = "unavailable" ]; then
+    doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
+    printed="1"
+  fi
+
+  if [ "${AGENT_CONTAINER_API:-}" = "auto" ] && [ "$CONTAINER_API_MODE" = "none" ]; then
+    doctor_note "Container API auto mode fell back to 'none'. Install or fix host podman if you want Testcontainers support."
+    printed="1"
+  fi
+
+  if [ "${AGENT_CONTAINER_API:-}" = "podman-session" ] && [ "$CONTAINER_API_MODE" = "podman-session" ] && [ "$RUNTIME" = "unavailable" ]; then
+    doctor_note "Podman session mode is requested, but no usable runtime was detected. Install podman on the host first."
+    printed="1"
+  fi
+
+  if [ "${AGENT_DEV_ENV:-host-helper}" = "host-helper" ] && [ ! -f "$PROJECT_ROOT/.envrc" ]; then
+    doctor_note "No .envrc was found, so the host direnv snapshot helper is currently idle."
+    printed="1"
+  fi
+
+  if [ -n "${CODEX_PROFILE:-}" ] && [ ! -f "$CODEX_PROFILE_BASE/${CODEX_PROFILE}.json" ]; then
+    doctor_note "Create the Codex profile file at $CODEX_PROFILE_BASE/${CODEX_PROFILE}.json or unset CODEX_PROFILE."
+    printed="1"
+  fi
+
+  if [ -n "${CLAUDE_PROFILE:-}" ] && [ ! -f "$CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE}.json" ]; then
+    doctor_note "Create the Claude profile file at $CLAUDE_PROFILE_BASE/${CLAUDE_PROFILE}.json or unset CLAUDE_PROFILE."
+    printed="1"
+  fi
+
+  if [ -n "${OPENCODE_PROFILE:-}" ] && [ ! -f "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE}.json" ]; then
+    doctor_note "Create the OpenCode profile file at $OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE}.json or unset OPENCODE_PROFILE."
+    printed="1"
+  fi
+
+  if [ "$NIX_TOOL_HELPER_MODE" = "0" ]; then
+    doctor_note "Set AGENT_NIX_TOOL_HELPER=1 if you want standard commands like 'nix shell nixpkgs#jq --command jq --version' to use the narrow host-backed tool path."
+    printed="1"
+  fi
+
+  if [ "$printed" = "0" ]; then
+    doctor_note "No obvious setup problems detected. If behavior is still surprising, rerun with AGENT_DEBUG=1 for the launcher trace."
+  fi
+}
+
 print_doctor_and_exit() {
   local requested_container_api=""
   local runtime_mode=""
@@ -160,6 +218,9 @@ print_doctor_and_exit() {
   doctor_line "opencode_config" "$(doctor_path_state "$OPENCODE_HOST_CONFIG")"
   doctor_line "opencode_profile" "$(doctor_profile_state "${OPENCODE_PROFILE:-}" "$OPENCODE_PROFILE_BASE/${OPENCODE_PROFILE:-}.json")"
   doctor_line "omp_config" "$(doctor_path_state "$OMP_HOST_CONFIG")"
+
+  printf '\nSuggested next steps\n'
+  print_doctor_suggestions
 
   exit 0
 }
