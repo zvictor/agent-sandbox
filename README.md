@@ -176,7 +176,7 @@ Useful variants:
 - `agent init --force`: overwrite an existing defaults file
 - `agent init --stdout`: print the template instead of writing it
 
-When host tool profile directories already exist, `agent init` pre-fills or suggests those profile names instead of always emitting generic placeholders.
+When host tool profile directories already exist, `agent init` pre-fills or suggests those profile names instead of always emitting generic placeholders. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
 
 ## Installation
 

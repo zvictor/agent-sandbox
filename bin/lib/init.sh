@@ -65,6 +65,41 @@ EOF
   printf '# %s=work\n' "$env_name"
 }
 
+render_tool_allowlist_setting() {
+  local detected_tools=""
+  local count=0
+
+  if [ -d "$CODEX_HOST_CONFIG" ]; then
+    detected_tools="${detected_tools:+$detected_tools }codex"
+    count=$((count + 1))
+  fi
+
+  if [ -d "$CLAUDE_HOST_CONFIG" ]; then
+    detected_tools="${detected_tools:+$detected_tools }claude"
+    count=$((count + 1))
+  fi
+
+  if [ -d "$OPENCODE_HOST_CONFIG" ]; then
+    detected_tools="${detected_tools:+$detected_tools }opencode"
+    count=$((count + 1))
+  fi
+
+  if [ -d "$OMP_HOST_CONFIG" ]; then
+    detected_tools="${detected_tools:+$detected_tools }omp"
+    count=$((count + 1))
+  fi
+
+  if [ -d "$CODEX_HOST_CONFIG" ] && [ -d "$CLAUDE_HOST_CONFIG" ] && [ -d "$OPENCODE_HOST_CONFIG" ]; then
+    detected_tools="${detected_tools:+$detected_tools }codemachine"
+  fi
+
+  if [ -n "$detected_tools" ]; then
+    printf '# AGENT_TOOLS="%s"\n' "$detected_tools"
+  else
+    printf '# AGENT_TOOLS="codex claude opencode"\n'
+  fi
+}
+
 render_project_config_template() {
   local profile_lines=""
 
@@ -104,8 +139,8 @@ EOF
   cat <<'EOF'
 
 # Optional tool allowlist:
-# AGENT_TOOLS="codex claude opencode"
 EOF
+  render_tool_allowlist_setting
 }
 
 print_init_and_exit() {
