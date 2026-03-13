@@ -1,5 +1,23 @@
 { pkgs, devPackages, nix2containerPkgs }:
 let
+  isShadowedImagePackage =
+    pkg:
+    let
+      pname = if pkg ? pname then pkg.pname else "";
+      name = if pkg ? name then pkg.name else "";
+    in
+    pname == "git"
+    || pkgs.lib.hasPrefix "git-" name
+    || pname == "bun"
+    || pkgs.lib.hasPrefix "bun-" name
+    || pname == "nix"
+    || builtins.match "^nix-[0-9].*" name != null
+    || pname == "podman"
+    || builtins.match "^podman-[0-9].*" name != null
+    || pname == "docker"
+    || pname == "docker-client"
+    || builtins.match "^docker(-client)?-[0-9].*" name != null;
+
   devPackagesFinal =
     if builtins.isList devPackages then
       devPackages
@@ -10,15 +28,7 @@ let
         agent-sandbox: devPackages must be a list (or an attrset containing devPackages)
       '';
 
-  devPackagesImage = builtins.filter (
-    pkg:
-    !(
-      (pkg ? pname && pkg.pname == "git")
-      || (pkg ? name && pkgs.lib.hasPrefix "git-" pkg.name)
-      || (pkg ? pname && pkg.pname == "bun")
-      || (pkg ? name && pkgs.lib.hasPrefix "bun-" pkg.name)
-    )
-  ) devPackagesFinal;
+  devPackagesImage = builtins.filter (pkg: !(isShadowedImagePackage pkg)) devPackagesFinal;
 
   helpers = with pkgs.dockerTools; [
     usrBinEnv
@@ -208,7 +218,6 @@ let
       gitWrapper
       agentCompat
       pkgs.direnv
-      pkgs.nix
       pkgs.nix-direnv
       direnvEtc
       agentShellEnv
