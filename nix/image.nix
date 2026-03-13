@@ -93,8 +93,7 @@ let
     install -Dm0755 ${../scripts/image/agent-nix-tool.sh} "$out/bin/agent-nix-tool"
   '';
 
-  agentCompatScript = pkgs.substituteAll {
-    src = ../scripts/image/agent-compat.sh;
+  agentCompatScript = pkgs.replaceVars ../scripts/image/agent-compat.sh {
     nixReal = "${pkgs.nix}/bin/nix";
     nixShellReal = "${pkgs.nix}/bin/nix-shell";
   };
