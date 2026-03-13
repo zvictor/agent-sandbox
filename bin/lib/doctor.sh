@@ -340,6 +340,8 @@ print_doctor_and_exit() {
   local omp_config_state=""
   local suggestions=""
 
+  OS_NAME="${OS_NAME:-$(uname -s)}"
+
   resolve_project_paths
   load_project_config
   resolve_runtime_for_doctor
