@@ -22,6 +22,24 @@ It also exposes runnable wrappers:
 - flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`, `#omp`
 - scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`, `./scripts/omp`
 
+## Quick Start
+
+For a new project:
+
+```sh
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
+```
+
+From a local checkout:
+
+```sh
+./scripts/agent init
+./scripts/agent doctor
+./scripts/codex
+```
+
 ## Runtime Model
 
 The runtime paths are intentionally minimal.
@@ -248,9 +266,10 @@ Use `agent doctor` to inspect the resolved sandbox state without starting a cont
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 ./scripts/agent doctor
+./scripts/agent doctor --json
 ```
 
-It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, tool config/profile paths, and a short suggested-fixes section when it detects obvious setup gaps.
+It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, tool config/profile paths, and a short suggested-fixes section when it detects obvious setup gaps. Use `--json` for machine-readable output.
 
 ## Tool Configuration Mounts
 
