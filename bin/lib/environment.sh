@@ -119,6 +119,7 @@ log_debug_context() {
     echo "[agent] DEV_ENV_MODE=${DEV_ENV_MODE:-unset}" >&2
     echo "[agent] DEV_ENV_ENV_FILE=${DEV_ENV_ENV_FILE:-}" >&2
     echo "[agent] DIRENV_NIX_PATH=${AGENT_DIRENV_NIX_PATH:-}" >&2
+    echo "[agent] CONTAINER_API_MODE=${CONTAINER_API_MODE:-none}" >&2
   fi
 }
 

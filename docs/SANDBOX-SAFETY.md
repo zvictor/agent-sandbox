@@ -65,6 +65,12 @@ See:
 
 This matters because for some tools our container becomes the primary safety boundary once the tool's own prompts are bypassed.
 
+### 6. Container API access is split into safe and unsafe modes
+
+The default launcher behavior is still no host container API access. For Testcontainers-style workflows, the preferred mode is now `AGENT_CONTAINER_API=podman-session`, which starts a dedicated rootless Podman API service with state under `AGENT_CACHE_DIR` and mounts only that session socket into the sandbox.
+
+That is materially tighter than mounting the developer's real Podman or Docker socket directly, while still preserving a devbox-like container workflow.
+
 ## What Our Sandbox Does Not Enforce
 
 These are the most important caveats.
@@ -89,15 +95,20 @@ For `codex`, `claude`, and `opencode`, the host config roots are mounted read-wr
 
 This is convenient, but it means tokens, auth files, and tool settings are inside the blast radius of the agent.
 
-### 4. Optional socket mounts are effectively privilege bridges
+### 4. Optional socket access is still a privilege bridge
 
-These sockets are disabled by default, but the launcher can still mount them when explicitly enabled with:
+There are two categories of container API access:
 
-- `AGENT_ALLOW_DOCKER_SOCKET=1`
-- `AGENT_ALLOW_PODMAN_SOCKET=1`
+- `AGENT_CONTAINER_API=podman-session`: safer than raw host sockets, because it isolates the agent from the developer's main engine state
+- raw host socket access: still available through `AGENT_CONTAINER_API=podman-host`, `AGENT_CONTAINER_API=docker-host`, or the legacy compatibility flags
+
+The Nix daemon socket is still an explicit opt-in:
+
 - `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`
 
-Those sockets are capability channels, not passive files. If an agent can talk to them, it may be able to start other containers, access broader host state, or ask the host Nix daemon to perform actions outside the container's local filesystem boundary.
+Both raw engine sockets and the Nix daemon socket are capability channels, not passive files. If an agent can talk to them, it may be able to start other containers, access broader host state, or ask the host Nix daemon to perform actions outside the container's local filesystem boundary.
+
+`podman-session` improves this by moving container control into a dedicated reusable rootless Podman state directory, but it is not a full policy broker. An agent that can talk to that session socket can still ask that session-specific engine to create sibling containers.
 
 This is the single biggest reason the sandbox should be described as "safer" rather than "strongly isolating".
 
@@ -127,7 +138,8 @@ For the current implementation, the runtime is best described like this:
 | Credential isolation | Mixed |
 | Outbound network isolation | Weak |
 | Protection from accidental Git damage | Moderate |
-| Protection from hostile code with access to host sockets | Weak |
+| Protection from hostile code with access to raw host sockets | Weak |
+| Protection from hostile code with `podman-session` access | Moderate |
 | Resource exhaustion protection | Moderate |
 
 ## Comparison With Each Agent
@@ -202,7 +214,8 @@ If you want the safest interpretation of this repository today:
 
 - treat it as a practical host-damage reducer, not as a hard containment boundary
 - prefer `agent -- <tool>` when you want to keep the tool's own permission model intact
-- avoid enabling Docker, Podman, or Nix daemon socket mounts unless they are required
+- prefer `AGENT_CONTAINER_API=podman-session` over raw host socket modes when container APIs are required
+- avoid enabling raw Docker, Podman, or Nix daemon socket mounts unless they are required
 - keep `AGENT_EXTRA_MOUNTS`, `AGENT_AUTO_MOUNT_DIRS`, and `AGENT_PASS_ENV_PREFIXES` narrow
 - assume any mounted config directory may be modified or exfiltrated by the agent
 - remember that the workspace is intentionally writable

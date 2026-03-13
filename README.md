@@ -320,11 +320,23 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 - `AGENT_NIX_BINCACHE_DIR`: host directory mounted read-only at `/nixcache`
 - `AGENT_LOCAL_BINCACHE_ALLOW_UNSIGNED=1`: allow unsigned local substitutes
 
-### Host socket opt-ins
+### Container API access
+
+- `AGENT_CONTAINER_API`: `none`, `podman-session`, `podman-host`, or `docker-host`; default `none`
+- `AGENT_CONTAINER_API_TTL`: inactivity timeout in seconds for `podman-session`; default `900`
+- `AGENT_CONTAINER_API_RESET=1`: discard the cached `podman-session` state directory before starting it again
+
+Recommended for Testcontainers:
+
+- `AGENT_CONTAINER_API=podman-session`
+
+In `podman-session` mode, the launcher starts a dedicated rootless Podman API service in the background, stores its state under `AGENT_CACHE_DIR`, and mounts only that session socket into the agent container. Startup does not block on socket readiness; the inner Podman API warms up in parallel with normal agent boot.
+
+### Raw host socket compatibility opts
 
 - `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`: mount the host Nix daemon socket into the container
-- `AGENT_ALLOW_PODMAN_SOCKET=1`: mount the rootless Podman API socket from `$XDG_RUNTIME_DIR/podman/podman.sock` when present
-- `AGENT_ALLOW_DOCKER_SOCKET=1`: mount `/var/run/docker.sock` when present
+- `AGENT_ALLOW_PODMAN_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=podman-host`
+- `AGENT_ALLOW_DOCKER_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=docker-host`
 
 These are disabled by default because they significantly widen the sandbox boundary.
 
@@ -370,13 +382,15 @@ These are still accepted by the launcher, but they are not the preferred interfa
 - `AGENT_SANDBOX_FLAKE`: compatibility alias for `AGENT_SANDBOX_FLAKE_REF`
 - `CODEX_RUNTIME`: compatibility alias for `AGENT_RUNTIME`
 - `OMP_CODING_AGENT_DIR`: compatibility alias for `PI_CODING_AGENT_DIR`
+- `AGENT_ALLOW_PODMAN_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=podman-host`
+- `AGENT_ALLOW_DOCKER_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=docker-host`
 
 ## Ambient Host Environment
 
 The launcher also reacts to a few standard host environment variables. These are not treated as part of the primary sandbox API:
 
 - `CONTAINER_HOST`: if set, Podman rootfs mode is rejected; use Docker path instead
-- `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket when `AGENT_ALLOW_PODMAN_SOCKET=1`
+- `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket when `AGENT_CONTAINER_API=podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
 

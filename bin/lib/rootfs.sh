@@ -1,5 +1,5 @@
 ROOTFS_MIRROR_FORMAT=3
-ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/podman\nrun/secrets\nvar\nvar/run\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp'
+ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/podman\nrun/secrets\nvar\nvar/run\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
 ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gitconfig\nrun/.containerenv\nvar/run/docker.sock\nrun/podman/podman.sock\nnix/var/nix/daemon-socket/socket'
 

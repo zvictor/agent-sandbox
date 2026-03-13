@@ -169,7 +169,7 @@ let
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/config" "$out/workspace"
-    mkdir -p "$out/run" "$out/run/secrets" "$out/var/run"
+    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/secrets" "$out/var/run"
   '';
 
   imageBasePaths =
@@ -237,7 +237,7 @@ rec {
       # In rootfs mode Podman mounts volumes before command execution and
       # expects destination paths to be normal directories, not symlink chains.
       for d in \
-        cache config workspace nixcache tmp run run/secrets var/run \
+        cache config workspace nixcache tmp run run/agent-container-api run/secrets var/run \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db
       do
         rm -rf "$out/$d"

@@ -179,14 +179,41 @@ append_host_socket_args() {
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
-  if [ "${AGENT_ALLOW_PODMAN_SOCKET:-0}" = "1" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+  case "${CONTAINER_API_MODE:-none}" in
+    podman-session)
+      if [ -n "${CONTAINER_API_RUN_DIR:-}" ] && [ -d "$CONTAINER_API_RUN_DIR" ]; then
+        ARGS+=( -v "$CONTAINER_API_RUN_DIR:/run/agent-container-api:ro${Z_SUFFIX}" )
+        ARGS+=( -e AGENT_CONTAINER_API=podman-session )
+        ARGS+=( -e AGENT_CONTAINER_API_SOCKET=/run/agent-container-api/podman.sock )
+        ARGS+=( -e CONTAINER_HOST=unix:///run/agent-container-api/podman.sock )
+        ARGS+=( -e DOCKER_HOST=unix:///run/agent-container-api/podman.sock )
+        ARGS+=( -e TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/run/agent-container-api/podman.sock )
+      fi
+      ;;
+    podman-host)
+      if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+        ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
+        ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock:rw${Z_SUFFIX}" )
+        ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
+        ARGS+=( -e CONTAINER_HOST=unix:///run/podman/podman.sock )
+      fi
+      ;;
+    docker-host)
+      if [ -S /var/run/docker.sock ]; then
+        ARGS+=( -v "/var/run/docker.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
+        ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
+      fi
+      ;;
+  esac
+
+  if [ "${AGENT_ALLOW_PODMAN_SOCKET:-0}" = "1" ] && [ -z "${AGENT_CONTAINER_API:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
     ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
     ARGS+=( -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock:rw${Z_SUFFIX}" )
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
     ARGS+=( -e CONTAINER_HOST=unix:///run/podman/podman.sock )
   fi
 
-  if [ "${AGENT_ALLOW_DOCKER_SOCKET:-0}" = "1" ] && [ -S /var/run/docker.sock ]; then
+  if [ "${AGENT_ALLOW_DOCKER_SOCKET:-0}" = "1" ] && [ -z "${AGENT_CONTAINER_API:-}" ] && [ -S /var/run/docker.sock ]; then
     ARGS+=( -v "/var/run/docker.sock:/var/run/docker.sock:rw${Z_SUFFIX}" )
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
   fi
