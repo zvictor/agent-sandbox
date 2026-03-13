@@ -29,6 +29,7 @@ For a new project:
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- run codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
 ```
 
@@ -37,6 +38,7 @@ From a local checkout:
 ```sh
 ./scripts/agent init
 ./scripts/agent doctor
+./scripts/agent run codex
 ./scripts/codex
 ```
 
@@ -248,6 +250,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 
 ```sh
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent run codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent init
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
@@ -270,7 +273,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 ./scripts/agent doctor --json
 ```
 
-By default it prints a short summary plus suggested fixes. Use `--verbose` for the full state dump and `--json` for machine-readable output.
+By default it prints a short summary plus suggested fixes, including the effective enabled tool surface for the current project and whether the project root came from `AGENT_PROJECT_ROOT`, the enclosing git repo, or the current directory. Use `--verbose` for the full state dump and `--json` for machine-readable output.
 
 ## Tool Configuration Mounts
 
@@ -356,7 +359,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_PROJECT_NIX_DIR`: package contract directory; defaults to `$AGENT_PROJECT_ROOT/nix`
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake source
 - `AGENT_RUNTIME`: `podman` or `docker`; defaults to auto-detect
-- `AGENT_TOOLS`: allowlist of enabled tools; defaults to `codex claude opencode codemachine omp`
+- `AGENT_TOOLS`: tool allowlist override; use a space-separated list, `auto` to infer from detected host config roots, or `all` to enable every supported tool. When unset, the launcher behaves like `auto` and falls back to all tools only when nothing can be inferred.
 - `AGENT_CACHE_DIR`: cache directory for GC roots, tool installs, and helper temp files
 - `AGENT_HOST_HOME`: host home used for discovering `~/.codex`, `~/.claude`, `~/.omp`, `.gitconfig`, and similar paths
 

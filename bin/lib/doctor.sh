@@ -133,21 +133,23 @@ print_doctor_json() {
   local requested_container_api="$1"
   local runtime_mode="$2"
   local tools_list="$3"
-  local podman_socket_state="$4"
-  local docker_socket_state="$5"
-  local nix_daemon_socket_state="$6"
-  local codex_config_state="$7"
-  local codex_profile_state="$8"
-  local claude_config_state="$9"
-  local claude_profile_state="${10}"
-  local opencode_config_state="${11}"
-  local opencode_profile_state="${12}"
-  local omp_config_state="${13}"
-  local suggestions="${14}"
+  local tools_source="$4"
+  local podman_socket_state="$5"
+  local docker_socket_state="$6"
+  local nix_daemon_socket_state="$7"
+  local codex_config_state="$8"
+  local codex_profile_state="$9"
+  local claude_config_state="${10}"
+  local claude_profile_state="${11}"
+  local opencode_config_state="${12}"
+  local opencode_profile_state="${13}"
+  local omp_config_state="${14}"
+  local suggestions="${15}"
 
   printf '{\n'
   printf '  "project": {\n'
   doctor_json_pair "root" "$PROJECT_ROOT"; printf ',\n'
+  doctor_json_pair "root_source" "$PROJECT_ROOT_SOURCE"; printf ',\n'
   doctor_json_pair "nix_dir" "$PROJECT_NIX_DIR"; printf ',\n'
   doctor_json_pair "config_file" "${PROJECT_CONFIG_FILE:-none}"; printf ',\n'
   doctor_json_pair "contract" "$(doctor_contract_source)"; printf ',\n'
@@ -156,7 +158,8 @@ print_doctor_json() {
   printf '  "runtime": {\n'
   doctor_json_pair "runtime" "$RUNTIME"; printf ',\n'
   doctor_json_pair "mode" "$runtime_mode"; printf ',\n'
-  doctor_json_pair "tools_enabled" "$tools_list"; printf '\n'
+  doctor_json_pair "tools_enabled" "$tools_list"; printf ',\n'
+  doctor_json_pair "tools_source" "$tools_source"; printf '\n'
   printf '  },\n'
   printf '  "capabilities": {\n'
   doctor_json_pair "container_api_requested" "$requested_container_api"; printf ',\n'
@@ -194,16 +197,19 @@ print_doctor_json() {
 print_doctor_text_summary() {
   local runtime_mode="$1"
   local requested_container_api="$2"
-  local suggestions="$3"
+  local tools_list="$3"
+  local suggestions="$4"
 
   printf 'Agent Sandbox Doctor\n\n'
 
   printf 'Summary\n'
   doctor_line "project_root" "$PROJECT_ROOT"
+  doctor_line "project_root_source" "$PROJECT_ROOT_SOURCE"
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "container_api" "${requested_container_api} -> ${CONTAINER_API_MODE}"
+  doctor_line "tools_enabled" "$tools_list"
   doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
   doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
 
@@ -215,22 +221,24 @@ print_doctor_text_verbose() {
   local requested_container_api="$1"
   local runtime_mode="$2"
   local tools_list="$3"
-  local podman_socket_state="$4"
-  local docker_socket_state="$5"
-  local nix_daemon_socket_state="$6"
-  local codex_config_state="$7"
-  local codex_profile_state="$8"
-  local claude_config_state="$9"
-  local claude_profile_state="${10}"
-  local opencode_config_state="${11}"
-  local opencode_profile_state="${12}"
-  local omp_config_state="${13}"
-  local suggestions="${14}"
+  local tools_source="$4"
+  local podman_socket_state="$5"
+  local docker_socket_state="$6"
+  local nix_daemon_socket_state="$7"
+  local codex_config_state="$8"
+  local codex_profile_state="$9"
+  local claude_config_state="${10}"
+  local claude_profile_state="${11}"
+  local opencode_config_state="${12}"
+  local opencode_profile_state="${13}"
+  local omp_config_state="${14}"
+  local suggestions="${15}"
 
   printf 'Agent Sandbox Doctor\n\n'
 
   printf 'Project\n'
   doctor_line "project_root" "$PROJECT_ROOT"
+  doctor_line "project_root_source" "$PROJECT_ROOT_SOURCE"
   doctor_line "project_nix_dir" "$PROJECT_NIX_DIR"
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
   doctor_line "project_contract" "$(doctor_contract_source)"
@@ -240,6 +248,7 @@ print_doctor_text_verbose() {
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "tools_enabled" "$tools_list"
+  doctor_line "tools_source" "$tools_source"
 
   printf '\nCapabilities\n'
   doctor_line "container_api.requested" "$requested_container_api"
@@ -275,6 +284,11 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
+  if [ "${PROJECT_ROOT_SOURCE:-}" = "git" ] && [ -z "${AGENT_PROJECT_ROOT:-}" ] && [ "$(pwd -P)" != "$PROJECT_ROOT" ]; then
+    doctor_note "Project root came from the enclosing git repository ($PROJECT_ROOT). Set AGENT_PROJECT_ROOT if you meant to sandbox only the current subdirectory."
+    printed="1"
+  fi
+
   if [ "$RUNTIME" = "unavailable" ]; then
     doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
     printed="1"
@@ -292,6 +306,11 @@ print_doctor_suggestions() {
 
   if [ "${AGENT_DEV_ENV:-host-helper}" = "host-helper" ] && [ ! -f "$PROJECT_ROOT/.envrc" ]; then
     doctor_note "No .envrc was found, so the host direnv snapshot helper is currently idle."
+    printed="1"
+  fi
+
+  if [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "fallback-all" ]; then
+    doctor_note "No host agent config roots were detected, so all supported tools remain enabled. Set AGENT_TOOLS if you want a narrower project allowlist."
     printed="1"
   fi
 
@@ -339,6 +358,7 @@ print_doctor_and_exit() {
   local opencode_profile_state=""
   local omp_config_state=""
   local suggestions=""
+  local tools_source=""
 
   OS_NAME="${OS_NAME:-$(uname -s)}"
 
@@ -366,7 +386,9 @@ print_doctor_and_exit() {
     fi
   fi
 
-  tools_list="${AGENT_TOOLS:-$KNOWN_TOOLS}"
+  resolve_effective_tools_list
+  tools_list="${EFFECTIVE_TOOLS_LIST:-$KNOWN_TOOLS}"
+  tools_source="${EFFECTIVE_TOOLS_SOURCE:-fallback-all}"
   runtime_mode="$(doctor_runtime_mode)"
   runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   podman_socket_path="$runtime_dir/podman/podman.sock"
@@ -387,6 +409,7 @@ print_doctor_and_exit() {
       "$requested_container_api" \
       "$runtime_mode" \
       "$tools_list" \
+      "$tools_source" \
       "$podman_socket_state" \
       "$docker_socket_state" \
       "$nix_daemon_socket_state" \
@@ -406,6 +429,7 @@ print_doctor_and_exit() {
       "$requested_container_api" \
       "$runtime_mode" \
       "$tools_list" \
+      "$tools_source" \
       "$podman_socket_state" \
       "$docker_socket_state" \
       "$nix_daemon_socket_state" \
@@ -418,7 +442,7 @@ print_doctor_and_exit() {
       "$omp_config_state" \
       "$suggestions"
   else
-    print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$suggestions"
+    print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$tools_list" "$suggestions"
   fi
 
   exit 0

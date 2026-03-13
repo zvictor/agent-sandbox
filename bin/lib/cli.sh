@@ -1,3 +1,40 @@
+print_help_and_exit() {
+  local enabled_tools="$KNOWN_TOOLS"
+  local enabled_suffix=""
+
+  if declare -F prepare_tool_resolution_context >/dev/null 2>&1; then
+    prepare_tool_resolution_context >/dev/null 2>&1 || true
+    if [ -n "${EFFECTIVE_TOOLS_LIST:-}" ]; then
+      enabled_tools="$EFFECTIVE_TOOLS_LIST"
+    fi
+    if [ -n "${EFFECTIVE_TOOLS_SOURCE:-}" ] && [ "$EFFECTIVE_TOOLS_SOURCE" != "fallback-all" ]; then
+      enabled_suffix=" (${EFFECTIVE_TOOLS_SOURCE})"
+    fi
+  fi
+
+  cat <<EOF
+usage:
+  agent <tool> [args...]
+  agent run <tool> [args...]
+  agent init [--force] [--stdout]
+  agent doctor [--verbose] [--json]
+  agent help
+
+supported tools:
+  $KNOWN_TOOLS
+
+enabled tools:
+  $enabled_tools$enabled_suffix
+
+examples:
+  agent init
+  agent doctor
+  agent run codex
+  agent codex
+EOF
+  exit 0
+}
+
 normalize_flake_ref() {
   local ref="$1"
   local path_ref=""
@@ -47,7 +84,19 @@ resolve_tool() {
   fi
 
   if [ "$#" -lt 1 ]; then
-    echo "usage: agent <tool|doctor|init> [args...]" >&2
+    print_help_and_exit
+  fi
+
+  if [ "${1:-}" = "--help" ] || [ "${1:-}" = "help" ]; then
+    print_help_and_exit
+  fi
+
+  if [ "${1:-}" = "run" ]; then
+    shift
+  fi
+
+  if [ "$#" -lt 1 ]; then
+    echo "usage: agent run <tool> [args...]" >&2
     exit 1
   fi
 
@@ -81,9 +130,15 @@ validate_tool_access() {
     exit 1
   fi
 
-  TOOLS_LIST="${AGENT_TOOLS:-$KNOWN_TOOLS}"
+  prepare_tool_resolution_context
+  TOOLS_LIST="${EFFECTIVE_TOOLS_LIST:-$KNOWN_TOOLS}"
   if ! contains_word "$TOOL" $TOOLS_LIST; then
-    echo "[agent] tool '$TOOL' is disabled by AGENT_TOOLS='$TOOLS_LIST'" >&2
+    if [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "configured" ] || [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "configured-all" ]; then
+      echo "[agent] tool '$TOOL' is disabled by AGENT_TOOLS='$TOOLS_LIST'" >&2
+    else
+      echo "[agent] tool '$TOOL' is not enabled for this project (effective tools: $TOOLS_LIST)" >&2
+      echo "[agent] set AGENT_TOOLS to override the inferred tool list if needed" >&2
+    fi
     exit 1
   fi
 }

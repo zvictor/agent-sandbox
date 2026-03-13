@@ -1,4 +1,7 @@
 PROJECT_CONFIG_FILE=""
+EFFECTIVE_TOOLS_LIST=""
+EFFECTIVE_TOOLS_SOURCE=""
+PROJECT_ROOT_SOURCE=""
 
 trim_whitespace() {
   local value="$1"
@@ -124,7 +127,21 @@ resolve_lock_args() {
 }
 
 resolve_project_paths() {
-  PROJECT_ROOT="${AGENT_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  local git_root=""
+
+  if [ -n "${AGENT_PROJECT_ROOT:-}" ]; then
+    PROJECT_ROOT="$AGENT_PROJECT_ROOT"
+    PROJECT_ROOT_SOURCE="env"
+  else
+    git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$git_root" ]; then
+      PROJECT_ROOT="$git_root"
+      PROJECT_ROOT_SOURCE="git"
+    else
+      PROJECT_ROOT="$(pwd)"
+      PROJECT_ROOT_SOURCE="cwd"
+    fi
+  fi
   PROJECT_NIX_DIR="${AGENT_PROJECT_NIX_DIR:-$PROJECT_ROOT/nix}"
 }
 
@@ -138,6 +155,59 @@ resolve_host_home() {
   if [ -z "$HOST_HOME" ] || [ ! -d "$HOST_HOME" ]; then
     HOST_HOME="$PROJECT_ROOT"
   fi
+}
+
+resolve_effective_tools_list() {
+  local inferred_tools=""
+
+  if [ -n "${AGENT_TOOLS:-}" ] && [ "${AGENT_TOOLS}" != "auto" ]; then
+    if [ "$AGENT_TOOLS" = "all" ]; then
+      EFFECTIVE_TOOLS_LIST="$KNOWN_TOOLS"
+      EFFECTIVE_TOOLS_SOURCE="configured-all"
+    else
+      EFFECTIVE_TOOLS_LIST="$AGENT_TOOLS"
+      EFFECTIVE_TOOLS_SOURCE="configured"
+    fi
+    return 0
+  fi
+
+  resolve_tool_config_roots
+
+  if [ -d "$CODEX_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }codex"
+  fi
+
+  if [ -d "$CLAUDE_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }claude"
+  fi
+
+  if [ -d "$OPENCODE_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }opencode"
+  fi
+
+  if [ -d "$OMP_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }omp"
+  fi
+
+  if [ -d "$CODEX_HOST_CONFIG" ] && [ -d "$CLAUDE_HOST_CONFIG" ] && [ -d "$OPENCODE_HOST_CONFIG" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }codemachine"
+  fi
+
+  if [ -n "$inferred_tools" ]; then
+    EFFECTIVE_TOOLS_LIST="$inferred_tools"
+    EFFECTIVE_TOOLS_SOURCE="inferred"
+    return 0
+  fi
+
+  EFFECTIVE_TOOLS_LIST="$KNOWN_TOOLS"
+  EFFECTIVE_TOOLS_SOURCE="fallback-all"
+}
+
+prepare_tool_resolution_context() {
+  resolve_project_paths
+  load_project_config
+  resolve_host_home
+  resolve_effective_tools_list
 }
 
 prepare_project_contract_input() {
@@ -246,12 +316,10 @@ bootstrap_environment() {
   mkdir -p "${TMPDIR:-/tmp}" >/dev/null 2>&1 || true
   mkdir -p /var/tmp >/dev/null 2>&1 || true
 
-  resolve_project_paths
-  load_project_config
+  prepare_tool_resolution_context
   resolve_runtime
   resolve_sandbox_flake
   resolve_lock_args
-  resolve_host_home
   prepare_project_contract_input
   prepare_cache_dirs
   resolve_direnv_nix_path

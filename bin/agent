@@ -84,14 +84,25 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL=""
 REMAINING_ARGS=()
 AGENT_COMMAND="run"
-if [ "$(basename "$0")" = "agent" ] && [ "${1:-}" = "doctor" ]; then
-  AGENT_COMMAND="doctor"
-  shift
-  REMAINING_ARGS=("$@")
-elif [ "$(basename "$0")" = "agent" ] && [ "${1:-}" = "init" ]; then
-  AGENT_COMMAND="init"
-  shift
-  REMAINING_ARGS=("$@")
+if [ "$(basename "$0")" = "agent" ]; then
+  case "${1:-}" in
+    doctor)
+      AGENT_COMMAND="doctor"
+      shift
+      REMAINING_ARGS=("$@")
+      ;;
+    init)
+      AGENT_COMMAND="init"
+      shift
+      REMAINING_ARGS=("$@")
+      ;;
+    help|--help)
+      print_help_and_exit
+      ;;
+    *)
+      resolve_tool "$@"
+      ;;
+  esac
 else
   resolve_tool "$@"
 fi
