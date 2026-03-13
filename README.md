@@ -340,7 +340,18 @@ In `podman-session` mode, the launcher starts a dedicated rootless Podman API se
 
 These are disabled by default because they significantly widen the sandbox boundary.
 
-For `nix-shell` and generic `nix shell` workflows inside the sandbox, the launcher now prepares the writable profile and gcroot directories under `/cache`. Materializing packages that are not already present in the mounted store still requires `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`, because the sandbox does not currently provide its own writable Nix store. If the goal is just to add a host-backed tool such as `podman` or `jq`, prefer `agent-nix-tool` instead of a full in-sandbox `nix shell`.
+For full generic `nix-shell` and `nix shell` workflows inside the sandbox, the launcher still prepares the writable profile and gcroot directories under `/cache`, but materializing packages that are not already present in the mounted store still requires `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`.
+
+For the common “give me a tool and run it” cases, the sandbox now intercepts the narrow subset automatically:
+
+```sh
+nix shell nixpkgs#podman --command podman --version
+nix-shell -p podman --run 'podman --version'
+podman --version
+docker version
+```
+
+Those paths use the host-backed Nix helper when possible, so the agent can keep using normal commands instead of learning sandbox-specific ones.
 
 ### Host Nix tool helper
 
@@ -357,6 +368,17 @@ agent-nix-tool run nixpkgs#podman -- podman --version
 ```
 
 The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent.
+
+### Seamless command shims
+
+The image now prefers compatibility shims over sandbox-specific instructions:
+
+- `nix shell <installable> --command ...` is rewritten to the narrow helper path when the invocation is simple enough
+- `nix-shell -p <pkg> --run ...` and `nix-shell -p <pkg> -- ...` are rewritten the same way
+- `podman` and `docker` auto-materialize their CLIs on first use if they are not already available through the project contract
+- Bash sessions auto-try `nixpkgs#<command>` for missing commands before falling back to the normal `command not found`
+
+The low-level `agent-nix-tool` command is still available as an escape hatch, but normal usage should prefer the standard commands above.
 
 ### Mounts and environment passthrough
 

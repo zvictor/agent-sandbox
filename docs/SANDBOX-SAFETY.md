@@ -224,6 +224,7 @@ If you want the safest interpretation of this repository today:
 - prefer `AGENT_CONTAINER_API=podman-session` over raw host socket modes when container APIs are required
 - avoid enabling raw Docker, Podman, or Nix daemon socket mounts unless they are required
 - prefer the narrow host Nix helper over raw Nix daemon access when the agent only needs extra tools
+- prefer the standard `nix shell`, `nix-shell -p`, `podman`, and `docker` shims over teaching the agent sandbox-specific helper commands
 - keep `AGENT_EXTRA_MOUNTS`, `AGENT_AUTO_MOUNT_DIRS`, and `AGENT_PASS_ENV_PREFIXES` narrow
 - assume any mounted config directory may be modified or exfiltrated by the agent
 - remember that the workspace is intentionally writable
