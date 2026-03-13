@@ -29,7 +29,8 @@ For a new project:
 ```sh
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
-AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work --use
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work --config project
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- run codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
 ```
@@ -39,7 +40,8 @@ From a local checkout:
 ```sh
 ./scripts/agent init
 ./scripts/agent doctor
-./scripts/agent login codex work --use
+./scripts/agent login codex work
+./scripts/agent login codex work --config project
 ./scripts/agent run codex
 ./scripts/codex
 ```
@@ -152,8 +154,7 @@ Rules:
 Instead of exporting a long list of environment variables before every run, you can define project-level sandbox defaults in a file. The launcher checks these locations in order:
 
 1. `AGENT_PROJECT_CONFIG_FILE`
-2. `nix/agent-sandbox.env`
-3. `.agent-sandbox.env`
+2. `.agent-sandbox.env`
 
 The format is plain `KEY=VALUE` lines. Blank lines and `#` comments are ignored. Existing environment variables still take precedence over file values.
 
@@ -253,7 +254,8 @@ AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 ```sh
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent run codex
-AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work --use
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work --config project
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent init
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
@@ -303,7 +305,8 @@ Tool-specific config selection:
 Create a fresh named Codex login with:
 
 ```sh
-./scripts/agent login codex work --use
+./scripts/agent login codex work
+./scripts/agent login codex work --config project
 ```
 
 For `omp`, the launcher mounts the whole `~/.omp` tree. It does not implement a separate credential overlay layer.

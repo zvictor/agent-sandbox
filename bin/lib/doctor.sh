@@ -312,7 +312,7 @@ print_doctor_suggestions() {
   local printed="0"
 
   if [ -z "${PROJECT_CONFIG_FILE:-}" ]; then
-    doctor_note "Run 'agent init' to create a project defaults file under $PROJECT_NIX_DIR/agent-sandbox.env."
+    doctor_note "Run 'agent init' to create a project defaults file at $PROJECT_ROOT/.agent-sandbox.env."
     printed="1"
   fi
 
@@ -346,21 +346,21 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ -n "${CODEX_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CODEX_AUTH" "$CODEX_AUTH_BASE" "" "")" ]; then
+  if [ -n "${CODEX_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CODEX_AUTH" "$CODEX_AUTH_BASE")" ]; then
     if printf '%s\n' "$CODEX_AUTH" | grep -Eq '^(/|\./|\.\./|~|~/)'; then
       doctor_note "Fix CODEX_AUTH=$CODEX_AUTH so it points to a readable credentials file, or unset it to use the default host Codex auth."
     else
-      doctor_note "Create the named Codex login with 'agent login codex $CODEX_AUTH --use', or set CODEX_AUTH to a readable credential file path."
+      doctor_note "Create the named Codex login with 'agent login codex $CODEX_AUTH', or set CODEX_AUTH to a readable credential file path."
     fi
     printed="1"
   fi
 
-  if [ -n "${CLAUDE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" "" "")" ]; then
+  if [ -n "${CLAUDE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CLAUDE_AUTH" "$CLAUDE_AUTH_BASE")" ]; then
     doctor_note "Fix CLAUDE_AUTH=$CLAUDE_AUTH so it points to a readable credential file or named managed slot."
     printed="1"
   fi
 
-  if [ -n "${OPENCODE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "" "")" ]; then
+  if [ -n "${OPENCODE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$OPENCODE_AUTH" "$OPENCODE_AUTH_BASE")" ]; then
     doctor_note "Fix OPENCODE_AUTH=$OPENCODE_AUTH so it points to a readable credential file or named managed slot."
     printed="1"
   fi

@@ -1,11 +1,12 @@
 resolve_login_args() {
-  LOGIN_USE="0"
+  LOGIN_USE="1"
   LOGIN_TOOL=""
   LOGIN_SLOT_NAME=""
+  LOGIN_CONFIG_SELECTOR=""
   LOGIN_TOOL_ARGS=()
 
   [ "$#" -ge 2 ] || {
-    echo "usage: agent login codex <name> [--use] [-- <codex login args...>]" >&2
+    echo "usage: agent login codex <name> [--no-use] [--config host|project|fresh|<path>] [-- <codex login args...>]" >&2
     exit 1
   }
 
@@ -21,8 +22,16 @@ resolve_login_args() {
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --use)
-        LOGIN_USE="1"
+      --no-use)
+        LOGIN_USE="0"
+        ;;
+      --config)
+        [ "$#" -ge 2 ] || {
+          echo "usage: agent login codex <name> [--no-use] [--config host|project|fresh|<path>] [-- <codex login args...>]" >&2
+          exit 1
+        }
+        LOGIN_CONFIG_SELECTOR="$2"
+        shift
         ;;
       --)
         shift
@@ -61,6 +70,17 @@ login_auth_env_name_for_tool() {
     codex) printf '%s\n' "CODEX_AUTH" ;;
     claude) printf '%s\n' "CLAUDE_AUTH" ;;
     opencode) printf '%s\n' "OPENCODE_AUTH" ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+login_config_env_name_for_tool() {
+  case "$1" in
+    codex) printf '%s\n' "CODEX_CONFIG" ;;
+    claude) printf '%s\n' "CLAUDE_CONFIG" ;;
+    opencode) printf '%s\n' "OPENCODE_CONFIG" ;;
     *)
       return 1
       ;;
@@ -111,6 +131,7 @@ prepare_login_state() {
   resolve_tool_config_roots
 
   LOGIN_AUTH_ENV_NAME="$(login_auth_env_name_for_tool "$LOGIN_TOOL")"
+  LOGIN_CONFIG_ENV_NAME="$(login_config_env_name_for_tool "$LOGIN_TOOL")"
   LOGIN_AUTH_BASE_DIR="$(login_auth_base_dir_for_tool "$LOGIN_TOOL")"
   LOGIN_ACTIVE_CREDENTIALS_FILE="$(login_active_credentials_file_for_tool "$LOGIN_TOOL")"
   LOGIN_CONTAINER_CONFIG_DIR="$(login_config_dir_for_tool "$LOGIN_TOOL")"
@@ -182,5 +203,9 @@ finalize_login() {
     target_file="$(resolve_project_config_target_file)"
     upsert_project_config_value "$target_file" "$LOGIN_AUTH_ENV_NAME" "$LOGIN_SLOT_NAME"
     echo "[agent] set $LOGIN_AUTH_ENV_NAME=$LOGIN_SLOT_NAME in $target_file" >&2
+    if [ -n "$LOGIN_CONFIG_SELECTOR" ]; then
+      upsert_project_config_value "$target_file" "$LOGIN_CONFIG_ENV_NAME" "$LOGIN_CONFIG_SELECTOR"
+      echo "[agent] set $LOGIN_CONFIG_ENV_NAME=$LOGIN_CONFIG_SELECTOR in $target_file" >&2
+    fi
   fi
 }

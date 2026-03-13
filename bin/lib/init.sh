@@ -171,7 +171,8 @@ EOF
 
   cat <<'EOF'
 # Create a fresh named Codex login with:
-# agent login codex work --use
+# agent login codex work
+# agent login codex work --config project
 EOF
 
   cat <<'EOF'
@@ -182,12 +183,12 @@ EOF
 }
 
 resolve_project_config_target_file() {
-  if [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ "$PROJECT_CONFIG_FILE" = "$PROJECT_NIX_DIR/agent-sandbox.env" ]; then
+  if [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ "$PROJECT_CONFIG_FILE" = "$PROJECT_ROOT/.agent-sandbox.env" ]; then
     printf '%s\n' "$PROJECT_CONFIG_FILE"
   elif [ -n "${PROJECT_CONFIG_FILE:-}" ] && [ -f "$PROJECT_CONFIG_FILE" ]; then
     printf '%s\n' "$PROJECT_CONFIG_FILE"
   else
-    printf '%s\n' "$PROJECT_NIX_DIR/agent-sandbox.env"
+    printf '%s\n' "$PROJECT_ROOT/.agent-sandbox.env"
   fi
 }
 

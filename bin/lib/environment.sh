@@ -30,11 +30,6 @@ resolve_project_config_file() {
     return 0
   fi
 
-  if [ -f "$PROJECT_NIX_DIR/agent-sandbox.env" ]; then
-    PROJECT_CONFIG_FILE="$PROJECT_NIX_DIR/agent-sandbox.env"
-    return 0
-  fi
-
   if [ -f "$PROJECT_ROOT/.agent-sandbox.env" ]; then
     PROJECT_CONFIG_FILE="$PROJECT_ROOT/.agent-sandbox.env"
     return 0
