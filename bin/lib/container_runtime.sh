@@ -6,14 +6,10 @@ mount_engine() {
   local env_pairs="$5"
   local auth_env_name="$6"
   local auth_base_dir="$7"
-  local profile_env_name="$8"
-  local profile_base_dir="$9"
-  local active_credentials_file="${10}"
+  local active_credentials_file="$8"
   local mount_source=""
   local resolved_auth_path=""
   local selector_value=""
-  local legacy_profile_name=""
-  local compatibility_note=""
 
   append_split_arg_values -e "$env_pairs"
 
@@ -36,27 +32,14 @@ mount_engine() {
     selector_value="${!auth_env_name:-}"
   fi
 
-  if [ -n "$profile_env_name" ]; then
-    legacy_profile_name="${!profile_env_name:-}"
-  fi
-
-  resolved_auth_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir" "$legacy_profile_name" "$profile_base_dir")"
+  resolved_auth_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir")"
   if [ -n "$resolved_auth_path" ]; then
     if [ ! -f "$resolved_auth_path" ]; then
-      if [ -n "$selector_value" ]; then
-        echo "[agent] ERROR: auth selector '$selector_value' for $engine did not resolve to a readable file: $resolved_auth_path" >&2
-      else
-        echo "[agent] ERROR: legacy profile '$legacy_profile_name' for $engine was not found at $resolved_auth_path" >&2
-      fi
+      echo "[agent] ERROR: auth selector '$selector_value' for $engine did not resolve to a readable file: $resolved_auth_path" >&2
       exit 1
     fi
     ARGS+=( -v "$resolved_auth_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
-    if [ -n "$selector_value" ]; then
-      ARGS+=( -e "${engine^^}_AUTH=$selector_value" )
-    elif [ -n "$legacy_profile_name" ]; then
-      compatibility_note="${engine^^}_PROFILE=$legacy_profile_name"
-      ARGS+=( -e "$compatibility_note" )
-    fi
+    ARGS+=( -e "${engine^^}_AUTH=$selector_value" )
   fi
 }
 
@@ -120,7 +103,7 @@ ensure_runtime_config_dir() {
   local runtime_path=""
 
   case "$config_mode" in
-    host|project|path|legacy-dir)
+    host|project|path)
       if [ -z "$resolved_path" ]; then
         printf '%s\n' ""
         return 0
@@ -150,20 +133,11 @@ ensure_runtime_config_dir() {
 
 resolve_config_root() {
   local selector_value="$1"
-  local legacy_dir="$2"
-  local default_host_path="$3"
-  local project_path="$4"
+  local default_host_path="$2"
+  local project_path="$3"
   local mode=""
   local resolved_path=""
   local effective_selector="$selector_value"
-
-  if [ -z "$effective_selector" ] && [ -n "$legacy_dir" ]; then
-    mode="legacy-dir"
-    resolved_path="$(expand_host_config_path "$legacy_dir")"
-    effective_selector="$legacy_dir"
-    printf '%s|%s|%s\n' "$mode" "$effective_selector" "$resolved_path"
-    return 0
-  fi
 
   case "${effective_selector:-host}" in
     host)
@@ -191,8 +165,6 @@ resolve_config_root() {
 resolve_auth_file_path() {
   local selector_value="$1"
   local auth_base_dir="$2"
-  local legacy_profile_name="$3"
-  local legacy_profile_base_dir="$4"
 
   if [ -n "$selector_value" ]; then
     case "$selector_value" in
@@ -209,15 +181,6 @@ resolve_auth_file_path() {
         return 0
         ;;
     esac
-  fi
-
-  if [ -n "$legacy_profile_name" ]; then
-    if [ -z "$legacy_profile_base_dir" ]; then
-      printf '%s\n' ""
-    else
-      printf '%s/%s.json\n' "$legacy_profile_base_dir" "$legacy_profile_name"
-    fi
-    return 0
   fi
 
   printf '%s\n' ""
@@ -243,17 +206,17 @@ mount_standard_engine() {
     codex)
       mount_engine "codex" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG" "/cache/.codex" \
         "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
-        "CODEX_AUTH" "$CODEX_AUTH_BASE" "CODEX_PROFILE" "$CODEX_PROFILE_BASE" "auth.json"
+        "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json"
       ;;
     opencode)
       mount_engine "opencode" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG" "/cache/.config/opencode" \
         "OPENCODE_CONFIG_DIR=/cache/.config/opencode" \
-        "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "OPENCODE_PROFILE" "$OPENCODE_PROFILE_BASE" "opencode.json"
+        "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "opencode.json"
       ;;
     claude)
       mount_engine "claude" "$CLAUDE_CONFIG_MODE" "$CLAUDE_HOST_CONFIG" "/cache/.claude" \
         "CLAUDE_CONFIG_DIR=/cache/.claude" \
-        "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" "CLAUDE_PROFILE" "$CLAUDE_PROFILE_BASE" ".credentials.json"
+        "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" ".credentials.json"
       ;;
     omp)
       mount_engine "omp" "host" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" "" ""
@@ -480,7 +443,7 @@ append_auto_mount_dir_args() {
 append_passthrough_env_args() {
   local key value prefix
 
-  DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nCODEX_PROFILE\nOPENCODE_PROFILE\nCLAUDE_PROFILE\nCODEX_CONFIG_DIR\nOPENCODE_CONFIG_DIR\nCLAUDE_CONFIG_DIR\nCODEX_PROFILE_BASE_DIR\nOPENCODE_PROFILE_BASE_DIR\nCLAUDE_PROFILE_BASE_DIR\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nOMP_\nPI_\nAGENT_'
+  DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nOMP_\nPI_\nAGENT_'
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
   while IFS='=' read -r key value; do
@@ -509,18 +472,14 @@ resolve_tool_config_roots() {
   CLAUDE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.claude"
 
   IFS='|' read -r CODEX_CONFIG_MODE CODEX_CONFIG_SELECTOR CODEX_HOST_CONFIG <<EOF
-$(resolve_config_root "${CODEX_CONFIG:-}" "${CODEX_CONFIG_DIR:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_PROJECT_PATH")
+$(resolve_config_root "${CODEX_CONFIG:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_PROJECT_PATH")
 EOF
   IFS='|' read -r OPENCODE_CONFIG_MODE OPENCODE_CONFIG_SELECTOR OPENCODE_HOST_CONFIG <<EOF
-$(resolve_config_root "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$OPENCODE_CONFIG_DEFAULT_HOST" "$OPENCODE_CONFIG_PROJECT_PATH")
+$(resolve_config_root "${OPENCODE_CONFIG:-}" "$OPENCODE_CONFIG_DEFAULT_HOST" "$OPENCODE_CONFIG_PROJECT_PATH")
 EOF
   IFS='|' read -r CLAUDE_CONFIG_MODE CLAUDE_CONFIG_SELECTOR CLAUDE_HOST_CONFIG <<EOF
-$(resolve_config_root "${CLAUDE_CONFIG:-}" "${CLAUDE_CONFIG_DIR:-}" "$CLAUDE_CONFIG_DEFAULT_HOST" "$CLAUDE_CONFIG_PROJECT_PATH")
+$(resolve_config_root "${CLAUDE_CONFIG:-}" "$CLAUDE_CONFIG_DEFAULT_HOST" "$CLAUDE_CONFIG_PROJECT_PATH")
 EOF
-
-  CODEX_PROFILE_BASE="${CODEX_PROFILE_BASE_DIR:-$HOST_HOME/.codex/profiles}"
-  OPENCODE_PROFILE_BASE="${OPENCODE_PROFILE_BASE_DIR:-$OPENCODE_HOST_CONFIG/profiles}"
-  CLAUDE_PROFILE_BASE="${CLAUDE_PROFILE_BASE_DIR:-$CLAUDE_HOST_CONFIG/profiles}"
 
   AGENT_AUTH_HOME="${AGENT_AUTH_HOME:-$HOST_HOME/.local/share/agent-sandbox/auth}"
   CODEX_AUTH_BASE="${CODEX_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/codex}"

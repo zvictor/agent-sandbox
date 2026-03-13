@@ -129,7 +129,6 @@ upsert_project_config_value() {
   local target_file="$1"
   local key="$2"
   local value="$3"
-  local legacy_key="${4:-}"
   local tmp_file=""
 
   mkdir -p "$(dirname "$target_file")"
@@ -139,16 +138,13 @@ upsert_project_config_value() {
     render_project_config_template > "$target_file"
   fi
 
-  awk -v key="$key" -v value="$value" -v legacy_key="$legacy_key" '
+  awk -v key="$key" -v value="$value" '
     BEGIN { done = 0 }
     $0 ~ "^[[:space:]]*" key "=" {
       if (!done) {
         print key "=" value
         done = 1
       }
-      next
-    }
-    legacy_key != "" && $0 ~ "^[[:space:]]*" legacy_key "=" {
       next
     }
     { print }
@@ -166,7 +162,6 @@ upsert_project_config_value() {
 finalize_login() {
   local status="$1"
   local target_file=""
-  local legacy_env_name=""
 
   if [ "$status" -ne 0 ]; then
     echo "[agent] login did not complete successfully; not saving credentials" >&2
@@ -185,8 +180,7 @@ finalize_login() {
     resolve_project_paths
     resolve_project_config_file
     target_file="$(resolve_project_config_target_file)"
-    legacy_env_name="${LOGIN_AUTH_ENV_NAME%_AUTH}_PROFILE"
-    upsert_project_config_value "$target_file" "$LOGIN_AUTH_ENV_NAME" "$LOGIN_SLOT_NAME" "$legacy_env_name"
+    upsert_project_config_value "$target_file" "$LOGIN_AUTH_ENV_NAME" "$LOGIN_SLOT_NAME"
     echo "[agent] set $LOGIN_AUTH_ENV_NAME=$LOGIN_SLOT_NAME in $target_file" >&2
   fi
 }

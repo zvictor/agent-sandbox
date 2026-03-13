@@ -488,15 +488,6 @@ The low-level `agent-nix-tool` command is still available as an escape hatch, bu
 - `CODEX_AUTH_BASE_DIR`: override the managed Codex auth slot directory
 - `OPENCODE_AUTH_BASE_DIR`: override the managed OpenCode auth slot directory
 - `CLAUDE_AUTH_BASE_DIR`: override the managed Claude auth slot directory
-- `CODEX_CONFIG_DIR`: legacy path-only alias for `CODEX_CONFIG`
-- `OPENCODE_CONFIG_DIR`: legacy path-only alias for `OPENCODE_CONFIG`
-- `CLAUDE_CONFIG_DIR`: legacy path-only alias for `CLAUDE_CONFIG`
-- `CODEX_PROFILE`: legacy compatibility alias for `CODEX_AUTH`
-- `OPENCODE_PROFILE`: legacy compatibility alias for `OPENCODE_AUTH`
-- `CLAUDE_PROFILE`: legacy compatibility alias for `CLAUDE_AUTH`
-- `CODEX_PROFILE_BASE_DIR`: override Codex profile directory
-- `OPENCODE_PROFILE_BASE_DIR`: override OpenCode profile directory
-- `CLAUDE_PROFILE_BASE_DIR`: override Claude profile directory
 - `PI_CODING_AGENT_DIR`: host oh-my-pi agent directory; defaults to `~/.omp/agent`
 
 Default forwarded prefixes include:
