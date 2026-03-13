@@ -92,6 +92,7 @@ mount_tool_configs() {
 prepare_tool_cache_dirs() {
   TOOL_CACHE_DIR="$CACHE_DIR/tools/$TOOL"
   mkdir -p "$TOOL_CACHE_DIR"
+  mkdir -p "$TOOL_CACHE_DIR/nix/profiles" "$TOOL_CACHE_DIR/nix/gcroots"
   mkdir -p "$CACHE_DIR/.config/direnv"
   cat > "$CACHE_DIR/.config/direnv/direnvrc" <<'EOF_DIRENV'
 source /etc/direnv/direnvrc
@@ -128,7 +129,7 @@ build_base_container_args() {
     --name "$CONTAINER_NAME"
     --cap-drop=ALL
     --security-opt=no-new-privileges
-    --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m
+    --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
     --memory="${AGENT_MEMORY_LIMIT:-4g}"
     --cpus="${AGENT_CPU_LIMIT:-2}"
     --pids-limit="${AGENT_PIDS_LIMIT:-512}"
