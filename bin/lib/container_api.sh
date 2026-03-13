@@ -21,12 +21,21 @@ resolve_container_api_mode() {
   fi
 
   case "$CONTAINER_API_MODE" in
-    none|podman-session|podman-host|docker-host) ;;
+    none|auto|podman-session|podman-host|docker-host) ;;
     *)
-      echo "[agent] invalid AGENT_CONTAINER_API='$CONTAINER_API_MODE' (expected: none, podman-session, podman-host, docker-host)" >&2
+      echo "[agent] invalid AGENT_CONTAINER_API='$CONTAINER_API_MODE' (expected: none, auto, podman-session, podman-host, docker-host)" >&2
       exit 1
       ;;
   esac
+
+  if [ "$CONTAINER_API_MODE" = "auto" ]; then
+    if command -v podman >/dev/null 2>&1 \
+      && env -u DOCKER_HOST -u CONTAINER_HOST podman info >/dev/null 2>&1; then
+      CONTAINER_API_MODE="podman-session"
+    else
+      CONTAINER_API_MODE="none"
+    fi
+  fi
 
   if [ "$CONTAINER_API_MODE" = "podman-session" ] && ! command -v podman >/dev/null 2>&1; then
     echo "[agent] AGENT_CONTAINER_API=podman-session requires podman on the host" >&2

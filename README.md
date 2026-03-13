@@ -125,6 +125,27 @@ Rules:
 - `..` and absolute paths are rejected
 - directories are allowed, but they widen invalidation to that entire subtree
 
+## Project Defaults
+
+Instead of exporting a long list of environment variables before every run, you can define project-level sandbox defaults in a file. The launcher checks these locations in order:
+
+1. `AGENT_PROJECT_CONFIG_FILE`
+2. `nix/agent-sandbox.env`
+3. `.agent-sandbox.env`
+
+The format is plain `KEY=VALUE` lines. Blank lines and `#` comments are ignored. Existing environment variables still take precedence over file values.
+
+Example:
+
+```sh
+AGENT_CONTAINER_API=auto
+AGENT_NIX_TOOL_HELPER=1
+CODEX_PROFILE=work
+CLAUDE_PROFILE=work
+```
+
+Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool profile/config keys, `TESTCONTAINERS_*`, and `GIT_ALLOW`.
+
 ## Installation
 
 ### NixOS or any flake-based host
@@ -322,15 +343,17 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 
 ### Container API access
 
-- `AGENT_CONTAINER_API`: `none`, `podman-session`, `podman-host`, or `docker-host`; default `none`
+- `AGENT_CONTAINER_API`: `none`, `auto`, `podman-session`, `podman-host`, or `docker-host`; default `none`
 - `AGENT_CONTAINER_API_TTL`: inactivity timeout in seconds for `podman-session`; default `900`
 - `AGENT_CONTAINER_API_RESET=1`: discard the cached `podman-session` state directory before starting it again
 
 Recommended for Testcontainers:
 
-- `AGENT_CONTAINER_API=podman-session`
+- `AGENT_CONTAINER_API=auto`
 
 In `podman-session` mode, the launcher starts a dedicated rootless Podman API service in the background, stores its state under `AGENT_CACHE_DIR`, and mounts only that session socket into the agent container. Startup does not block on socket readiness; the inner Podman API warms up in parallel with normal agent boot.
+
+In `auto` mode, the launcher chooses `podman-session` when host Podman is available and usable, otherwise it falls back to `none`.
 
 ### Raw host socket compatibility opts
 

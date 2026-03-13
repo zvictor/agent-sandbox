@@ -67,7 +67,7 @@ This matters because for some tools our container becomes the primary safety bou
 
 ### 6. Container API access is split into safe and unsafe modes
 
-The default launcher behavior is still no host container API access. For Testcontainers-style workflows, the preferred mode is now `AGENT_CONTAINER_API=podman-session`, which starts a dedicated rootless Podman API service with state under `AGENT_CACHE_DIR` and mounts only that session socket into the sandbox.
+The default launcher behavior is still no host container API access. For Testcontainers-style workflows, the preferred high-level setting is now `AGENT_CONTAINER_API=auto`, which resolves to `podman-session` when host Podman is available. `podman-session` starts a dedicated rootless Podman API service with state under `AGENT_CACHE_DIR` and mounts only that session socket into the sandbox.
 
 That is materially tighter than mounting the developer's real Podman or Docker socket directly, while still preserving a devbox-like container workflow.
 
@@ -106,6 +106,7 @@ This is convenient, but it means tokens, auth files, and tool settings are insid
 There are two categories of container API access:
 
 - `AGENT_CONTAINER_API=podman-session`: safer than raw host sockets, because it isolates the agent from the developer's main engine state
+- `AGENT_CONTAINER_API=auto`: convenience mode that resolves to `podman-session` when possible and otherwise to `none`
 - raw host socket access: still available through `AGENT_CONTAINER_API=podman-host`, `AGENT_CONTAINER_API=docker-host`, or the legacy compatibility flags
 
 The Nix daemon socket is still an explicit opt-in:
@@ -221,7 +222,7 @@ If you want the safest interpretation of this repository today:
 
 - treat it as a practical host-damage reducer, not as a hard containment boundary
 - prefer `agent -- <tool>` when you want to keep the tool's own permission model intact
-- prefer `AGENT_CONTAINER_API=podman-session` over raw host socket modes when container APIs are required
+- prefer `AGENT_CONTAINER_API=auto` or `AGENT_CONTAINER_API=podman-session` over raw host socket modes when container APIs are required
 - avoid enabling raw Docker, Podman, or Nix daemon socket mounts unless they are required
 - prefer the narrow host Nix helper over raw Nix daemon access when the agent only needs extra tools
 - prefer the standard `nix shell`, `nix-shell -p`, `podman`, and `docker` shims over teaching the agent sandbox-specific helper commands
