@@ -47,7 +47,7 @@ resolve_tool() {
   fi
 
   if [ "$#" -lt 1 ]; then
-    echo "usage: agent <tool> [args...]" >&2
+    echo "usage: agent <tool|doctor> [args...]" >&2
     exit 1
   fi
 

@@ -78,14 +78,30 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
 . "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
+. "$AGENT_BIN_DIR/lib/doctor.sh"
 
 TOOL=""
 REMAINING_ARGS=()
-resolve_tool "$@"
+AGENT_COMMAND="run"
+if [ "$(basename "$0")" = "agent" ] && [ "${1:-}" = "doctor" ]; then
+  AGENT_COMMAND="doctor"
+  shift
+  REMAINING_ARGS=("$@")
+else
+  resolve_tool "$@"
+fi
 RUN_START_MS="$(now_ms)"
 
 if [ -z "$TOOL" ] && [ "${1:-}" = "--version" ]; then
   print_version_and_exit
+fi
+
+if [ "$AGENT_COMMAND" = "doctor" ]; then
+  [ "${#REMAINING_ARGS[@]}" -eq 0 ] || {
+    echo "usage: agent doctor" >&2
+    exit 1
+  }
+  print_doctor_and_exit
 fi
 
 validate_tool_access

@@ -216,6 +216,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run path:/path/to/agent-sandbox#codex
 
 ```sh
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/claude
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/opencode
@@ -224,6 +225,17 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/omp
 ```
 
 The tool-specific scripts apply the same per-tool defaults as the flake shortcuts; `./scripts/agent <tool>` remains unchanged.
+
+### Diagnostics
+
+Use `agent doctor` to inspect the resolved sandbox state without starting a container:
+
+```sh
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
+./scripts/agent doctor
+```
+
+It reports the resolved project root, project defaults file, selected runtime, container API mode, helper modes, visible sockets, and tool config/profile paths.
 
 ## Tool Configuration Mounts
 
