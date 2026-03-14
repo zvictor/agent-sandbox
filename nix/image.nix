@@ -247,10 +247,10 @@ let
     copyToRoot = imageBasePaths;
 
     config = {
-      WorkingDir = "/workspace";
+      WorkingDir = "/";
       Entrypoint = [ "/bin/codex" ];
       Env = [
-        "PATH=/bin:/usr/bin:/usr/local/bin:/workspace/node_modules/.bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
+        "PATH=/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"
@@ -283,7 +283,7 @@ rec {
       # In rootfs mode Podman mounts volumes before command execution and
       # expects destination paths to be normal directories, not symlink chains.
       for d in \
-        cache config workspace nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var/run \
+        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var/run \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db
       do
         rm -rf "$out/$d"

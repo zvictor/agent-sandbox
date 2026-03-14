@@ -21,7 +21,7 @@ Practically, this means agent-generated processes do not run in the host namespa
 
 The runtime does not mount the entire host home directory. Instead, it mounts:
 
-- the selected workspace at `/workspace` as read-write
+- the selected workspace at its real absolute host path as read-write
 - a per-tool cache at `/cache` as read-write
 - `/nix/store` as read-only when present
 - selected tool config directories for the active tool

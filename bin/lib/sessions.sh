@@ -52,7 +52,7 @@ session_matches_scope() {
   [ -n "${PROJECT_ROOT:-}" ] || return 1
 
   case "$session_cwd" in
-    "$PROJECT_ROOT"|"$PROJECT_ROOT"/*|/workspace|/workspace/*)
+    "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
       return 0
       ;;
     *)

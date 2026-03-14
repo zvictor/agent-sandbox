@@ -257,7 +257,13 @@ build_nix_config() {
     Z_SUFFIX=",Z"
   fi
 
-  WORKSPACE_HOST_PATH="${AGENT_WORKSPACE_HOST_PATH:-$PWD}"
+  WORKSPACE_PATH="${AGENT_WORKSPACE_PATH:-$PWD}"
+  if [ ! -d "$WORKSPACE_PATH" ]; then
+    echo "[agent] ERROR: workspace path is not a directory: $WORKSPACE_PATH" >&2
+    exit 1
+  fi
+  WORKSPACE_PATH="$(cd "$WORKSPACE_PATH" && pwd -P)"
+  WORKSPACE_RUNTIME_PATH="/bin:/usr/bin:/usr/local/bin:$WORKSPACE_PATH/node_modules/.bin"
 
   NIX_CONFIG="sandbox = false
 substituters = https://cache.nixos.org
@@ -285,14 +291,14 @@ build_base_container_args() {
     --memory="${AGENT_MEMORY_LIMIT:-4g}"
     --cpus="${AGENT_CPU_LIMIT:-2}"
     --pids-limit="${AGENT_PIDS_LIMIT:-512}"
-    -w /workspace
+    -w "$WORKSPACE_PATH"
     -v "$TOOL_CACHE_DIR:/cache:rw${Z_SUFFIX}"
-    -v "$WORKSPACE_HOST_PATH:/workspace:rw${Z_SUFFIX}"
+    -v "$WORKSPACE_PATH:$WORKSPACE_PATH:rw${Z_SUFFIX}"
     -e HOME=/cache
     -e XDG_CACHE_HOME=/cache
     -e TOOL_CACHE=/cache
     -e CODEX_CACHE=/cache
-    -e WORKSPACE_HOST_PATH="$WORKSPACE_HOST_PATH"
+    -e PATH="$WORKSPACE_RUNTIME_PATH"
     -e NIX_CONFIG="$NIX_CONFIG"
   )
 }
@@ -386,7 +392,7 @@ append_dev_env_args() {
   local env_spec=""
   local key=""
   local value=""
-  local runtime_path="/bin:/usr/bin:/usr/local/bin:/workspace/node_modules/.bin"
+  local runtime_path="$WORKSPACE_RUNTIME_PATH"
 
   if [ -n "${DEV_ENV_ENV_FILE:-}" ] && [ -f "$DEV_ENV_ENV_FILE" ]; then
     while IFS= read -r env_spec; do
@@ -405,13 +411,13 @@ append_dev_env_args() {
 }
 
 append_workspace_git_args() {
-  if [ -f "$WORKSPACE_HOST_PATH/.git" ]; then
-    GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_HOST_PATH/.git" | head -n1 || true)"
+  if [ -f "$WORKSPACE_PATH/.git" ]; then
+    GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_PATH/.git" | head -n1 || true)"
     if [ -n "$GITDIR_REL" ]; then
       if [ "${GITDIR_REL#/}" != "$GITDIR_REL" ]; then
         MAIN_GIT_DIR="$GITDIR_REL"
       else
-        MAIN_GIT_DIR="$(cd "$WORKSPACE_HOST_PATH" && cd "$GITDIR_REL" && pwd -P)"
+        MAIN_GIT_DIR="$(cd "$WORKSPACE_PATH" && cd "$GITDIR_REL" && pwd -P)"
       fi
       if [ -d "$MAIN_GIT_DIR" ]; then
         ARGS+=( -v "$MAIN_GIT_DIR:$MAIN_GIT_DIR:rw${Z_SUFFIX}" )

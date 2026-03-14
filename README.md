@@ -300,7 +300,7 @@ This is the fastest way to confirm what `codex resume <session>` will be able to
 - `CODEX_CONFIG=fresh`: no prior sessions are visible
 - `CODEX_CONFIG=/path/to/.codex`: sessions from that exact config root
 
-For `CODEX_CONFIG=project`, `agent sessions codex` treats the config root itself as the scope and lists all sessions stored there, even if Codex recorded the in-container cwd as `/workspace`.
+For `CODEX_CONFIG=project`, `agent sessions codex` treats the config root itself as the scope and lists all sessions stored there.
 
 ## Tool Configuration Mounts
 
@@ -424,7 +424,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_MEMORY_LIMIT`: container memory limit; default `4g`
 - `AGENT_CPU_LIMIT`: container CPU limit; default `2`
 - `AGENT_PIDS_LIMIT`: container PID limit; default `512`
-- `AGENT_WORKSPACE_HOST_PATH`: host path mounted at `/workspace`; defaults to current directory
+- `AGENT_WORKSPACE_PATH`: workspace directory mounted at the same absolute path inside the sandbox; defaults to current directory
 - `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`
 - `AGENT_DEV_ENV`: `host-helper` or `none`; default `host-helper`
 
