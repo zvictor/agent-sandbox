@@ -31,6 +31,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- init
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work --config project
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- sessions codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- run codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
 ```
@@ -42,6 +43,7 @@ From a local checkout:
 ./scripts/agent doctor
 ./scripts/agent login codex work
 ./scripts/agent login codex work --config project
+./scripts/agent sessions codex
 ./scripts/agent run codex
 ./scripts/codex
 ```
@@ -256,6 +258,7 @@ AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent run codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent login codex work --config project
+AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent sessions codex
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent init
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/agent doctor
 AGENT_PROJECT_ROOT=/path/to/host-project ./scripts/codex
@@ -279,6 +282,25 @@ AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 ```
 
 By default it prints a short summary plus suggested fixes, including the effective enabled tool surface for the current project and whether the project root came from `AGENT_PROJECT_ROOT`, the enclosing git repo, or the current directory. Use `--verbose` for the full state dump and `--json` for machine-readable output.
+
+### Visible sessions
+
+Use `agent sessions codex` to list the Codex sessions visible through the current `CODEX_CONFIG` selection:
+
+```sh
+./scripts/agent sessions codex
+./scripts/agent sessions codex --all
+./scripts/agent sessions codex --json
+```
+
+This is the fastest way to confirm what `codex resume <session>` will be able to see:
+
+- `CODEX_CONFIG=host`: all sessions in the host `~/.codex`
+- `CODEX_CONFIG=project`: only sessions stored under `$PROJECT_ROOT/.codex`
+- `CODEX_CONFIG=fresh`: no prior sessions are visible
+- `CODEX_CONFIG=/path/to/.codex`: sessions from that exact config root
+
+For `CODEX_CONFIG=project`, `agent sessions codex` treats the config root itself as the scope and lists all sessions stored there, even if Codex recorded the in-container cwd as `/workspace`.
 
 ## Tool Configuration Mounts
 
@@ -307,6 +329,12 @@ Create a fresh named Codex login with:
 ```sh
 ./scripts/agent login codex work
 ./scripts/agent login codex work --config project
+```
+
+Then confirm the visible session scope with:
+
+```sh
+./scripts/agent sessions codex
 ```
 
 For `omp`, the launcher mounts the whole `~/.omp` tree. It does not implement a separate credential overlay layer.

@@ -16,6 +16,7 @@ print_help_and_exit() {
 usage:
   agent <tool> [args...]
   agent run <tool> [args...]
+  agent sessions codex [--all] [--json]
   agent login codex <name> [--no-use] [--config host|project|fresh|<path>] [-- <codex login args...>]
   agent init [--force] [--stdout]
   agent doctor [--verbose] [--json]
@@ -30,6 +31,7 @@ enabled tools:
 examples:
   agent init
   agent doctor
+  agent sessions codex
   agent login codex work
   agent login codex work --config project
   agent run codex

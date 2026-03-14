@@ -229,8 +229,9 @@ print_doctor_json() {
 print_doctor_text_summary() {
   local runtime_mode="$1"
   local requested_container_api="$2"
-  local tools_list="$3"
-  local suggestions="$4"
+  local codex_config_state="$3"
+  local tools_list="$4"
+  local suggestions="$5"
 
   printf 'Agent Sandbox Doctor\n\n'
 
@@ -240,6 +241,7 @@ print_doctor_text_summary() {
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
+  doctor_line "codex_config" "$codex_config_state"
   doctor_line "container_api" "${requested_container_api} -> ${CONTAINER_API_MODE}"
   doctor_line "tools_enabled" "$tools_list"
   doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
@@ -478,7 +480,7 @@ print_doctor_and_exit() {
       "$omp_config_state" \
       "$suggestions"
   else
-    print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$tools_list" "$suggestions"
+    print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$codex_config_state" "$tools_list" "$suggestions"
   fi
 
   exit 0
