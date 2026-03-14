@@ -496,6 +496,7 @@ The image now prefers compatibility shims over sandbox-specific instructions:
 - `nix shell <installable> --command ...` is rewritten to the narrow helper path when the invocation is simple enough
 - `nix-shell -p <pkg> --run ...` and `nix-shell -p <pkg> -- ...` are rewritten the same way
 - `podman` and `docker` auto-materialize their CLIs on first use if they are not already available through the project contract
+- agent-style `/bin/sh -c` and `/bin/sh -lc` commands retry once through the narrow helper when they fail with `command not found`
 - Bash sessions auto-try `nixpkgs#<command>` for missing commands before falling back to the normal `command not found`
 
 The low-level `agent-nix-tool` command is still available as an escape hatch, but normal usage should prefer the standard commands above.

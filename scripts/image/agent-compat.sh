@@ -3,9 +3,10 @@ set -euo pipefail
 
 nix_real="@nixReal@"
 nix_shell_real="@nixShellReal@"
+sh_real="@shReal@"
 
 usage() {
-  echo "usage: agent-compat <command-not-found|run-command|nix-wrapper|nix-shell-wrapper> ..." >&2
+  echo "usage: agent-compat <command-not-found|run-command|nix-wrapper|nix-shell-wrapper|sh-wrapper> ..." >&2
   exit 1
 }
 
@@ -52,6 +53,24 @@ installable_for_command() {
   local command_name="$1"
 
   case "$command_name" in
+    python|python3)
+      printf '%s\n' 'nixpkgs#python3'
+      ;;
+    pip|pip3)
+      printf '%s\n' 'nixpkgs#python3Packages.pip'
+      ;;
+    node|npm)
+      printf '%s\n' 'nixpkgs#nodejs'
+      ;;
+    pnpm)
+      printf '%s\n' 'nixpkgs#pnpm'
+      ;;
+    go)
+      printf '%s\n' 'nixpkgs#go'
+      ;;
+    cargo|rustc)
+      printf '%s\n' 'nixpkgs#cargo'
+      ;;
     docker)
       printf '%s\n' 'nixpkgs#docker-client'
       ;;
@@ -143,6 +162,19 @@ run_materialized_command() {
   fi
 
   exec "$bin_dir/$command_name" "$@"
+}
+
+extract_missing_command() {
+  local stderr_file="$1"
+  local missing_command=""
+
+  missing_command="$(sed -n \
+    -e 's/^.*: \([^ :][^:]*\): command not found$/\1/p' \
+    -e 's/^.*: \([^ :][^:]*\): not found$/\1/p' \
+    "$stderr_file" | head -n 1)"
+
+  [ -n "$missing_command" ] || return 1
+  printf '%s\n' "$missing_command"
 }
 
 run_with_installables() {
@@ -278,6 +310,62 @@ handle_legacy_nix_shell() {
   shell_with_installables "${packages[@]/#/nixpkgs#}"
 }
 
+handle_sh_wrapper() {
+  local shell_flag="${1:-}"
+  local shell_command="${2:-}"
+  local tmp_dir=""
+  local stdout_file=""
+  local stderr_file=""
+  local status=0
+  local missing_command=""
+  local installable=""
+  local bin_dir=""
+
+  case "$shell_flag" in
+    -c|-lc)
+      ;;
+    *)
+      exec "$sh_real" "$@"
+      ;;
+  esac
+
+  [ "$#" -ge 2 ] || exec "$sh_real" "$@"
+  shift 2
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/agent-sh.XXXXXX")"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  set +e
+  "$sh_real" "$shell_flag" "$shell_command" "$@" >"$stdout_file" 2>"$stderr_file"
+  status=$?
+  set -e
+
+  if [ "$status" -eq 0 ]; then
+    cat "$stdout_file"
+    cat "$stderr_file" >&2
+    exit 0
+  fi
+
+  if [ "$status" -eq 127 ]; then
+    missing_command="$(extract_missing_command "$stderr_file" || true)"
+    if [ -n "$missing_command" ]; then
+      installable="$(installable_for_command "$missing_command" || true)"
+      if [ -n "$installable" ]; then
+        bin_dir="$(materialize_installable_bin_dir "$installable" || true)"
+        if [ -n "$bin_dir" ]; then
+          PATH="$bin_dir:$PATH" exec "$sh_real" "$shell_flag" "$shell_command" "$@"
+        fi
+      fi
+    fi
+  fi
+
+  cat "$stdout_file"
+  cat "$stderr_file" >&2
+  exit "$status"
+}
+
 command_name="${1:-}"
 shift || true
 
@@ -295,6 +383,9 @@ case "$command_name" in
     ;;
   nix-shell-wrapper)
     handle_legacy_nix_shell "$@"
+    ;;
+  sh-wrapper)
+    handle_sh_wrapper "$@"
     ;;
   *)
     usage

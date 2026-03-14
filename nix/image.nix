@@ -32,10 +32,14 @@ let
 
   helpers = with pkgs.dockerTools; [
     usrBinEnv
-    binSh
     caCertificates
     fakeNss
   ];
+
+  bashBin = pkgs.runCommand "bash-bin" { } ''
+    mkdir -p "$out/bin"
+    ln -s ${pkgs.bashInteractive}/bin/bash "$out/bin/bash"
+  '';
 
   gitWrapper = pkgs.writeShellScriptBin "git" ''
     #!/bin/sh
@@ -106,6 +110,7 @@ let
   agentCompatScript = pkgs.replaceVars ../scripts/image/agent-compat.sh {
     nixReal = "${pkgs.nix}/bin/nix";
     nixShellReal = "${pkgs.nix}/bin/nix-shell";
+    shReal = "${pkgs.bashInteractive}/bin/sh";
   };
 
   agentCompat = pkgs.runCommand "agent-compat" { } ''
@@ -123,6 +128,7 @@ let
   agentShellEnv = pkgs.writeTextDir "etc/agent-shell-env.sh" (builtins.readFile ../scripts/image/agent-shell-env.sh);
 
   compatWrappers = [
+    (mkCompatWrapper "sh" "sh-wrapper")
     (mkCompatWrapper "nix" "nix-wrapper")
     (mkCompatWrapper "nix-shell" "nix-shell-wrapper")
     (mkCompatWrapper "podman" "run-command podman")
@@ -208,7 +214,7 @@ let
     ln -s /cache/nix/profiles "$out/nix/var/nix/profiles"
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
-    mkdir -p "$out/nixcache" "$out/tmp" "$out/config" "$out/workspace"
+    mkdir -p "$out/nixcache" "$out/tmp" "$out/config"
     mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/secrets" "$out/var/run"
   '';
 
@@ -221,7 +227,7 @@ let
       pkgs.nix-direnv
       direnvEtc
       agentShellEnv
-      pkgs.bashInteractive
+      bashBin
       pkgs.coreutils
       pkgs.gnugrep
       pkgs.gnused
