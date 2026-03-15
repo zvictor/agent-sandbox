@@ -164,7 +164,7 @@ Example:
 
 ```sh
 AGENT_CONTAINER_API=auto
-AGENT_NIX_TOOL_HELPER=1
+AGENT_NEED_HELPER=1
 CODEX_CONFIG=project
 CODEX_AUTH=work
 ```
@@ -475,19 +475,23 @@ Those paths use the host-backed Nix helper when possible, so the agent can keep 
 
 ### Host Nix tool helper
 
-- `AGENT_NIX_TOOL_HELPER=1|0`: enable or disable the narrow host-side Nix materialization helper; default `1`
-- `AGENT_NIX_TOOL_HELPER_TTL`: inactivity timeout in seconds for the helper worker; default `900`
-- `AGENT_NIX_TOOL_TIMEOUT`: request timeout in seconds for `agent-nix-tool`; default `600`
+- `AGENT_NEED_HELPER=1|0`: enable or disable the narrow host-side need helper; default `1`
+- `AGENT_NEED_HELPER_TTL`: inactivity timeout in seconds for the helper worker; default `900`
+- `AGENT_NEED_TIMEOUT`: request timeout in seconds for `need`; default `600`
+- `AGENT_NEED_BOOTSTRAP_INDEX=1|0`: automatically start a background `need update-index` on first shell startup when the local command index is missing; default `1`
 
 When enabled, the launcher starts a small host-side helper worker in the background and mounts a request/response bridge into the sandbox. Inside the sandbox, use:
 
 ```sh
-agent-nix-tool add nixpkgs#podman
-agent-nix-tool env nixpkgs#podman
-agent-nix-tool run nixpkgs#podman -- podman --version
+need update-index
+need podman
+need run podman -- podman --version
+need inject pnpm
 ```
 
 The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent.
+
+If the nix command index is missing, the sandbox now starts downloading it in the background when the agent boots. That bootstrap is non-blocking, so the first interaction still runs immediately; `need update-index` remains available as the explicit refresh command.
 
 ### Seamless command shims
 
@@ -495,11 +499,17 @@ The image now prefers compatibility shims over sandbox-specific instructions:
 
 - `nix shell <installable> --command ...` is rewritten to the narrow helper path when the invocation is simple enough
 - `nix-shell -p <pkg> --run ...` and `nix-shell -p <pkg> -- ...` are rewritten the same way
-- `podman` and `docker` auto-materialize their CLIs on first use if they are not already available through the project contract
-- agent-style `/bin/sh -c` and `/bin/sh -lc` commands retry once through the narrow helper when they fail with `command not found`
-- Bash sessions auto-try `nixpkgs#<command>` for missing commands before falling back to the normal `command not found`
+- agent-style `/bin/sh -c` and `/bin/sh -lc` commands now print `need` guidance after a real `command not found` failure instead of retrying transparently
+- `need` uses `nix-locate` when the local nix-index database is available, and falls back to transparent best-effort guesses otherwise
 
-The low-level `agent-nix-tool` command is still available as an escape hatch, but normal usage should prefer the standard commands above.
+The `need` command is the main escape hatch for missing tools:
+
+```sh
+need update-index
+need pnpm
+need run pnpm -- pnpm -v
+need inject pnpm
+```
 
 ### Mounts and environment passthrough
 

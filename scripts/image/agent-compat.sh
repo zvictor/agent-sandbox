@@ -6,7 +6,7 @@ nix_shell_real="@nixShellReal@"
 sh_real="@shReal@"
 
 usage() {
-  echo "usage: agent-compat <command-not-found|run-command|nix-wrapper|nix-shell-wrapper|sh-wrapper> ..." >&2
+  echo "usage: agent-compat <command-not-found|nix-wrapper|nix-shell-wrapper|sh-wrapper> ..." >&2
   exit 1
 }
 
@@ -49,47 +49,6 @@ find_existing_command() {
   return 1
 }
 
-installable_for_command() {
-  local command_name="$1"
-
-  case "$command_name" in
-    python|python3)
-      printf '%s\n' 'nixpkgs#python3'
-      ;;
-    pip|pip3)
-      printf '%s\n' 'nixpkgs#python3Packages.pip'
-      ;;
-    node|npm)
-      printf '%s\n' 'nixpkgs#nodejs'
-      ;;
-    pnpm)
-      printf '%s\n' 'nixpkgs#pnpm'
-      ;;
-    go)
-      printf '%s\n' 'nixpkgs#go'
-      ;;
-    cargo|rustc)
-      printf '%s\n' 'nixpkgs#cargo'
-      ;;
-    docker)
-      printf '%s\n' 'nixpkgs#docker-client'
-      ;;
-    docker-compose)
-      printf '%s\n' 'nixpkgs#docker-compose'
-      ;;
-    podman)
-      printf '%s\n' 'nixpkgs#podman'
-      ;;
-    *)
-      if printf '%s\n' "$command_name" | grep -Eq '^[A-Za-z0-9._+-]+$'; then
-        printf 'nixpkgs#%s\n' "$command_name"
-      else
-        return 1
-      fi
-      ;;
-  esac
-}
-
 resolve_bin_dir() {
   local resolved_path="$1"
   local first_exec=""
@@ -117,10 +76,10 @@ materialize_installable_bin_dir() {
   local installable="$1"
   local resolved_path=""
 
-  [ "${AGENT_NIX_TOOL_HELPER:-1}" = "1" ] || return 1
-  command -v agent-nix-tool >/dev/null 2>&1 || return 1
+  [ "${AGENT_NEED_HELPER:-1}" = "1" ] || return 1
+  command -v need >/dev/null 2>&1 || return 1
 
-  resolved_path="$(agent-nix-tool add "$installable" 2>/dev/null)" || return 1
+  resolved_path="$(need materialize "$installable")" || return 1
   resolve_bin_dir "$resolved_path"
 }
 
@@ -135,33 +94,6 @@ build_path_prefix() {
   done
 
   printf '%s\n' "$path_prefix"
-}
-
-run_materialized_command() {
-  local command_name="$1"
-  shift
-
-  local existing_path=""
-  local installable=""
-  local bin_dir=""
-
-  existing_path="$(find_existing_command "$command_name" "$command_name" || true)"
-  if [ -n "$existing_path" ]; then
-    exec "$existing_path" "$@"
-  fi
-
-  installable="$(installable_for_command "$command_name" || true)"
-  if [ -z "$installable" ]; then
-    exit 127
-  fi
-
-  bin_dir="$(materialize_installable_bin_dir "$installable" || true)"
-  if [ -z "$bin_dir" ] || [ ! -x "$bin_dir/$command_name" ]; then
-    echo "[agent] could not materialize '$command_name' from $installable" >&2
-    exit 127
-  fi
-
-  exec "$bin_dir/$command_name" "$@"
 }
 
 extract_missing_command() {
@@ -338,7 +270,7 @@ handle_sh_wrapper() {
   trap 'rm -rf "$tmp_dir"' EXIT
 
   set +e
-  "$sh_real" "$shell_flag" "$shell_command" "$@" >"$stdout_file" 2>"$stderr_file"
+  AGENT_NEED_WRAPPER_HANDLING=1 "$sh_real" "$shell_flag" "$shell_command" "$@" >"$stdout_file" 2>"$stderr_file"
   status=$?
   set -e
 
@@ -350,19 +282,15 @@ handle_sh_wrapper() {
 
   if [ "$status" -eq 127 ]; then
     missing_command="$(extract_missing_command "$stderr_file" || true)"
-    if [ -n "$missing_command" ]; then
-      installable="$(installable_for_command "$missing_command" || true)"
-      if [ -n "$installable" ]; then
-        bin_dir="$(materialize_installable_bin_dir "$installable" || true)"
-        if [ -n "$bin_dir" ]; then
-          PATH="$bin_dir:$PATH" exec "$sh_real" "$shell_flag" "$shell_command" "$@"
-        fi
-      fi
-    fi
   fi
 
   cat "$stdout_file"
   cat "$stderr_file" >&2
+  if [ "$status" -eq 127 ] && [ -n "$missing_command" ] && command -v need >/dev/null 2>&1; then
+    if ! grep -q "Run once in this sandbox:" "$stderr_file" 2>/dev/null; then
+      /bin/need missing "$missing_command" || true
+    fi
+  fi
   exit "$status"
 }
 
@@ -372,11 +300,7 @@ shift || true
 case "$command_name" in
   command-not-found)
     [ "$#" -ge 1 ] || exit 127
-    run_materialized_command "$@"
-    ;;
-  run-command)
-    [ "$#" -ge 1 ] || usage
-    run_materialized_command "$@"
+    exec /bin/need missing "$@"
     ;;
   nix-wrapper)
     handle_nix_shell "$@"

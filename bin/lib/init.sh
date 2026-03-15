@@ -128,8 +128,8 @@ render_project_config_template() {
 # Podman is usable and otherwise falls back to none.
 AGENT_CONTAINER_API=auto
 
-# Keep the narrow host-backed tool materialization path enabled.
-AGENT_NIX_TOOL_HELPER=1
+# Keep the narrow host-backed need helper enabled.
+AGENT_NEED_HELPER=1
 
 # Keep the host direnv snapshot helper enabled when the project uses .envrc.
 AGENT_DEV_ENV=host-helper

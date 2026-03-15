@@ -74,7 +74,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/rootfs.sh"
 . "$AGENT_BIN_DIR/lib/artifact_prep.sh"
 . "$AGENT_BIN_DIR/lib/container_api.sh"
-. "$AGENT_BIN_DIR/lib/nix_tool_helper.sh"
+. "$AGENT_BIN_DIR/lib/need_helper.sh"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
 . "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
@@ -167,7 +167,7 @@ if [ "$AGENT_COMMAND" = "login" ]; then
 fi
 prepare_runtime_artifacts
 prepare_container_api
-prepare_nix_tool_helper
+prepare_need_helper
 
 build_container_args
 

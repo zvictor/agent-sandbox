@@ -183,6 +183,7 @@ print_doctor_json() {
   doctor_json_pair "root" "$PROJECT_ROOT"; printf ',\n'
   doctor_json_pair "root_source" "$PROJECT_ROOT_SOURCE"; printf ',\n'
   doctor_json_pair "nix_dir" "$PROJECT_NIX_DIR"; printf ',\n'
+  doctor_json_pair "cache_dir" "$CACHE_DIR"; printf ',\n'
   doctor_json_pair "config_file" "${PROJECT_CONFIG_FILE:-none}"; printf ',\n'
   doctor_json_pair "contract" "$(doctor_contract_source)"; printf ',\n'
   doctor_json_pair "sandbox_flake" "$SANDBOX_FLAKE"; printf '\n'
@@ -196,7 +197,7 @@ print_doctor_json() {
   printf '  "capabilities": {\n'
   doctor_json_pair "container_api_requested" "$requested_container_api"; printf ',\n'
   doctor_json_pair "container_api_resolved" "$CONTAINER_API_MODE"; printf ',\n'
-  doctor_json_pair "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"; printf ',\n'
+  doctor_json_pair "need_helper" "$NEED_HELPER_MODE"; printf ',\n'
   doctor_json_pair "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"; printf ',\n'
   doctor_json_pair "direnv_file" "$(doctor_path_state "$PROJECT_ROOT/.envrc")"; printf ',\n'
   doctor_json_pair "direnv_nix_path" "${AGENT_DIRENV_NIX_PATH:-unset}"; printf '\n'
@@ -239,12 +240,13 @@ print_doctor_text_summary() {
   doctor_line "project_root" "$PROJECT_ROOT"
   doctor_line "project_root_source" "$PROJECT_ROOT_SOURCE"
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
+  doctor_line "cache_dir" "$CACHE_DIR"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "codex_config" "$codex_config_state"
   doctor_line "container_api" "${requested_container_api} -> ${CONTAINER_API_MODE}"
   doctor_line "tools_enabled" "$tools_list"
-  doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
+  doctor_line "need_helper" "$NEED_HELPER_MODE"
   doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
 
   printf '\nSuggested next steps\n'
@@ -275,6 +277,7 @@ print_doctor_text_verbose() {
   doctor_line "project_root_source" "$PROJECT_ROOT_SOURCE"
   doctor_line "project_nix_dir" "$PROJECT_NIX_DIR"
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
+  doctor_line "cache_dir" "$CACHE_DIR"
   doctor_line "project_contract" "$(doctor_contract_source)"
   doctor_line "sandbox_flake" "$SANDBOX_FLAKE"
 
@@ -287,7 +290,7 @@ print_doctor_text_verbose() {
   printf '\nCapabilities\n'
   doctor_line "container_api.requested" "$requested_container_api"
   doctor_line "container_api.resolved" "$CONTAINER_API_MODE"
-  doctor_line "nix_tool_helper" "$NIX_TOOL_HELPER_MODE"
+  doctor_line "need_helper" "$NEED_HELPER_MODE"
   doctor_line "dev_env_mode" "${AGENT_DEV_ENV:-host-helper}"
   doctor_line "direnv_file" "$(doctor_path_state "$PROJECT_ROOT/.envrc")"
   doctor_line "direnv_nix_path" "${AGENT_DIRENV_NIX_PATH:-unset}"
@@ -367,14 +370,16 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ "$NIX_TOOL_HELPER_MODE" = "0" ]; then
-    doctor_note "Set AGENT_NIX_TOOL_HELPER=1 if you want standard commands like 'nix shell nixpkgs#jq --command jq --version' to use the narrow host-backed tool path."
+  if [ "$NEED_HELPER_MODE" = "0" ]; then
+    doctor_note "Set AGENT_NEED_HELPER=1 if you want standard commands like 'nix shell nixpkgs#jq --command jq --version' to use the narrow host-backed helper."
     printed="1"
   fi
 
   if [ "$printed" = "0" ]; then
     doctor_note "No obvious setup problems detected. If behavior is still surprising, rerun with AGENT_DEBUG=1 for the launcher trace."
   fi
+
+  doctor_note "Remove $CACHE_DIR if you want to wipe the sandbox cache and start from a fresh local environment."
 }
 
 print_doctor_and_exit() {
@@ -410,7 +415,7 @@ print_doctor_and_exit() {
   prepare_cache_dirs
   resolve_direnv_nix_path
   resolve_container_api_mode
-  resolve_nix_tool_helper_mode
+  resolve_need_helper_mode
   resolve_tool_config_roots
 
   requested_container_api="${AGENT_CONTAINER_API:-}"

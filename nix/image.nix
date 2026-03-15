@@ -103,8 +103,8 @@ let
     };
   };
 
-  agentNixTool = pkgs.runCommand "agent-nix-tool" { } ''
-    install -Dm0755 ${../scripts/image/agent-nix-tool.sh} "$out/bin/agent-nix-tool"
+  needCommand = pkgs.runCommand "need" { } ''
+    install -Dm0755 ${../scripts/image/need.sh} "$out/bin/need"
   '';
 
   agentCompatScript = pkgs.replaceVars ../scripts/image/agent-compat.sh {
@@ -125,14 +125,10 @@ let
       exec /bin/agent-compat ${subcommand} "$@"
     '';
 
-  agentShellEnv = pkgs.writeTextDir "etc/agent-shell-env.sh" (builtins.readFile ../scripts/image/agent-shell-env.sh);
-
   compatWrappers = [
     (mkCompatWrapper "sh" "sh-wrapper")
     (mkCompatWrapper "nix" "nix-wrapper")
     (mkCompatWrapper "nix-shell" "nix-shell-wrapper")
-    (mkCompatWrapper "podman" "run-command podman")
-    (mkCompatWrapper "docker" "run-command docker")
   ];
 
   mkBunToolLauncher =
@@ -155,6 +151,10 @@ let
       if [ "${name}" = "codex" ]; then
         export CODEX_HOME="''${CODEX_HOME:-/cache/.codex}"
         export CODEX_CONFIG_DIR="''${CODEX_CONFIG_DIR:-''${CODEX_HOME}}"
+      fi
+
+      if [ "''${AGENT_NEED_BOOTSTRAP_INDEX:-1}" = "1" ] && command -v need >/dev/null 2>&1; then
+        /bin/need bootstrap-index >/dev/null 2>&1 || true
       fi
 
       if [ ! -f "$CACHE_DIR/package.json" ]; then
@@ -226,7 +226,6 @@ let
       pkgs.direnv
       pkgs.nix-direnv
       direnvEtc
-      agentShellEnv
       bashBin
       pkgs.coreutils
       pkgs.gnugrep
@@ -238,12 +237,13 @@ let
       pkgs.jq
       pkgs.fx
       pkgs.bun
+      pkgs.nix-index
     ]
     ++ helpers
     ++ devPackagesImage
     ++ toolLaunchers
     ++ compatWrappers
-    ++ [ agentNixTool ];
+    ++ [ needCommand ];
 
   imageSpec = {
     name = "agent-base";
@@ -256,14 +256,12 @@ let
       WorkingDir = "/";
       Entrypoint = [ "/bin/codex" ];
       Env = [
-        "PATH=/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
+        "PATH=/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"
         "CODEX_CACHE=/cache"
         "TESTCONTAINERS_RYUK_DISABLED=true"
-        "BASH_ENV=/etc/agent-shell-env.sh"
-        "ENV=/etc/agent-shell-env.sh"
         "SHELL=/bin/bash"
         "NIX_PATH=nixpkgs=${pkgs.path}"
         "NIX_CONFIG=sandbox = false\nsubstituters = https://cache.nixos.org\ntrusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY"

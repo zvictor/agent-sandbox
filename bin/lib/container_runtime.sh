@@ -263,7 +263,7 @@ build_nix_config() {
     exit 1
   fi
   WORKSPACE_PATH="$(cd "$WORKSPACE_PATH" && pwd -P)"
-  WORKSPACE_RUNTIME_PATH="/bin:/usr/bin:/usr/local/bin:$WORKSPACE_PATH/node_modules/.bin"
+  WORKSPACE_RUNTIME_PATH="/cache/need/bin:/bin:/usr/bin:/usr/local/bin:$WORKSPACE_PATH/node_modules/.bin"
 
   NIX_CONFIG="sandbox = false
 substituters = https://cache.nixos.org
@@ -338,10 +338,10 @@ append_host_socket_args() {
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
-  if [ "${NIX_TOOL_HELPER_MODE:-0}" = "1" ] && [ -n "${NIX_TOOL_HELPER_DIR:-}" ] && [ -d "$NIX_TOOL_HELPER_DIR" ]; then
-    ARGS+=( -v "$NIX_TOOL_HELPER_DIR:/run/agent-nix-helper:rw${Z_SUFFIX}" )
-    ARGS+=( -e AGENT_NIX_TOOL_HELPER=1 )
-    ARGS+=( -e AGENT_NIX_TOOL_HELPER_DIR=/run/agent-nix-helper )
+  if [ "${NEED_HELPER_MODE:-0}" = "1" ] && [ -n "${NEED_HELPER_DIR:-}" ] && [ -d "$NEED_HELPER_DIR" ]; then
+    ARGS+=( -v "$NEED_HELPER_DIR:/run/agent-nix-helper:rw${Z_SUFFIX}" )
+    ARGS+=( -e AGENT_NEED_HELPER=1 )
+    ARGS+=( -e AGENT_NEED_HELPER_DIR=/run/agent-nix-helper )
   fi
 
   case "${CONTAINER_API_MODE:-none}" in

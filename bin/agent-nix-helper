@@ -84,17 +84,26 @@ materialize_installable() {
   local installable="$1"
   local out_path=""
   local bin_path=""
+  local candidate_path=""
   local nix_features="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+  local -a out_paths=()
 
   validate_installable "$installable" || return 1
   prepare_host_env
 
-  out_path="$(env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$installable")" || return 1
-  [ -n "$out_path" ] || return 1
+  mapfile -t out_paths < <(
+    env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$installable"
+  ) || return 1
+  [ "${#out_paths[@]}" -gt 0 ] || return 1
 
-  if [ -d "$out_path/bin" ]; then
-    bin_path="$out_path/bin"
-  fi
+  out_path="${out_paths[0]}"
+  for candidate_path in "${out_paths[@]}"; do
+    if [ -d "$candidate_path/bin" ]; then
+      bin_path="$candidate_path/bin"
+      out_path="$candidate_path"
+      break
+    fi
+  done
 
   printf 'status=ok\n'
   printf 'installable=%s\n' "$installable"
