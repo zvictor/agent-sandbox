@@ -102,8 +102,8 @@ doctor_contract_source() {
 doctor_runtime_mode() {
   local runtime_mode=""
 
-  if [ "$RUNTIME" = "unavailable" ]; then
-    printf 'unavailable: neither podman nor docker is installed\n'
+  if [ -n "${RUNTIME_ERROR:-}" ]; then
+    printf 'unavailable: %s\n' "$RUNTIME_ERROR"
     return 0
   fi
 
@@ -133,18 +133,7 @@ doctor_runtime_mode() {
 }
 
 resolve_runtime_for_doctor() {
-  RUNTIME="${AGENT_RUNTIME:-${CODEX_RUNTIME:-}}"
-  if [ -n "$RUNTIME" ] && command -v "$RUNTIME" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if command -v podman >/dev/null 2>&1; then
-    RUNTIME="podman"
-  elif command -v docker >/dev/null 2>&1; then
-    RUNTIME="docker"
-  else
-    RUNTIME="unavailable"
-  fi
+  resolve_runtime_state || true
 }
 
 doctor_json_escape() {
@@ -326,7 +315,7 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ "$RUNTIME" = "unavailable" ]; then
+  if [ -n "${RUNTIME_ERROR:-}" ]; then
     doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
     printed="1"
   fi
@@ -336,7 +325,7 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ "${AGENT_CONTAINER_API:-}" = "podman-session" ] && [ "$CONTAINER_API_MODE" = "podman-session" ] && [ "$RUNTIME" = "unavailable" ]; then
+  if [ "${AGENT_CONTAINER_API:-}" = "podman-session" ] && [ "$CONTAINER_API_MODE" = "podman-session" ] && [ -n "${RUNTIME_ERROR:-}" ]; then
     doctor_note "Podman session mode is requested, but no usable runtime was detected. Install podman on the host first."
     printed="1"
   fi

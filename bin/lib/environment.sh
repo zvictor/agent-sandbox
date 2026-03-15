@@ -87,22 +87,39 @@ load_project_config() {
 }
 
 resolve_runtime() {
-  RUNTIME="${AGENT_RUNTIME:-${CODEX_RUNTIME:-}}"
-  if [ -z "$RUNTIME" ]; then
-    if command -v podman >/dev/null 2>&1; then
-      RUNTIME="podman"
-    elif command -v docker >/dev/null 2>&1; then
-      RUNTIME="docker"
-    else
-      echo "[agent] neither podman nor docker is available in PATH" >&2
-      exit 1
-    fi
-  fi
-
-  if ! command -v "$RUNTIME" >/dev/null 2>&1; then
-    echo "[agent] requested runtime '$RUNTIME' is not available" >&2
+  if ! resolve_runtime_state; then
+    echo "[agent] $RUNTIME_ERROR" >&2
     exit 1
   fi
+}
+
+resolve_runtime_state() {
+  RUNTIME_REQUESTED="${AGENT_RUNTIME:-${CODEX_RUNTIME:-}}"
+  RUNTIME_ERROR=""
+
+  if [ -n "$RUNTIME_REQUESTED" ]; then
+    RUNTIME="$RUNTIME_REQUESTED"
+    if command -v "$RUNTIME" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    RUNTIME_ERROR="requested runtime '$RUNTIME' is not available"
+    return 1
+  fi
+
+  if command -v podman >/dev/null 2>&1; then
+    RUNTIME="podman"
+    return 0
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    RUNTIME="docker"
+    return 0
+  fi
+
+  RUNTIME="unavailable"
+  RUNTIME_ERROR="neither podman nor docker is available in PATH"
+  return 1
 }
 
 resolve_lock_args() {

@@ -109,34 +109,9 @@
                   ''
                     exec "${sandboxRoot}/bin/agent" "$@"
                   ''
-                else if toolName == "codex" then
-                  ''
-                    for arg in "$@"; do
-                      if [ "$arg" = "--yolo" ]; then
-                        exec "${sandboxRoot}/bin/agent" ${toolName} "$@"
-                      fi
-                    done
-
-                    exec "${sandboxRoot}/bin/agent" ${toolName} --yolo "$@"
-                  ''
-                else if toolName == "claude" then
-                  ''
-                    for arg in "$@"; do
-                      if [ "$arg" = "--dangerously-skip-permissions" ]; then
-                        exec "${sandboxRoot}/bin/agent" ${toolName} "$@"
-                      fi
-                    done
-
-                    exec "${sandboxRoot}/bin/agent" ${toolName} --dangerously-skip-permissions "$@"
-                  ''
-                else if toolName == "opencode" then
-                  ''
-                    export OPENCODE_PERMISSION="''${OPENCODE_PERMISSION:-\"allow\"}"
-                    exec "${sandboxRoot}/bin/agent" ${toolName} "$@"
-                  ''
                 else
                   ''
-                    exec "${sandboxRoot}/bin/agent" ${toolName} "$@"
+                    exec "${sandboxRoot}/scripts/${toolName}" "$@"
                   '';
             };
         in

@@ -42,7 +42,7 @@ The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` m
 
 ### 4. Git writes are blocked by default inside the image
 
-The base image replaces `git` with a wrapper that allows common read-only subcommands and blocks side-effecting ones unless `GIT_ALLOW=1` is set. See:
+The base image replaces `git` with a wrapper that allows common read-only subcommands and blocks subcommands that can mutate the current repository's local state unless `GIT_ALLOW=1` is set. `git clone` is the one explicit exception, because it creates a separate checkout instead of mutating the current repository's index, refs, or config. See:
 
 - [`image.nix`](../nix/image.nix)
 - [`README.md`](../README.md)

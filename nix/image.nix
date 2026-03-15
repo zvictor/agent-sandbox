@@ -49,7 +49,10 @@ let
       exec ${pkgs.git}/bin/git "$@"
     fi
 
-    SAFE_COMMANDS="clone|fetch|status|diff|log|show|branch|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|config|remote|tag|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"
+    # Preserve the current repo's local state by default. `clone` is the only
+    # write-capable exception because it creates a separate checkout rather than
+    # mutating the current repository's index, refs, or config.
+    SAFE_COMMANDS="clone|status|diff|log|show|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"
     SUBCOMMAND=""
 
     while [ "$#" -gt 0 ]; do

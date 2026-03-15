@@ -223,7 +223,7 @@ These shortcut wrappers apply tool-specific defaults where supported:
 
 - `codex` adds `--yolo`
 - `claude` adds `--dangerously-skip-permissions`
-- `opencode` sets `OPENCODE_PERMISSION="allow"` if it is unset
+- `opencode` sets `OPENCODE_PERMISSION=allow` if it is unset
 
 Use `agent` if you want the underlying tool invocation without those wrapper defaults.
 
@@ -345,14 +345,17 @@ For a fuller threat model and a comparison with each supported agent's native sa
 
 ### Git inside the sandbox
 
-The sandbox replaces `git` with a wrapper that blocks side-effecting subcommands by default.
+The sandbox replaces `git` with a wrapper that blocks subcommands that can mutate the current repository's local state by default.
+
+One explicit exception exists:
+- `clone` is allowed, because it creates a separate checkout instead of mutating the current repository's index, refs, or config
 
 Allowed examples:
+- `clone`
 - `status`
 - `diff`
 - `log`
 - `show`
-- `branch`
 - `ls-files`
 - `rev-parse`
 - `blame`
