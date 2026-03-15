@@ -1,6 +1,9 @@
 .cache/
+.codex/
 .direnv/
 .local/
 .tmp*
 result
 result-*
+
+.*.env
