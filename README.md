@@ -185,6 +185,48 @@ Useful variants:
 
 `agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
 
+## Common Recipes
+
+- Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.
+- Fastest Codex workflow: run `./scripts/codex` after `./scripts/agent init`.
+- Repo-local state: set `CODEX_CONFIG=project`, `CLAUDE_CONFIG=project`, or `OPENCODE_CONFIG=project`.
+- Ephemeral run: set `<TOOL>_CONFIG=fresh`.
+- Project-local login: `./scripts/agent login codex work --config project`.
+- Missing command: run `need <command>` or `need run <command> -- <command> ...`.
+
+More complete workflows live in [docs/RECIPES.md](docs/RECIPES.md).
+
+## Guarantees And Non-Goals
+
+You can rely on these behaviors:
+- The selected workspace is mounted read-write at the same absolute path inside the sandbox.
+- Tool config mounts are explicit rather than ambient.
+- The current repo's Git state is protected from common mutating commands by default; `git clone` is the one explicit exception.
+- `agent doctor` uses the same runtime resolution rules as real execution.
+- Podman rootfs mode is only used on local Linux with `/nix/store` and no `CONTAINER_HOST`.
+
+You should not rely on these behaviors:
+- Strong protection against workspace writes.
+- A network-denied environment.
+- Credential isolation once a writable config directory is mounted.
+- Raw Docker, Podman, or Nix daemon sockets being safe capability boundaries.
+
+The full threat model is in [docs/SANDBOX-SAFETY.md](docs/SANDBOX-SAFETY.md).
+
+## Runtime Model
+
+The runtime paths are intentionally narrow:
+- `podman` uses the local Linux `--rootfs` fast path.
+- On rootless native overlay hosts that break `:O`, the launcher falls back to a cached local writable rootfs mirror and still runs Podman `--rootfs ...:O`.
+- `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`.
+
+Practical consequences:
+- Podman requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`.
+- Docker is the fallback for non-Linux hosts or hosts that do not satisfy the Podman requirements.
+- If the selected runtime does not satisfy its requirements, the launcher fails fast.
+
+For the implementation flow and file map, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Installation
 
 ### NixOS or any flake-based host
@@ -568,6 +610,13 @@ The launcher also reacts to a few standard host environment variables. These are
 - `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket when `AGENT_CONTAINER_API=podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
+
+## Reference Docs
+
+- [docs/CONFIG.md](docs/CONFIG.md): environment variables, config roots, auth selectors, and compatibility aliases
+- [docs/RECIPES.md](docs/RECIPES.md): opinionated task-oriented workflows
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): launcher flow, runtime artifacts, helpers, and file map
+- [docs/SANDBOX-SAFETY.md](docs/SANDBOX-SAFETY.md): threat model, guarantees, and safety comparison
 
 ## Low-Level Flake Outputs
 

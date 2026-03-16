@@ -4,6 +4,8 @@ Updated: 2026-03-12
 
 This document describes the safety properties of `agent-sandbox` as it exists in this repository today. It also compares those properties with the native safety models of the agent CLIs we run inside it.
 
+For setup and day-to-day usage, start with [../README.md](../README.md). For configuration details, use [CONFIG.md](CONFIG.md). For implementation flow, use [ARCHITECTURE.md](ARCHITECTURE.md).
+
 The short version: this project is an outer container sandbox with a few targeted guardrails. It is materially safer than running most of these agents directly on the host, but it is not a fully sealed execution environment. In particular, the workspace is mounted read-write, outbound network is generally available, and several host capability channels can be mounted into the container.
 
 ## What Our Sandbox Actually Enforces
