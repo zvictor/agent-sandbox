@@ -507,6 +507,8 @@ These are disabled by default because they significantly widen the sandbox bound
 
 For full generic `nix-shell` and `nix shell` workflows inside the sandbox, the launcher still prepares the writable profile and gcroot directories under `/cache`, but materializing packages that are not already present in the mounted store still requires `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`.
 
+Full flake builds such as `nix build .#rootfs` and `nix develop` also require either running on the host or starting the sandbox with `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`. Without the daemon socket, the container only has a read-only `/nix` mount and local Nix fails when it tries to create `/nix/var/nix/temproots`.
+
 For the common “give me a tool and run it” cases, the sandbox now intercepts the narrow subset automatically:
 
 ```sh
@@ -628,6 +630,8 @@ These outputs are intended for debugging or integration work, not normal interac
 Examples:
 
 ```sh
+# Run these on the host, or inside a sandbox started with
+# AGENT_ALLOW_NIX_DAEMON_SOCKET=1.
 nix build .#rootfs
 nix build .#streamImage
 ```

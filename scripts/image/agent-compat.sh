@@ -4,6 +4,7 @@ set -euo pipefail
 nix_real="@nixReal@"
 nix_shell_real="@nixShellReal@"
 sh_real="@shReal@"
+nix_daemon_socket_path="/nix/var/nix/daemon-socket/socket"
 
 usage() {
   echo "usage: agent-compat <command-not-found|nix-wrapper|nix-shell-wrapper|sh-wrapper> ..." >&2
@@ -19,6 +20,79 @@ resolve_wrapper_real() {
   fi
 
   readlink -f "$wrapper_path" 2>/dev/null || printf '%s\n' "$wrapper_path"
+}
+
+nix_local_store_writable() {
+  if [ -d /nix/var/nix/temproots ]; then
+    [ -w /nix/var/nix/temproots ]
+    return
+  fi
+
+  [ -d /nix/var/nix ] && [ -w /nix/var/nix ]
+}
+
+extract_nix_subcommand() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --extra-experimental-features|--store|--eval-store|--log-format)
+        [ "$#" -ge 2 ] || return 1
+        shift 2
+        ;;
+      --option)
+        [ "$#" -ge 3 ] || return 1
+        shift 3
+        ;;
+      --help|-h|--version|-L|--verbose|-v|--quiet|--offline|--refresh|--accept-flake-config|--show-trace|--no-write-lock-file|--print-build-logs|--impure)
+        shift
+        ;;
+      --*)
+        shift
+        ;;
+      -*)
+        shift
+        ;;
+      *)
+        printf '%s\n' "$1"
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+print_nix_store_access_error() {
+  cat >&2 <<'EOF'
+This sandbox cannot run generic Nix build commands with the local store.
+
+Reason:
+- `/nix/var/nix` is mounted read-only here, so local Nix fails creating `/nix/var/nix/temproots`
+- no host Nix daemon socket is mounted at `/nix/var/nix/daemon-socket/socket`
+
+Supported paths:
+- restart the sandbox with `AGENT_ALLOW_NIX_DAEMON_SOCKET=1` for full `nix build` / `nix develop` access
+- run the build on the host instead of inside the sandbox
+- for simple tool usage, prefer `nix shell ...`, `nix-shell -p ...`, or `need ...`, which use the narrow host helper when available
+
+Check the current setup with:
+- `./scripts/agent doctor --verbose`
+EOF
+}
+
+preflight_nix_store_access() {
+  local subcommand=""
+
+  subcommand="$(extract_nix_subcommand "$@" || true)"
+  case "$subcommand" in
+    build|develop)
+      if [ ! -S "$nix_daemon_socket_path" ] && ! nix_local_store_writable; then
+        print_nix_store_access_error
+        return 1
+      fi
+      ;;
+  esac
+
+  return 0
 }
 
 find_existing_command() {
@@ -303,6 +377,7 @@ case "$command_name" in
     exec /bin/need missing "$@"
     ;;
   nix-wrapper)
+    preflight_nix_store_access "$@" || exit 1
     handle_nix_shell "$@"
     ;;
   nix-shell-wrapper)

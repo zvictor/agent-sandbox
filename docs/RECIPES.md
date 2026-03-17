@@ -180,4 +180,6 @@ AGENT_CONTAINER_API=docker-host ./scripts/codex
 AGENT_ALLOW_NIX_DAEMON_SOCKET=1 ./scripts/codex
 ```
 
+Use the Nix daemon socket path when you need full `nix build` / `nix develop` behavior inside the sandbox. Without it, the container only has a read-only `/nix` mount and generic local-store builds will fail.
+
 These are capability bridges, not passive files. They widen the sandbox boundary materially.
