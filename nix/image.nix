@@ -191,12 +191,26 @@ let
         fi
       fi
 
-      if [ ! -x "$bin_path" ]; then
+      if [ ! -e "$bin_path" ]; then
         echo "Expected launcher missing after install: $bin_path" >&2
         exit 1
       fi
 
-      ${pkgs.bun}/bin/bun "$bin_path" "$@"
+      # Prefer the package's own executable entrypoint when it is a shell or
+      # native wrapper. Node shebang launchers should still run under Bun so
+      # the image does not need a separate nodejs runtime.
+      if [ -x "$bin_path" ]; then
+        first_line="$(sed -n '1p' "$bin_path" 2>/dev/null || true)"
+        case "$first_line" in
+          '#!'*node*|'#!'*'/env '*node*)
+            ;;
+          *)
+            exec "$bin_path" "$@"
+            ;;
+        esac
+      fi
+
+      exec ${pkgs.bun}/bin/bun "$bin_path" "$@"
     '';
 
   toolsWithName = builtins.mapAttrs (name: tool: tool // { inherit name; }) tools;
