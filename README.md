@@ -9,18 +9,34 @@ Supported tools:
 - `codemachine`
 - `omp` (`oh-my-pi`)
 
-## What This Repo Does
+# What is Agent Sandbox
 
-This repo builds and runs agent sandboxes against a host project's Nix package contract.
+`agent-sandbox` is a Nix-based containerized runtime system that executes AI coding agents (such as Codex, Claude Code, OpenCode, CodeMachine, and OMP) inside isolated container environments. It integrates with host project dependencies through Nix package contracts while maintaining safety boundaries between the agent and the host system.
 
-It exposes two low-level artifacts:
-- `rootfs`: exploded filesystem used by the Podman fast path
-- `streamImage`: OCI image used by the Docker path via `copyToDockerDaemon`
+The system provides two primary artifacts:
 
-It also exposes runnable wrappers:
-- flake packages: `agent`, `codex`, `claude`, `opencode`, `codemachine`, `omp`
-- flake apps: `#agent`, `#codex`, `#claude`, `#opencode`, `#codemachine`, `#omp`
-- scripts: `./scripts/agent`, `./scripts/codex`, `./scripts/claude`, `./scripts/opencode`, `./scripts/codemachine`, `./scripts/omp`
+* `rootfs`: An exploded filesystem used by Podman's fast `--rootfs` mode on Linux
+* `streamImage`: An OCI image loaded into Docker via `copyToDockerDaemon`
+
+And multiple user-facing entry points:
+
+* **CLI wrapper**: `bin/agent` dispatcher that handles commands like `init`, `doctor`, `login`, `sessions`, and `run`
+* **Tool-specific shortcuts**: Direct executables for `codex`, `claude`, `opencode`, `codemachine`, and `omp`
+* **Nix flake packages**: Installable via `nix run github:zvictor/agent-sandbox#<tool>`
+
+# Why agent-sandbox exists
+
+AI coding agents need access to development tools, project dependencies, and the workspace to function effectively. However, running them directly on the host exposes the entire system to potential mistakes or unintended side effects from agent-generated code. Traditional approaches face a dilemma: either sacrifice safety for functionality or sacrifice functionality for safety.
+
+agent-sandbox resolves this tension by:
+
+* **Isolating execution context**: Agents run inside containers with dropped capabilities, resource limits, and explicit filesystem mounts rather than ambient host access
+* **Preserving workspace access**: The project directory is mounted at its real path, allowing agents to work naturally while limiting scope
+* **Integrating project dependencies**: Nix contracts (`nix/packages.nix` or `shell.nix`) make host project tooling available inside the container without manual duplication
+Centralizing safety defaults**: Tool-specific wrappers apply consistent safety settings (e.g., `codex --yolo`, `claude --dangerously-skip-permissions`) so the container boundary becomes the primary protection layer
+* **Supporting container workflows**: Optional container API access (via `podman-session` or raw sockets) enables Testcontainers and development workflows that agents might need
+
+The result is a practical middle ground: stronger isolation than running agents directly on the host, while remaining more functional than fully sealed sandboxes that break agent workflows.
 
 ## Quick Start
 
