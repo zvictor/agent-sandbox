@@ -120,6 +120,15 @@ test_kvm_smoke_script() (
   assert_contains "$script_file" 'MICROVM_TEST_TIMEOUT'
 )
 
+test_bun_latest_lookup_uses_tool_cache() (
+  set -euo pipefail
+
+  local image_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+
+  assert_contains "$image_file" 'latest_version="$((cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun info ${pkg} version) 2>/dev/null | head -n1 || true)"'
+)
+
 run_test() {
   local name="$1"
   shift
@@ -134,6 +143,7 @@ main() {
   run_test "git wrapper policy" test_git_wrapper_policy
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script
+  run_test "bun latest lookup uses tool cache" test_bun_latest_lookup_uses_tool_cache
 
   if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
     run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"

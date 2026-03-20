@@ -174,7 +174,7 @@ let
           echo "${pkg} is cached as version ''${current_version:-unknown}" >&2
         fi
 
-        latest_version="$(${pkgs.bun}/bin/bun info ${pkg} version 2>/dev/null | head -n1 || true)"
+        latest_version="$((cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun info ${pkg} version) 2>/dev/null | head -n1 || true)"
         if [ -z "$latest_version" ]; then
           if [ -z "$current_version" ]; then
             echo "Could not resolve latest ${pkg}; installing unpinned package..." >&2
