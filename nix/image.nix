@@ -41,6 +41,13 @@ let
     ln -s ${pkgs.bashInteractive}/bin/bash "$out/bin/bash"
   '';
 
+  bubblewrapCompat = pkgs.runCommand "bubblewrap-compat" { } ''
+    mkdir -p "$out/usr/bin"
+    # Codex looks for the system bubblewrap binary at /usr/bin/bwrap when its
+    # native sandbox is enabled.
+    ln -s ${pkgs.bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"
+  '';
+
   gitWrapper = pkgs.writeShellScriptBin "git" ''
     #!/bin/sh
     set -e
@@ -244,6 +251,7 @@ let
       pkgs.nix-direnv
       direnvEtc
       bashBin
+      bubblewrapCompat
       pkgs.coreutils
       pkgs.gnugrep
       pkgs.gnused

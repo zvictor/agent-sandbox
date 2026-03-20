@@ -129,6 +129,18 @@ test_bun_latest_lookup_uses_tool_cache() (
   assert_contains "$image_file" 'latest_version="$((cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun info ${pkg} version) 2>/dev/null | head -n1 || true)"'
 )
 
+test_codex_bubblewrap_compat_path() (
+  set -euo pipefail
+
+  local image_file readme_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+  readme_file="$(cat "$REPO_ROOT/README.md")"
+
+  assert_contains "$image_file" 'bubblewrapCompat = pkgs.runCommand "bubblewrap-compat"'
+  assert_contains "$image_file" 'ln -s ${pkgs.bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"'
+  assert_contains "$readme_file" '`agent codex` can now use Codex'\''s native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.'
+)
+
 run_test() {
   local name="$1"
   shift
@@ -144,6 +156,7 @@ main() {
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script
   run_test "bun latest lookup uses tool cache" test_bun_latest_lookup_uses_tool_cache
+  run_test "codex bubblewrap compat path" test_codex_bubblewrap_compat_path
 
   if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
     run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"
