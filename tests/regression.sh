@@ -93,6 +93,33 @@ test_git_wrapper_policy() (
   assert_not_contains "$image_file" '|tag|'
 )
 
+test_device_passthrough_support() (
+  set -euo pipefail
+
+  local runtime_file config_file readme_file
+  runtime_file="$(cat "$REPO_ROOT/bin/lib/container_runtime.sh")"
+  config_file="$(cat "$REPO_ROOT/docs/CONFIG.md")"
+  readme_file="$(cat "$REPO_ROOT/README.md")"
+
+  assert_contains "$runtime_file" 'append_split_arg_values --device "$device_specs"'
+  assert_contains "$runtime_file" 'AGENT_ALLOW_KVM'
+  assert_contains "$config_file" '`AGENT_EXTRA_DEVICES`'
+  assert_contains "$config_file" '`AGENT_ALLOW_KVM=1`'
+  assert_contains "$readme_file" '`AGENT_EXTRA_DEVICES`'
+)
+
+test_kvm_smoke_script() (
+  set -euo pipefail
+
+  local script_file
+  script_file="$(cat "$REPO_ROOT/tests/kvm-smoke.sh")"
+
+  assert_contains "$script_file" 'need inject qemu'
+  assert_contains "$script_file" '-accel kvm'
+  assert_contains "$script_file" '-M microvm'
+  assert_contains "$script_file" 'MICROVM_TEST_TIMEOUT'
+)
+
 run_test() {
   local name="$1"
   shift
@@ -105,6 +132,12 @@ main() {
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "git wrapper policy" test_git_wrapper_policy
+  run_test "device passthrough support" test_device_passthrough_support
+  run_test "kvm smoke script" test_kvm_smoke_script
+
+  if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
+    run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"
+  fi
 }
 
 main "$@"

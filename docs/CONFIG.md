@@ -189,7 +189,18 @@ The sandbox also prefers compatibility shims over sandbox-specific instructions 
 | `AGENT_EXTRA_ENV` | unset | Extra `KEY=VALUE` pairs injected into the container |
 | `AGENT_AUTO_MOUNT_DIRS` | unset | Auto-mount ancestor directories by name |
 | `AGENT_EXTRA_MOUNTS` | unset | Raw mount specs in `host:container[:options]` format |
+| `AGENT_EXTRA_DEVICES` | unset | Raw device specs passed through as `--device` |
 | `AGENT_PASS_ENV_PREFIXES` | built-in list | Prefixes forwarded from the host environment |
+
+Compatibility alias:
+- `AGENT_ALLOW_KVM=1`: appends `--device /dev/kvm`
+
+Use `AGENT_EXTRA_DEVICES` when a workload needs explicit device nodes inside the sandbox, for example nested VM tests on hosts that expose KVM:
+
+```sh
+AGENT_ALLOW_KVM=1 ./scripts/codex
+AGENT_EXTRA_DEVICES=/dev/kvm ./scripts/codex
+```
 
 Default forwarded prefixes include:
 - `OPENAI_`
@@ -243,3 +254,4 @@ These are still accepted, but they are not the preferred interface:
 - `OMP_CODING_AGENT_DIR`: alias for `PI_CODING_AGENT_DIR`
 - `AGENT_ALLOW_PODMAN_SOCKET=1`: alias for `AGENT_CONTAINER_API=podman-host`
 - `AGENT_ALLOW_DOCKER_SOCKET=1`: alias for `AGENT_CONTAINER_API=docker-host`
+- `AGENT_ALLOW_KVM=1`: alias for `AGENT_EXTRA_DEVICES=/dev/kvm`

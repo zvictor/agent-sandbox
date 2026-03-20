@@ -465,6 +465,21 @@ append_passthrough_env_args() {
   done < <(env)
 }
 
+append_extra_device_args() {
+  local device_specs="${AGENT_EXTRA_DEVICES:-}"
+
+  if [ "${AGENT_ALLOW_KVM:-0}" = "1" ]; then
+    if [ -n "$device_specs" ]; then
+      device_specs="/dev/kvm
+$device_specs"
+    else
+      device_specs="/dev/kvm"
+    fi
+  fi
+
+  append_split_arg_values --device "$device_specs"
+}
+
 resolve_tool_config_roots() {
   OMP_AGENT_HOST_DIR="${PI_CODING_AGENT_DIR:-${OMP_CODING_AGENT_DIR:-$HOST_HOME/.omp/agent}}"
   OMP_HOST_CONFIG="$(dirname "$OMP_AGENT_HOST_DIR")"
@@ -524,6 +539,7 @@ build_container_args() {
   append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
   append_auto_mount_dir_args
   append_split_arg_values -v "${AGENT_EXTRA_MOUNTS:-}"
+  append_extra_device_args
   append_passthrough_env_args
   resolve_tool_config_roots
   mount_tool_configs

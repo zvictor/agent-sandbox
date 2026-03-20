@@ -563,7 +563,15 @@ need inject pnpm
 - `AGENT_EXTRA_ENV`: extra `KEY=VALUE` pairs injected into the container
 - `AGENT_AUTO_MOUNT_DIRS`: comma- or newline-separated directory names to auto-mount from ancestor directories
 - `AGENT_EXTRA_MOUNTS`: extra raw mount specs in `host:container[:options]` format
+- `AGENT_EXTRA_DEVICES`: comma- or newline-separated device specs passed as `--device`
 - `AGENT_PASS_ENV_PREFIXES`: comma- or newline-separated environment variable prefixes to forward
+
+For nested VM workloads on hosts that expose KVM, prefer explicit device passthrough instead of relying on TCG fallback:
+
+```sh
+AGENT_ALLOW_KVM=1 ./scripts/codex
+AGENT_EXTRA_DEVICES=/dev/kvm ./scripts/codex
+```
 
 ### Tool config overrides
 
@@ -603,6 +611,7 @@ These are still accepted by the launcher, but they are not the preferred interfa
 - `OMP_CODING_AGENT_DIR`: compatibility alias for `PI_CODING_AGENT_DIR`
 - `AGENT_ALLOW_PODMAN_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=podman-host`
 - `AGENT_ALLOW_DOCKER_SOCKET=1`: compatibility alias for `AGENT_CONTAINER_API=docker-host`
+- `AGENT_ALLOW_KVM=1`: compatibility alias for `AGENT_EXTRA_DEVICES=/dev/kvm`
 
 ## Ambient Host Environment
 
