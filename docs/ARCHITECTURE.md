@@ -143,6 +143,8 @@ This is safer than raw host engine sockets, but it is still a capability bridge.
 
 The final container typically receives:
 - the workspace at the same absolute path, read-write
+- for Codex, the resolved config root is also exposed at `$WORKSPACE_PATH/.codex` so its native sandbox can reuse the same config path without creating a new repo-local directory
+- when the workspace is inside a git repository, the git top-level plus any separate git metadata directories (`--git-common-dir` and `--absolute-git-dir`) needed to make linked worktrees resolve correctly
 - `/cache` for tool installs and helper state
 - `/nix/store` read-only when present
 - selected tool config directories

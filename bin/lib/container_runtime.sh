@@ -7,6 +7,7 @@ mount_engine() {
   local auth_env_name="$6"
   local auth_base_dir="$7"
   local active_credentials_file="$8"
+  local workspace_alias_path="${9:-}"
   local mount_source=""
   local resolved_auth_path=""
   local selector_value=""
@@ -27,6 +28,9 @@ mount_engine() {
   fi
 
   ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
+  if [ -n "$workspace_alias_path" ] && [ "$workspace_alias_path" != "$mount_source" ]; then
+    ARGS+=( -v "$mount_source:$workspace_alias_path:rw${Z_SUFFIX}" )
+  fi
 
   if [ -n "$auth_env_name" ]; then
     selector_value="${!auth_env_name:-}"
@@ -206,7 +210,8 @@ mount_standard_engine() {
     codex)
       mount_engine "codex" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG" "/cache/.codex" \
         "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
-        "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json"
+        "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json" \
+        "$WORKSPACE_PATH/.codex"
       ;;
     opencode)
       mount_engine "opencode" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG" "/cache/.config/opencode" \
@@ -293,7 +298,6 @@ build_base_container_args() {
     --pids-limit="${AGENT_PIDS_LIMIT:-512}"
     -w "$WORKSPACE_PATH"
     -v "$TOOL_CACHE_DIR:/cache:rw${Z_SUFFIX}"
-    -v "$WORKSPACE_PATH:$WORKSPACE_PATH:rw${Z_SUFFIX}"
     -e HOME=/cache
     -e XDG_CACHE_HOME=/cache
     -e TOOL_CACHE=/cache
@@ -410,20 +414,78 @@ append_dev_env_args() {
   fi
 }
 
-append_workspace_git_args() {
-  if [ -f "$WORKSPACE_PATH/.git" ]; then
-    GITDIR_REL="$(sed -n 's/^gitdir:[[:space:]]*//p' "$WORKSPACE_PATH/.git" | head -n1 || true)"
-    if [ -n "$GITDIR_REL" ]; then
-      if [ "${GITDIR_REL#/}" != "$GITDIR_REL" ]; then
-        MAIN_GIT_DIR="$GITDIR_REL"
-      else
-        MAIN_GIT_DIR="$(cd "$WORKSPACE_PATH" && cd "$GITDIR_REL" && pwd -P)"
-      fi
-      if [ -d "$MAIN_GIT_DIR" ]; then
-        ARGS+=( -v "$MAIN_GIT_DIR:$MAIN_GIT_DIR:rw${Z_SUFFIX}" )
-      fi
+resolve_workspace_git_path() {
+  local workspace_path="$1"
+  local git_path="$2"
+
+  [ -n "$git_path" ] || return 1
+  if [ "${git_path#/}" != "$git_path" ]; then
+    printf '%s
+' "$git_path"
+    return 0
+  fi
+
+  (
+    cd "$workspace_path" &&
+    cd "$git_path" &&
+    pwd -P
+  )
+}
+
+path_is_same_or_child() {
+  local path="$1"
+  local parent="$2"
+
+  [ "$path" = "$parent" ] && return 0
+  case "$path" in
+    "$parent"/*) return 0 ;;
+  esac
+  return 1
+}
+
+append_same_path_mount_arg() {
+  local host_dir="$1"
+  local resolved_dir=""
+  local mounted_dir=""
+
+  [ -d "$host_dir" ] || return 0
+  resolved_dir="$(cd "$host_dir" && pwd -P)"
+
+  for mounted_dir in "${SAME_PATH_MOUNT_DIRS[@]}"; do
+    if path_is_same_or_child "$resolved_dir" "$mounted_dir"; then
+      return 0
+    fi
+  done
+
+  SAME_PATH_MOUNT_DIRS+=("$resolved_dir")
+  ARGS+=( -v "$resolved_dir:$resolved_dir:rw${Z_SUFFIX}" )
+}
+
+append_workspace_mount_args() {
+  local workspace_git_top=""
+  local workspace_git_dir=""
+  local workspace_git_common_dir=""
+
+  SAME_PATH_MOUNT_DIRS=()
+
+  if workspace_git_top="$(git -C "$WORKSPACE_PATH" rev-parse --show-toplevel 2>/dev/null)"; then
+    # Git discovery from a subdirectory needs the repo top-level, and linked
+    # worktrees also need access to the shared common metadata directory.
+    append_same_path_mount_arg "$workspace_git_top"
+
+    workspace_git_common_dir="$(git -C "$WORKSPACE_PATH" rev-parse --git-common-dir 2>/dev/null || true)"
+    workspace_git_common_dir="$(resolve_workspace_git_path "$WORKSPACE_PATH" "$workspace_git_common_dir" 2>/dev/null || true)"
+    if [ -n "$workspace_git_common_dir" ]; then
+      append_same_path_mount_arg "$workspace_git_common_dir"
+    fi
+
+    workspace_git_dir="$(git -C "$WORKSPACE_PATH" rev-parse --absolute-git-dir 2>/dev/null || true)"
+    if [ -n "$workspace_git_dir" ]; then
+      append_same_path_mount_arg "$workspace_git_dir"
     fi
   fi
+
+  append_same_path_mount_arg "$WORKSPACE_PATH"
 }
 
 append_auto_mount_dir_args() {
@@ -453,6 +515,15 @@ append_passthrough_env_args() {
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
   while IFS='=' read -r key value; do
+    case "$key" in
+      CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH)
+        # These are launcher selectors. Once resolved to mounted config/auth
+        # paths, forwarding them into the tool can make the inner CLI
+        # reinterpret them against the sandbox filesystem.
+        continue
+        ;;
+    esac
+
     while IFS= read -r prefix; do
       [ -z "$prefix" ] && continue
       case "$key" in
@@ -534,7 +605,7 @@ build_container_args() {
   append_runtime_identity_args
   append_host_socket_args
   append_dev_env_args
-  append_workspace_git_args
+  append_workspace_mount_args
 
   append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
   append_auto_mount_dir_args

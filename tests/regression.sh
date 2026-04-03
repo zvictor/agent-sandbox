@@ -33,6 +33,36 @@ assert_not_contains() {
   esac
 }
 
+workspace_mount_args_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  WORKSPACE_PATH="$workspace_path"
+  Z_SUFFIX=""
+  ARGS=()
+  append_workspace_mount_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+passthrough_env_args_for() (
+  set -euo pipefail
+
+  split_csv_or_lines() {
+    local value="$1"
+    printf '%s\n' "$value" | tr ',' '\n' | sed '/^[[:space:]]*$/d'
+  }
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  ARGS=()
+  append_passthrough_env_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
 test_opencode_wrapper_default() (
   set -euo pipefail
 
@@ -141,6 +171,153 @@ test_codex_bubblewrap_compat_path() (
   assert_contains "$readme_file" '`agent codex` can now use Codex'\''s native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.'
 )
 
+test_workspace_mounts_for_regular_repo_workspace_override() (
+  set -euo pipefail
+
+  local tmp_dir repo workspace git_top output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  repo="$tmp_dir/repo"
+  workspace="$repo/subdir"
+  mkdir -p "$workspace"
+  git -C "$repo" init -q
+  printf 'hello\n' > "$repo/file.txt"
+  printf 'nested\n' > "$workspace/nested.txt"
+  git -C "$repo" add file.txt subdir/nested.txt
+  git -C "$repo" -c user.name=test -c user.email=test@example.com commit -qm init
+
+  git_top="$(git -C "$workspace" rev-parse --show-toplevel)"
+  output="$(workspace_mount_args_for "$workspace")"
+
+  assert_contains "$output" "$git_top:$git_top:rw"
+)
+
+test_workspace_mounts_for_linked_worktree_workspace_override() (
+  set -euo pipefail
+
+  local tmp_dir repo workspace worktree git_top git_common_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  repo="$tmp_dir/repo"
+  worktree="$tmp_dir/worktree"
+  mkdir -p "$repo/subdir"
+  git -C "$repo" init -q
+  printf 'hello\n' > "$repo/file.txt"
+  printf 'nested\n' > "$repo/subdir/nested.txt"
+  git -C "$repo" add file.txt subdir/nested.txt
+  git -C "$repo" -c user.name=test -c user.email=test@example.com commit -qm init
+  git -C "$repo" worktree add -q "$worktree" -b feature
+
+  workspace="$worktree/subdir"
+  git_top="$(git -C "$workspace" rev-parse --show-toplevel)"
+  git_common_dir="$(
+    cd "$workspace" &&
+    cd "$(git -C "$workspace" rev-parse --git-common-dir)" &&
+    pwd -P
+  )"
+  output="$(workspace_mount_args_for "$workspace")"
+
+  [ "$git_common_dir" != "$git_top" ] || fail "expected linked worktree common dir to differ from worktree top-level"
+  assert_contains "$output" "$git_top:$git_top:rw"
+  assert_contains "$output" "$git_common_dir:$git_common_dir:rw"
+)
+
+test_config_selectors_are_not_passthrough_env() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    env \
+      CODEX_CONFIG=project \
+      CODEX_AUTH=work \
+      OPENCODE_CONFIG=fresh \
+      CLAUDE_AUTH=other \
+      CODEX_FOO=bar \
+      GIT_ALLOW=1 \
+      REPO_ROOT="$REPO_ROOT" \
+      bash -lc '
+        split_csv_or_lines() {
+          local value="$1"
+          printf "%s\n" "$value" | tr "," "\n" | sed "/^[[:space:]]*$/d"
+        }
+        source "$REPO_ROOT/bin/lib/container_runtime.sh"
+        ARGS=()
+        append_passthrough_env_args
+        printf "%s\n" "${ARGS[@]}"
+      '
+  )"
+
+  assert_not_contains "$output" "CODEX_CONFIG=project"
+  assert_not_contains "$output" "CODEX_AUTH=work"
+  assert_not_contains "$output" "OPENCODE_CONFIG=fresh"
+  assert_not_contains "$output" "CLAUDE_AUTH=other"
+  assert_contains "$output" "CODEX_FOO=bar"
+  assert_contains "$output" "GIT_ALLOW=1"
+)
+
+codex_mount_args_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local config_root="$2"
+
+  split_csv_or_lines() {
+    local value="$1"
+    printf '%s
+' "$value" | tr ',' '
+' | sed '/^[[:space:]]*$/d'
+  }
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  WORKSPACE_PATH="$workspace_path"
+  CODEX_CONFIG_MODE=host
+  CODEX_HOST_CONFIG="$config_root"
+  CODEX_AUTH_BASE=""
+  Z_SUFFIX=""
+  ARGS=()
+  mount_standard_engine codex
+
+  printf '%s
+' "${ARGS[@]}"
+)
+
+test_codex_workspace_config_alias_mount() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  mkdir -p "$workspace" "$config_root"
+
+  output="$(codex_mount_args_for "$workspace" "$config_root")"
+
+  assert_contains "$output" "$config_root:/cache/.codex:rw"
+  assert_contains "$output" "$config_root:$workspace/.codex:rw"
+)
+
+
+test_codex_workspace_config_alias_mount_skips_duplicate_path() (
+  set -euo pipefail
+
+  local tmp_dir workspace output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace/.codex"
+
+  output="$(codex_mount_args_for "$workspace" "$workspace/.codex")"
+
+  assert_contains "$output" "$workspace/.codex:/cache/.codex:rw"
+  assert_not_contains "$output" "$workspace/.codex:$workspace/.codex:rw"
+)
+
 run_test() {
   local name="$1"
   shift
@@ -157,6 +334,11 @@ main() {
   run_test "kvm smoke script" test_kvm_smoke_script
   run_test "bun latest lookup uses tool cache" test_bun_latest_lookup_uses_tool_cache
   run_test "codex bubblewrap compat path" test_codex_bubblewrap_compat_path
+  run_test "workspace mounts for regular repo override" test_workspace_mounts_for_regular_repo_workspace_override
+  run_test "workspace mounts for linked worktree override" test_workspace_mounts_for_linked_worktree_workspace_override
+  run_test "config selectors are not passthrough env" test_config_selectors_are_not_passthrough_env
+  run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
+  run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
 
   if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
     run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"
