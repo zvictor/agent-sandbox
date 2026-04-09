@@ -359,6 +359,7 @@ EOF_SSH
 prepare_ssh_runtime_dir() {
   local host_ssh_dir="$HOST_HOME/.ssh"
   local stable_sock_path="/run/host-services/ssh-auth.sock"
+  local codex_ssh_alias_path=""
   local host_sock=""
   local agent_config_path=""
 
@@ -380,10 +381,11 @@ prepare_ssh_runtime_dir() {
     fi
 
     if [ "$TOOL" = "codex" ] && [ -n "${WORKSPACE_PATH:-}" ]; then
+      codex_ssh_alias_path="$WORKSPACE_PATH/.agent-sandbox-codex-ssh"
       if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
-        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$WORKSPACE_PATH/.codex/agent-ssh" "$WORKSPACE_PATH/.codex/agent-ssh/agent.sock" 1
+        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$codex_ssh_alias_path" "$codex_ssh_alias_path/agent.sock" 1
       else
-        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$WORKSPACE_PATH/.codex/agent-ssh" "$WORKSPACE_PATH/.codex/agent-ssh/agent.sock" 0
+        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$codex_ssh_alias_path" "$codex_ssh_alias_path/agent.sock" 0
       fi
     fi
   fi
@@ -583,7 +585,7 @@ shell_single_quote() {
 
 append_codex_ssh_alias_args() {
   local host_sock=""
-  local codex_ssh_alias="$WORKSPACE_PATH/.codex/agent-ssh"
+  local codex_ssh_alias="$WORKSPACE_PATH/.agent-sandbox-codex-ssh"
   local codex_ssh_sock="$codex_ssh_alias/agent.sock"
   local codex_ssh_config="$codex_ssh_alias/config.codex"
   local quoted_codex_ssh_config=""

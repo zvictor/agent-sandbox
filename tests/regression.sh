@@ -374,13 +374,14 @@ test_ssh_agent_mount_support() (
 test_ssh_runtime_generation() (
   set -euo pipefail
 
-  local tmp_dir host_home ssh_dir runtime_dir wrapper_config codex_wrapper_config host_config include_config known_hosts_file mount_args codex_alias_args workspace
+  local tmp_dir host_home ssh_dir runtime_dir wrapper_config codex_wrapper_config host_config include_config known_hosts_file mount_args codex_alias_args workspace codex_ssh_alias
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
   host_home="$tmp_dir/host-home"
   ssh_dir="$host_home/.ssh"
   workspace="$tmp_dir/workspace"
+  codex_ssh_alias="$workspace/.agent-sandbox-codex-ssh"
   mkdir -p "$ssh_dir/config.d" "$tmp_dir/tool-cache" "$workspace/.codex"
 
   cat > "$ssh_dir/config" <<EOF
@@ -418,9 +419,9 @@ EOF
   assert_contains "$wrapper_config" "IdentityAgent /run/host-services/ssh-auth.sock"
   assert_contains "$wrapper_config" "UserKnownHostsFile /cache/.ssh/known_hosts /cache/.ssh/known_hosts2"
   assert_contains "$wrapper_config" "Include /cache/.ssh/config.host"
-  assert_contains "$codex_wrapper_config" "IdentityAgent $workspace/.codex/agent-ssh/agent.sock"
-  assert_contains "$codex_wrapper_config" "UserKnownHostsFile $workspace/.codex/agent-ssh/known_hosts $workspace/.codex/agent-ssh/known_hosts2"
-  assert_contains "$codex_wrapper_config" "Include $workspace/.codex/agent-ssh/config.host"
+  assert_contains "$codex_wrapper_config" "IdentityAgent $codex_ssh_alias/agent.sock"
+  assert_contains "$codex_wrapper_config" "UserKnownHostsFile $codex_ssh_alias/known_hosts $codex_ssh_alias/known_hosts2"
+  assert_contains "$codex_wrapper_config" "Include $codex_ssh_alias/config.host"
   assert_contains "$host_config" "IdentityAgent ~/.1password/agent.sock"
   assert_contains "$host_config" "ProxyCommand cloudflared access ssh --hostname %h"
   assert_contains "$host_config" "Include /cache/.ssh/config.d/*.conf"
@@ -429,10 +430,10 @@ EOF
   [ ! -e "$runtime_dir/id_ed25519" ] || fail "expected private key to be excluded from ssh runtime"
   [ -f "$runtime_dir/id_ed25519.pub" ] || fail "expected public key to be copied into ssh runtime"
   assert_contains "$mount_args" "$runtime_dir:/cache/.ssh:ro"
-  assert_contains "$codex_alias_args" "$runtime_dir:$workspace/.codex/agent-ssh:ro"
-  assert_contains "$codex_alias_args" "/tmp/host-ssh-agent.sock:$workspace/.codex/agent-ssh/agent.sock:rw"
-  assert_contains "$codex_alias_args" "SSH_AUTH_SOCK=$workspace/.codex/agent-ssh/agent.sock"
-  assert_contains "$codex_alias_args" "GIT_SSH_COMMAND=ssh -F '$workspace/.codex/agent-ssh/config.codex'"
+  assert_contains "$codex_alias_args" "$runtime_dir:$codex_ssh_alias:ro"
+  assert_contains "$codex_alias_args" "/tmp/host-ssh-agent.sock:$codex_ssh_alias/agent.sock:rw"
+  assert_contains "$codex_alias_args" "SSH_AUTH_SOCK=$codex_ssh_alias/agent.sock"
+  assert_contains "$codex_alias_args" "GIT_SSH_COMMAND=ssh -F '$codex_ssh_alias/config.codex'"
 )
 
 codex_mount_args_for() (
