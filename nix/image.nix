@@ -1,4 +1,4 @@
-{ pkgs, devPackages, nix2containerPkgs }:
+{ pkgs, unstablePkgs, devPackages, nix2containerPkgs }:
 let
   isShadowedImagePackage =
     pkg:
@@ -289,7 +289,7 @@ let
         "CODEX_CACHE=/cache"
         "TESTCONTAINERS_RYUK_DISABLED=true"
         "SHELL=/bin/bash"
-        "NIX_PATH=nixpkgs=${pkgs.path}"
+        "NIX_PATH=nixpkgs=${unstablePkgs.path}"
         "NIX_CONFIG=sandbox = false\nsubstituters = https://cache.nixos.org\ntrusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY"
       ];
     };

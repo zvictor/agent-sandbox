@@ -51,6 +51,7 @@
 
           images = import ./nix/image.nix {
             inherit pkgs devPackages;
+            unstablePkgs = upkgs;
             nix2containerPkgs = nix2container.packages.${system};
           };
 

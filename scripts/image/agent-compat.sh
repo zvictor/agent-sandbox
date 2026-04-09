@@ -5,6 +5,7 @@ nix_real="@nixReal@"
 nix_shell_real="@nixShellReal@"
 sh_real="@shReal@"
 nix_daemon_socket_path="/nix/var/nix/daemon-socket/socket"
+default_nixpkgs_flake_ref="github:NixOS/nixpkgs/nixos-unstable"
 
 usage() {
   echo "usage: agent-compat <command-not-found|nix-wrapper|nix-shell-wrapper|sh-wrapper> ..." >&2
@@ -278,6 +279,7 @@ handle_nix_shell() {
 handle_legacy_nix_shell() {
   local packages=()
   local shell_command=""
+  local default_installable_prefix="${default_nixpkgs_flake_ref}#"
 
   [ "$#" -gt 0 ] || exec "$nix_shell_real"
   [ "$1" = "-p" ] || exec "$nix_shell_real" "$@"
@@ -294,7 +296,7 @@ handle_legacy_nix_shell() {
       --)
         shift
         [ "$#" -gt 0 ] || exec "$nix_shell_real" -p "${packages[@]}" --
-        run_with_installables "${packages[@]/#/nixpkgs#}" -- "$@"
+        run_with_installables "${packages[@]/#/$default_installable_prefix}" -- "$@"
         ;;
       -*)
         exec "$nix_shell_real" -p "${packages[@]}" "$@"
@@ -309,11 +311,11 @@ handle_legacy_nix_shell() {
   [ "${#packages[@]}" -gt 0 ] || exec "$nix_shell_real"
   if [ -n "$shell_command" ]; then
     local path_prefix=""
-    path_prefix="$(build_path_prefix "${packages[@]/#/nixpkgs#}")" || exit 1
+    path_prefix="$(build_path_prefix "${packages[@]/#/$default_installable_prefix}")" || exit 1
     PATH="$path_prefix:$PATH" exec /bin/sh -lc "$shell_command"
   fi
 
-  shell_with_installables "${packages[@]/#/nixpkgs#}"
+  shell_with_installables "${packages[@]/#/$default_installable_prefix}"
 }
 
 handle_sh_wrapper() {

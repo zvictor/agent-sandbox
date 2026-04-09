@@ -168,6 +168,8 @@ need run pnpm -- pnpm -v
 need inject pnpm
 ```
 
+Bare `need <command>` lookups use `nixos-unstable` by default. Use `nixpkgs#...` when you explicitly want the stable channel, and keep using any other explicit ref exactly as passed.
+
 The sandbox also prefers compatibility shims over sandbox-specific instructions when possible:
 - `nix shell <installable> --command ...`
 - `nix-shell -p <pkg> --run ...`

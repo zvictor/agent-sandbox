@@ -507,6 +507,20 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/run/host-services"'
 )
 
+test_need_defaults_to_unstable_nixpkgs() (
+  set -euo pipefail
+
+  local need_file image_file compat_file
+  need_file="$(cat "$REPO_ROOT/scripts/image/need.sh")"
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+  compat_file="$(cat "$REPO_ROOT/scripts/image/agent-compat.sh")"
+
+  assert_contains "$need_file" 'DEFAULT_NIXPKGS_FLAKE_REF="github:NixOS/nixpkgs/nixos-unstable"'
+  assert_contains "$need_file" 'resolved_installable="${DEFAULT_NIXPKGS_FLAKE_REF}#$best_attr"'
+  assert_contains "$compat_file" 'default_nixpkgs_flake_ref="github:NixOS/nixpkgs/nixos-unstable"'
+  assert_contains "$image_file" '"NIX_PATH=nixpkgs=${unstablePkgs.path}"'
+)
+
 run_test() {
   local name="$1"
   shift
@@ -532,6 +546,7 @@ main() {
   run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
   run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
   run_test "image includes openssh" test_image_includes_openssh
+  run_test "need defaults to unstable nixpkgs" test_need_defaults_to_unstable_nixpkgs
 
   if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
     run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"

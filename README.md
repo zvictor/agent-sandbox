@@ -556,7 +556,7 @@ need run podman -- podman --version
 need inject pnpm
 ```
 
-The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent.
+The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent. Bare `need <command>` lookups use `nixos-unstable` by default; use `nixpkgs#...` when you explicitly want the stable channel.
 
 If the nix command index is missing, the sandbox now starts downloading it in the background when the agent boots. That bootstrap is non-blocking, so the first interaction still runs immediately; `need update-index` remains available as the explicit refresh command.
 

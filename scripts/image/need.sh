@@ -16,6 +16,7 @@ BOOTSTRAP_LOCK_DIR="$INDEX_DIR/.bootstrap.lock"
 BOOTSTRAP_PID_FILE="$INDEX_DIR/.bootstrap.pid"
 BOOTSTRAP_LOG_FILE="$INDEX_DIR/bootstrap.log"
 INDEX_BOOTSTRAP_STATE="unknown"
+DEFAULT_NIXPKGS_FLAKE_REF="github:NixOS/nixpkgs/nixos-unstable"
 
 usage() {
   cat >&2 <<'EOF'
@@ -31,7 +32,8 @@ usage:
 notes:
   - bare names like 'pnpm' are resolved through nix-locate when the local command
     index is available
-  - explicit installables like 'nixpkgs#pnpm' bypass lookup
+  - bare names default to nixos-unstable
+  - explicit installables like 'nixpkgs#pnpm' bypass lookup and use the ref you passed
 EOF
   exit 1
 }
@@ -226,35 +228,35 @@ guess_installable_for_command() {
 
   case "$command_name" in
     python|python3)
-      printf 'nixpkgs#python3\n'
+      printf '%s#python3\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     pip|pip3)
-      printf 'nixpkgs#python3Packages.pip\n'
+      printf '%s#python3Packages.pip\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     node|npm)
-      printf 'nixpkgs#nodejs\n'
+      printf '%s#nodejs\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     pnpm)
-      printf 'nixpkgs#pnpm\n'
+      printf '%s#pnpm\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     go)
-      printf 'nixpkgs#go\n'
+      printf '%s#go\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     cargo|rustc)
-      printf 'nixpkgs#cargo\n'
+      printf '%s#cargo\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     docker)
-      printf 'nixpkgs#docker-client\n'
+      printf '%s#docker-client\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     docker-compose)
-      printf 'nixpkgs#docker-compose\n'
+      printf '%s#docker-compose\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     podman)
-      printf 'nixpkgs#podman\n'
+      printf '%s#podman\n' "$DEFAULT_NIXPKGS_FLAKE_REF"
       ;;
     *)
       if printf '%s\n' "$command_name" | grep -Eq '^[A-Za-z0-9._+-]+$'; then
-        printf 'nixpkgs#%s\n' "$command_name"
+        printf '%s#%s\n' "$DEFAULT_NIXPKGS_FLAKE_REF" "$command_name"
       else
         return 1
       fi
@@ -411,7 +413,7 @@ resolve_target() {
 
   if mapfile -t candidates < <(sorted_candidates "$target" || true) && [ "${#candidates[@]}" -gt 0 ]; then
     best_attr="${candidates[0]%.out}"
-    resolved_installable="nixpkgs#$best_attr"
+    resolved_installable="${DEFAULT_NIXPKGS_FLAKE_REF}#$best_attr"
     resolved_attr="$best_attr"
     resolution_mode="index"
     return 0
@@ -419,7 +421,7 @@ resolve_target() {
 
   resolved_installable="$(guess_installable_for_command "$target" || true)"
   if [ -n "$resolved_installable" ]; then
-    resolved_attr="${resolved_installable#nixpkgs#}"
+    resolved_attr="${resolved_installable#*#}"
     resolution_mode="guess"
     return 0
   fi
@@ -515,7 +517,7 @@ lookup_guidance() {
       esac
       echo
       echo "Best-effort guess:"
-      echo "  ${resolved_installable#nixpkgs#}"
+      echo "  $resolved_attr"
       echo
       echo "Run once in this sandbox:"
       echo "  need run $command_name -- $example"
