@@ -158,13 +158,61 @@ resolve_project_paths() {
 }
 
 resolve_host_home() {
+  local candidate_home=""
+  local project_root_tail=""
+
   HOST_HOME="${AGENT_HOST_HOME:-$HOME}"
-  if [ "$HOST_HOME" = "/cache" ] || [ ! -d "$HOST_HOME" ]; then
+  if [ -z "$HOST_HOME" ] || [ "$HOST_HOME" = "/cache" ] || [ ! -d "$HOST_HOME" ]; then
+    HOST_HOME=""
+
     if command -v getent >/dev/null 2>&1; then
       HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
     fi
+
+    if [ -z "$HOST_HOME" ] && [ -n "${USER:-}" ] && [ -d "/home/$USER" ]; then
+      HOST_HOME="/home/$USER"
+    fi
+
+    if [ -z "$HOST_HOME" ] && [ -n "${LOGNAME:-}" ] && [ -d "/home/$LOGNAME" ]; then
+      HOST_HOME="/home/$LOGNAME"
+    fi
+
+    if [ -z "$HOST_HOME" ]; then
+      while IFS= read -r candidate_home; do
+        [ -n "$candidate_home" ] || continue
+        HOST_HOME="$candidate_home"
+        break
+      done < <(find /home -mindepth 1 -maxdepth 1 -type d -user "$(id -u)" 2>/dev/null)
+    fi
+
+    if [ -z "$HOST_HOME" ] && [ -d "/Users" ]; then
+      while IFS= read -r candidate_home; do
+        [ -n "$candidate_home" ] || continue
+        HOST_HOME="$candidate_home"
+        break
+      done < <(find /Users -mindepth 1 -maxdepth 1 -type d -user "$(id -u)" 2>/dev/null)
+    fi
+
+    if [ -z "$HOST_HOME" ]; then
+      case "$PROJECT_ROOT" in
+        /home/*)
+          project_root_tail="${PROJECT_ROOT#/home/}"
+          candidate_home="/home/${project_root_tail%%/*}"
+          if [ -d "$candidate_home" ]; then
+            HOST_HOME="$candidate_home"
+          fi
+          ;;
+        /Users/*)
+          project_root_tail="${PROJECT_ROOT#/Users/}"
+          candidate_home="/Users/${project_root_tail%%/*}"
+          if [ -d "$candidate_home" ]; then
+            HOST_HOME="$candidate_home"
+          fi
+          ;;
+      esac
+    fi
   fi
-  if [ -z "$HOST_HOME" ] || [ ! -d "$HOST_HOME" ]; then
+  if [ -z "$HOST_HOME" ] || [ "$HOST_HOME" = "/cache" ] || [ ! -d "$HOST_HOME" ]; then
     HOST_HOME="$PROJECT_ROOT"
   fi
 }

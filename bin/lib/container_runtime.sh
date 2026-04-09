@@ -256,6 +256,153 @@ source /etc/direnv/direnvrc
 EOF_DIRENV
 }
 
+ssh_runtime_file_is_sensitive() {
+  local source_path="$1"
+  local file_name=""
+
+  [ -f "$source_path" ] || return 0
+
+  file_name="$(basename "$source_path")"
+
+  case "$file_name" in
+    id_*)
+      case "$file_name" in
+        *.pub|*-cert.pub) ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *.pem|*.key|*.p12|*.pfx|*.pkcs12)
+      return 0
+      ;;
+  esac
+
+  if LC_ALL=C grep -Eiq 'BEGIN [A-Z0-9 ]*PRIVATE KEY' "$source_path" 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+ssh_runtime_path_escape() {
+  printf '%s\n' "$1" | sed 's/[\/&|]/\\&/g'
+}
+
+rewrite_ssh_runtime_paths() {
+  local target_path="$1"
+  local escaped_host_ssh_dir=""
+
+  [ -f "$target_path" ] || return 0
+  if ! LC_ALL=C grep -Iq . "$target_path" 2>/dev/null; then
+    return 0
+  fi
+
+  escaped_host_ssh_dir="$(ssh_runtime_path_escape "$HOST_HOME/.ssh")"
+  sed -i "s|$escaped_host_ssh_dir|/cache/.ssh|g" "$target_path"
+}
+
+copy_host_ssh_runtime_files() {
+  local host_ssh_dir="$1"
+  local runtime_dir="$2"
+  local source_path=""
+  local relative_path=""
+  local target_path=""
+
+  [ -d "$host_ssh_dir" ] || return 0
+
+  while IFS= read -r source_path; do
+    [ -f "$source_path" ] || continue
+    if ssh_runtime_file_is_sensitive "$source_path"; then
+      continue
+    fi
+
+    relative_path="${source_path#$host_ssh_dir/}"
+    target_path="$runtime_dir/$relative_path"
+    if [ "$relative_path" = "config" ]; then
+      target_path="$runtime_dir/config.host"
+    fi
+
+    mkdir -p "$(dirname "$target_path")"
+    cp -fL "$source_path" "$target_path"
+    rewrite_ssh_runtime_paths "$target_path"
+  done < <(find -L "$host_ssh_dir" -type f | sort)
+}
+
+write_ssh_runtime_wrapper_config() {
+  local runtime_dir="$1"
+  local config_name="$2"
+  local known_hosts_root="$3"
+  local stable_sock_path="$4"
+  local include_host_config="${5:-0}"
+  local config_path="$runtime_dir/$config_name"
+
+  cat > "$config_path" <<EOF_SSH
+Host *
+EOF_SSH
+
+  if [ -n "$stable_sock_path" ]; then
+    cat >> "$config_path" <<EOF_SSH
+  IdentityAgent $stable_sock_path
+EOF_SSH
+  fi
+
+  cat >> "$config_path" <<EOF_SSH
+  UserKnownHostsFile $known_hosts_root/known_hosts $known_hosts_root/known_hosts2
+EOF_SSH
+
+  if [ "$include_host_config" = "1" ]; then
+    cat >> "$config_path" <<EOF_SSH
+Include $known_hosts_root/config.host
+EOF_SSH
+  fi
+}
+
+prepare_ssh_runtime_dir() {
+  local host_ssh_dir="$HOST_HOME/.ssh"
+  local stable_sock_path="/run/host-services/ssh-auth.sock"
+  local host_sock=""
+  local agent_config_path=""
+
+  SSH_RUNTIME_DIR="$TOOL_CACHE_DIR/ssh-runtime"
+  rm -rf "$SSH_RUNTIME_DIR"
+  mkdir -p "$SSH_RUNTIME_DIR"
+
+  copy_host_ssh_runtime_files "$host_ssh_dir" "$SSH_RUNTIME_DIR"
+
+  host_sock="$(resolve_ssh_auth_socket)"
+  if [ -n "$host_sock" ]; then
+    agent_config_path="$stable_sock_path"
+  fi
+  if [ -n "$host_sock" ] || [ -f "$SSH_RUNTIME_DIR/config.host" ] || [ -f "$SSH_RUNTIME_DIR/known_hosts" ] || [ -f "$SSH_RUNTIME_DIR/known_hosts2" ]; then
+    if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
+      write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config" "/cache/.ssh" "$agent_config_path" 1
+    else
+      write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config" "/cache/.ssh" "$agent_config_path" 0
+    fi
+
+    if [ "$TOOL" = "codex" ] && [ -n "${WORKSPACE_PATH:-}" ]; then
+      if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
+        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$WORKSPACE_PATH/.codex/agent-ssh" "$WORKSPACE_PATH/.codex/agent-ssh/agent.sock" 1
+      else
+        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$WORKSPACE_PATH/.codex/agent-ssh" "$WORKSPACE_PATH/.codex/agent-ssh/agent.sock" 0
+      fi
+    fi
+  fi
+
+  if [ ! -f "$SSH_RUNTIME_DIR/config" ]; then
+    rm -rf "$SSH_RUNTIME_DIR"
+    SSH_RUNTIME_DIR=""
+    return 0
+  fi
+
+  chmod 600 "$SSH_RUNTIME_DIR/config"
+  if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
+    chmod 600 "$SSH_RUNTIME_DIR/config.host"
+  fi
+  if [ -f "$SSH_RUNTIME_DIR/config.codex" ]; then
+    chmod 600 "$SSH_RUNTIME_DIR/config.codex"
+  fi
+}
+
 build_nix_config() {
   Z_SUFFIX=""
   if [ "$OS_NAME" = "Linux" ]; then
@@ -390,6 +537,73 @@ append_host_socket_args() {
   if [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] && [ -S /nix/var/nix/daemon-socket/socket ]; then
     ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
   fi
+
+  append_ssh_agent_args
+}
+
+resolve_ssh_auth_socket() {
+  local sock_path="${SSH_AUTH_SOCK:-}"
+  local sock_dir=""
+
+  [ -n "$sock_path" ] || return 0
+  [ -S "$sock_path" ] || return 0
+
+  case "$sock_path" in
+    /*)
+      printf '%s\n' "$sock_path"
+      ;;
+    *)
+      sock_dir="$(cd "$(dirname "$sock_path")" && pwd -P)"
+      printf '%s/%s\n' "$sock_dir" "$(basename "$sock_path")"
+      ;;
+  esac
+}
+
+append_ssh_agent_args() {
+  local host_sock=""
+  local container_sock="/run/host-services/ssh-auth.sock"
+
+  host_sock="$(resolve_ssh_auth_socket)"
+  [ -n "$host_sock" ] || return 0
+
+  ARGS+=( -v "$host_sock:$container_sock:rw${Z_SUFFIX}" )
+  ARGS+=( -e "SSH_AUTH_SOCK=$container_sock" )
+}
+
+append_ssh_runtime_mount_args() {
+  prepare_ssh_runtime_dir
+  if [ -n "${SSH_RUNTIME_DIR:-}" ] && [ -d "$SSH_RUNTIME_DIR" ]; then
+    ARGS+=( -v "$SSH_RUNTIME_DIR:/cache/.ssh:ro${Z_SUFFIX}" )
+  fi
+}
+
+shell_single_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+append_codex_ssh_alias_args() {
+  local host_sock=""
+  local codex_ssh_alias="$WORKSPACE_PATH/.codex/agent-ssh"
+  local codex_ssh_sock="$codex_ssh_alias/agent.sock"
+  local codex_ssh_config="$codex_ssh_alias/config.codex"
+  local quoted_codex_ssh_config=""
+
+  [ "$TOOL" = "codex" ] || return 0
+  [ -n "${SSH_RUNTIME_DIR:-}" ] || return 0
+  [ -d "$SSH_RUNTIME_DIR" ] || return 0
+
+  ARGS+=( -v "$SSH_RUNTIME_DIR:$codex_ssh_alias:ro${Z_SUFFIX}" )
+
+  host_sock="$(resolve_ssh_auth_socket)"
+  if [ -n "$host_sock" ]; then
+    ARGS+=( -v "$host_sock:$codex_ssh_sock:rw${Z_SUFFIX}" )
+    ARGS+=( -e "SSH_AUTH_SOCK=$codex_ssh_sock" )
+  fi
+
+  if [ -f "$SSH_RUNTIME_DIR/config.codex" ]; then
+    quoted_codex_ssh_config="$(shell_single_quote "$codex_ssh_config")"
+    ARGS+=( -e "GIT_SSH_COMMAND=ssh -F $quoted_codex_ssh_config" )
+  fi
 }
 
 append_dev_env_args() {
@@ -516,10 +730,11 @@ append_passthrough_env_args() {
 
   while IFS='=' read -r key value; do
     case "$key" in
-      CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH)
+      CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH|SSH_AUTH_SOCK)
         # These are launcher selectors. Once resolved to mounted config/auth
         # paths, forwarding them into the tool can make the inner CLI
-        # reinterpret them against the sandbox filesystem.
+        # reinterpret them against the sandbox filesystem. SSH_AUTH_SOCK is
+        # mounted separately so the container sees a valid in-container path.
         continue
         ;;
     esac
@@ -600,10 +815,12 @@ append_stdio_and_target_args() {
 build_container_args() {
   prepare_tool_cache_dirs
   build_nix_config
+  resolve_tool_config_roots
   build_base_container_args
   append_nix_mount_args
   append_runtime_identity_args
   append_host_socket_args
+  append_ssh_runtime_mount_args
   append_dev_env_args
   append_workspace_mount_args
 
@@ -612,7 +829,7 @@ build_container_args() {
   append_split_arg_values -v "${AGENT_EXTRA_MOUNTS:-}"
   append_extra_device_args
   append_passthrough_env_args
-  resolve_tool_config_roots
   mount_tool_configs
+  append_codex_ssh_alias_args
   append_stdio_and_target_args
 }

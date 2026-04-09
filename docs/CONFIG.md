@@ -195,6 +195,10 @@ The sandbox also prefers compatibility shims over sandbox-specific instructions 
 Compatibility alias:
 - `AGENT_ALLOW_KVM=1`: appends `--device /dev/kvm`
 
+The launcher also synthesizes a read-only `/cache/.ssh` from host SSH client state. It copies host SSH config and known-host files into a runtime dir, excludes private-key material, and makes that runtime dir the container's `~/.ssh`.
+
+If the host `SSH_AUTH_SOCK` points to a live Unix socket, the launcher also bind-mounts it into the container at `/run/host-services/ssh-auth.sock`, sets in-container `SSH_AUTH_SOCK` to that path, and injects that stable socket path ahead of the imported SSH config. The raw host path is not forwarded through environment passthrough.
+
 Use `AGENT_EXTRA_DEVICES` when a workload needs explicit device nodes inside the sandbox, for example nested VM tests on hosts that expose KVM:
 
 ```sh
@@ -244,6 +248,8 @@ The launcher also reacts to a few standard host variables. These are not treated
 - `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket for `podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
+- `SSH_AUTH_SOCK`: when it points to a live socket, the host SSH agent is mounted into the sandbox
+- `~/.ssh`: copied into a read-only synthesized container `~/.ssh`, excluding private-key files
 
 ## Compatibility Aliases
 

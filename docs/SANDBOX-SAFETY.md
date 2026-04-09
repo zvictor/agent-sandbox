@@ -131,6 +131,8 @@ The launcher supports:
 - `AGENT_EXTRA_ENV`
 - `AGENT_PASS_ENV_PREFIXES`
 - `AGENT_ALLOW_KVM=1`
+- automatic SSH agent forwarding when host `SSH_AUTH_SOCK` is set
+- synthesized read-only SSH client state copied from host `~/.ssh`
 
 Those are useful escape hatches, but each one can materially weaken the sandbox if used broadly.
 

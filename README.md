@@ -201,6 +201,8 @@ Useful variants:
 
 `agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
 
+`agent codex` can now use Codex's native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.
+
 ## Common Recipes
 
 - Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.
@@ -209,6 +211,8 @@ Useful variants:
 - Ephemeral run: set `<TOOL>_CONFIG=fresh`.
 - Project-local login: `./scripts/agent login codex work --config project`.
 - Missing command: run `need <command>` or `need run <command> -- <command> ...`.
+- SSH Git remotes: the sandbox now synthesizes a read-only `/cache/.ssh` from host SSH client state and forwards the active host agent to `/run/host-services/ssh-auth.sock` when `SSH_AUTH_SOCK` is set.
+- SSH `ProxyCommand` helpers: if your SSH config calls tools like `cloudflared`, add them to the sandbox package contract so they exist inside the container too.
 
 More complete workflows live in [docs/RECIPES.md](docs/RECIPES.md).
 
