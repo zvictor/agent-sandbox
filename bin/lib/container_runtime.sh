@@ -594,6 +594,10 @@ append_codex_ssh_alias_args() {
   [ -n "${SSH_RUNTIME_DIR:-}" ] || return 0
   [ -d "$SSH_RUNTIME_DIR" ] || return 0
 
+  if [ ! -e "$codex_ssh_alias" ]; then
+    CODEX_SSH_ALIAS_CLEANUP_PATH="$codex_ssh_alias"
+  fi
+
   ARGS+=( -v "$SSH_RUNTIME_DIR:$codex_ssh_alias:ro${Z_SUFFIX}" )
 
   host_sock="$(resolve_ssh_auth_socket)"
@@ -606,6 +610,20 @@ append_codex_ssh_alias_args() {
     quoted_codex_ssh_config="$(shell_single_quote "$codex_ssh_config")"
     ARGS+=( -e "GIT_SSH_COMMAND=ssh -F $quoted_codex_ssh_config" )
   fi
+}
+
+cleanup_codex_ssh_alias_path() {
+  local cleanup_path="${CODEX_SSH_ALIAS_CLEANUP_PATH:-}"
+
+  [ -n "$cleanup_path" ] || return 0
+  [ -d "$cleanup_path" ] || return 0
+  [ ! -L "$cleanup_path" ] || return 0
+
+  if find "$cleanup_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+
+  rmdir "$cleanup_path" 2>/dev/null || true
 }
 
 append_dev_env_args() {

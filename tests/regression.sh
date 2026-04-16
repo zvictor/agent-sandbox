@@ -150,6 +150,42 @@ codex_ssh_alias_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
+cleanup_codex_ssh_alias_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local alias_exists_before="${2:-0}"
+  local alias_path="$workspace_path/.agent-sandbox-codex-ssh"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  if [ "$alias_exists_before" = "1" ]; then
+    mkdir -p "$alias_path"
+  fi
+
+  TOOL="codex"
+  WORKSPACE_PATH="$workspace_path"
+  SSH_RUNTIME_DIR="$workspace_path/runtime"
+  mkdir -p "$SSH_RUNTIME_DIR"
+  : > "$SSH_RUNTIME_DIR/config.codex"
+
+  resolve_ssh_auth_socket() {
+    printf '%s\n' ""
+  }
+
+  Z_SUFFIX=""
+  ARGS=()
+  append_codex_ssh_alias_args
+  mkdir -p "$alias_path"
+  cleanup_codex_ssh_alias_path
+
+  if [ -e "$alias_path" ]; then
+    printf 'present\n'
+  else
+    printf 'absent\n'
+  fi
+)
+
 test_opencode_wrapper_default() (
   set -euo pipefail
 
@@ -436,6 +472,23 @@ EOF
   assert_contains "$codex_alias_args" "GIT_SSH_COMMAND=ssh -F '$codex_ssh_alias/config.codex'"
 )
 
+test_codex_ssh_alias_cleanup() (
+  set -euo pipefail
+
+  local tmp_dir workspace result
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  result="$(cleanup_codex_ssh_alias_for "$workspace" 0)"
+  [ "$result" = "absent" ] || fail "expected generated codex ssh alias mountpoint to be removed"
+
+  result="$(cleanup_codex_ssh_alias_for "$workspace" 1)"
+  [ "$result" = "present" ] || fail "expected pre-existing codex ssh alias directory to be preserved"
+)
+
 codex_mount_args_for() (
   set -euo pipefail
 
@@ -543,6 +596,7 @@ main() {
   run_test "config selectors are not passthrough env" test_config_selectors_are_not_passthrough_env
   run_test "ssh agent mount support" test_ssh_agent_mount_support
   run_test "ssh runtime generation" test_ssh_runtime_generation
+  run_test "codex ssh alias cleanup" test_codex_ssh_alias_cleanup
   run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
   run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
   run_test "image includes openssh" test_image_includes_openssh
