@@ -401,7 +401,6 @@ EOF_SSH
 prepare_ssh_runtime_dir() {
   local host_ssh_dir="$HOST_HOME/.ssh"
   local stable_sock_path="/run/host-services/ssh-auth.sock"
-  local codex_ssh_alias_path=""
   local host_sock=""
   local agent_config_path=""
 
@@ -421,15 +420,6 @@ prepare_ssh_runtime_dir() {
     else
       write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config" "/cache/.ssh" "$agent_config_path" 0
     fi
-
-    if [ "$TOOL" = "codex" ] && [ -n "${WORKSPACE_PATH:-}" ]; then
-      codex_ssh_alias_path="$WORKSPACE_PATH/.agent-sandbox-codex-ssh"
-      if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
-        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$codex_ssh_alias_path" "$codex_ssh_alias_path/agent.sock" 1
-      else
-        write_ssh_runtime_wrapper_config "$SSH_RUNTIME_DIR" "config.codex" "$codex_ssh_alias_path" "$codex_ssh_alias_path/agent.sock" 0
-      fi
-    fi
   fi
 
   if [ ! -f "$SSH_RUNTIME_DIR/config" ]; then
@@ -441,9 +431,6 @@ prepare_ssh_runtime_dir() {
   chmod 600 "$SSH_RUNTIME_DIR/config"
   if [ -f "$SSH_RUNTIME_DIR/config.host" ]; then
     chmod 600 "$SSH_RUNTIME_DIR/config.host"
-  fi
-  if [ -f "$SSH_RUNTIME_DIR/config.codex" ]; then
-    chmod 600 "$SSH_RUNTIME_DIR/config.codex"
   fi
 }
 
@@ -632,93 +619,19 @@ append_ssh_runtime_mount_args() {
   fi
 }
 
-shell_single_quote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
-
-resolve_git_exclude_file() {
-  local workspace_path="$1"
-  local exclude_file=""
-
-  if exclude_file="$(git -C "$workspace_path" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)" && [ -n "$exclude_file" ]; then
-    printf '%s\n' "$exclude_file"
-    return 0
-  fi
-
-  (
-    cd "$workspace_path" || exit 1
-    exclude_file="$(git rev-parse --git-path info/exclude 2>/dev/null)" || exit 1
-    case "$exclude_file" in
-      /*) printf '%s\n' "$exclude_file" ;;
-      *) printf '%s/%s\n' "$PWD" "$exclude_file" ;;
-    esac
-  )
-}
-
-ensure_codex_ssh_alias_git_exclude() {
-  local exclude_file=""
-  local exclude_pattern=".agent-sandbox-codex-ssh/"
-
-  command -v git >/dev/null 2>&1 || return 0
-  exclude_file="$(resolve_git_exclude_file "$WORKSPACE_PATH" 2>/dev/null || true)"
-  [ -n "$exclude_file" ] || return 0
-
-  mkdir -p "$(dirname "$exclude_file")" 2>/dev/null || return 0
-  touch "$exclude_file" 2>/dev/null || return 0
-
-  if grep -qxF "$exclude_pattern" "$exclude_file" 2>/dev/null; then
-    return 0
-  fi
-
-  {
-    printf '\n# agent-sandbox runtime mountpoints\n'
-    printf '%s\n' "$exclude_pattern"
-  } >> "$exclude_file" 2>/dev/null || true
-}
-
-append_codex_ssh_alias_args() {
+append_codex_ssh_sandbox_args() {
   local host_sock=""
-  local codex_ssh_alias="$WORKSPACE_PATH/.agent-sandbox-codex-ssh"
-  local codex_ssh_sock="$codex_ssh_alias/agent.sock"
-  local codex_ssh_config="$codex_ssh_alias/config.codex"
-  local quoted_codex_ssh_config=""
 
   [ "$TOOL" = "codex" ] || return 0
   [ -n "${SSH_RUNTIME_DIR:-}" ] || return 0
   [ -d "$SSH_RUNTIME_DIR" ] || return 0
 
-  ensure_codex_ssh_alias_git_exclude
-
-  if [ ! -e "$codex_ssh_alias" ]; then
-    CODEX_SSH_ALIAS_CLEANUP_PATH="$codex_ssh_alias"
-  fi
-
-  ARGS+=( -v "$SSH_RUNTIME_DIR:$codex_ssh_alias:ro${Z_SUFFIX}" )
+  ARGS+=( --add-dir /cache/.ssh )
 
   host_sock="$(resolve_ssh_auth_socket)"
   if [ -n "$host_sock" ]; then
-    ARGS+=( -v "$host_sock:$codex_ssh_sock:rw${Z_SUFFIX}" )
-    ARGS+=( -e "SSH_AUTH_SOCK=$codex_ssh_sock" )
+    ARGS+=( --add-dir /run/host-services )
   fi
-
-  if [ -f "$SSH_RUNTIME_DIR/config.codex" ]; then
-    quoted_codex_ssh_config="$(shell_single_quote "$codex_ssh_config")"
-    ARGS+=( -e "GIT_SSH_COMMAND=ssh -F $quoted_codex_ssh_config" )
-  fi
-}
-
-cleanup_codex_ssh_alias_path() {
-  local cleanup_path="${CODEX_SSH_ALIAS_CLEANUP_PATH:-}"
-
-  [ -n "$cleanup_path" ] || return 0
-  [ -d "$cleanup_path" ] || return 0
-  [ ! -L "$cleanup_path" ] || return 0
-
-  if find "$cleanup_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
-    return 0
-  fi
-
-  rmdir "$cleanup_path" 2>/dev/null || true
 }
 
 append_dev_env_args() {
@@ -921,6 +834,7 @@ append_stdio_and_target_args() {
     RUN_TARGET="$ROOTFS_IMAGE_ARG"
   fi
   ARGS+=( "$RUN_TARGET" )
+  append_codex_ssh_sandbox_args
   if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi
@@ -946,6 +860,5 @@ build_container_args() {
   append_extra_device_args
   append_passthrough_env_args
   mount_tool_configs
-  append_codex_ssh_alias_args
   append_stdio_and_target_args
 }

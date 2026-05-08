@@ -126,17 +126,15 @@ ssh_runtime_mount_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
-codex_ssh_alias_args_for() (
+codex_ssh_sandbox_args_for() (
   set -euo pipefail
 
   local runtime_dir="$1"
-  local workspace_path="$2"
-  local resolved_sock="$3"
+  local resolved_sock="$2"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   TOOL="codex"
-  WORKSPACE_PATH="$workspace_path"
   SSH_RUNTIME_DIR="$runtime_dir"
 
   resolve_ssh_auth_socket() {
@@ -145,7 +143,7 @@ codex_ssh_alias_args_for() (
 
   Z_SUFFIX=""
   ARGS=()
-  append_codex_ssh_alias_args
+  append_codex_ssh_sandbox_args
 
   printf '%s\n' "${ARGS[@]}"
 )
@@ -188,58 +186,6 @@ runtime_path_for() (
   IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
 
   compose_runtime_path "$dev_env_path"
-)
-
-cleanup_codex_ssh_alias_for() (
-  set -euo pipefail
-
-  local workspace_path="$1"
-  local alias_exists_before="${2:-0}"
-  local alias_path="$workspace_path/.agent-sandbox-codex-ssh"
-
-  source "$REPO_ROOT/bin/lib/container_runtime.sh"
-
-  if [ "$alias_exists_before" = "1" ]; then
-    mkdir -p "$alias_path"
-  fi
-
-  TOOL="codex"
-  WORKSPACE_PATH="$workspace_path"
-  SSH_RUNTIME_DIR="$workspace_path/runtime"
-  mkdir -p "$SSH_RUNTIME_DIR"
-  : > "$SSH_RUNTIME_DIR/config.codex"
-
-  resolve_ssh_auth_socket() {
-    printf '%s\n' ""
-  }
-
-  Z_SUFFIX=""
-  ARGS=()
-  append_codex_ssh_alias_args
-  mkdir -p "$alias_path"
-  cleanup_codex_ssh_alias_path
-
-  if [ -e "$alias_path" ]; then
-    printf 'present\n'
-  else
-    printf 'absent\n'
-  fi
-)
-
-codex_ssh_alias_exclude_for() (
-  set -euo pipefail
-
-  local workspace_path="$1"
-  local exclude_file=""
-
-  source "$REPO_ROOT/bin/lib/container_runtime.sh"
-
-  WORKSPACE_PATH="$workspace_path"
-  ensure_codex_ssh_alias_git_exclude
-  ensure_codex_ssh_alias_git_exclude
-
-  exclude_file="$(git -C "$workspace_path" rev-parse --path-format=absolute --git-path info/exclude)"
-  cat "$exclude_file"
 )
 
 test_opencode_wrapper_default() (
@@ -466,14 +412,13 @@ test_ssh_agent_mount_support() (
 test_ssh_runtime_generation() (
   set -euo pipefail
 
-  local tmp_dir host_home ssh_dir runtime_dir wrapper_config codex_wrapper_config host_config include_config known_hosts_file mount_args codex_alias_args workspace codex_ssh_alias
+  local tmp_dir host_home ssh_dir runtime_dir wrapper_config host_config include_config known_hosts_file mount_args codex_sandbox_args workspace
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
   host_home="$tmp_dir/host-home"
   ssh_dir="$host_home/.ssh"
   workspace="$tmp_dir/workspace"
-  codex_ssh_alias="$workspace/.agent-sandbox-codex-ssh"
   mkdir -p "$ssh_dir/config.d" "$tmp_dir/tool-cache" "$workspace/.codex"
 
   cat > "$ssh_dir/config" <<EOF
@@ -501,19 +446,15 @@ EOF
   [ -n "$runtime_dir" ] || fail "expected ssh runtime dir to be created"
 
   wrapper_config="$(cat "$runtime_dir/config")"
-  codex_wrapper_config="$(cat "$runtime_dir/config.codex")"
   host_config="$(cat "$runtime_dir/config.host")"
   include_config="$(cat "$runtime_dir/config.d/work.conf")"
   known_hosts_file="$(cat "$runtime_dir/known_hosts")"
   mount_args="$(ssh_runtime_mount_args_for "$runtime_dir")"
-  codex_alias_args="$(codex_ssh_alias_args_for "$runtime_dir" "$workspace" "/tmp/host-ssh-agent.sock")"
+  codex_sandbox_args="$(codex_ssh_sandbox_args_for "$runtime_dir" "/tmp/host-ssh-agent.sock")"
 
   assert_contains "$wrapper_config" "IdentityAgent /run/host-services/ssh-auth.sock"
   assert_contains "$wrapper_config" "UserKnownHostsFile /cache/.ssh/known_hosts /cache/.ssh/known_hosts2"
   assert_contains "$wrapper_config" "Include /cache/.ssh/config.host"
-  assert_contains "$codex_wrapper_config" "IdentityAgent $codex_ssh_alias/agent.sock"
-  assert_contains "$codex_wrapper_config" "UserKnownHostsFile $codex_ssh_alias/known_hosts $codex_ssh_alias/known_hosts2"
-  assert_contains "$codex_wrapper_config" "Include $codex_ssh_alias/config.host"
   assert_contains "$host_config" "IdentityAgent ~/.1password/agent.sock"
   assert_contains "$host_config" "ProxyCommand cloudflared access ssh --hostname %h"
   assert_contains "$host_config" "Include /cache/.ssh/config.d/*.conf"
@@ -522,47 +463,10 @@ EOF
   [ ! -e "$runtime_dir/id_ed25519" ] || fail "expected private key to be excluded from ssh runtime"
   [ -f "$runtime_dir/id_ed25519.pub" ] || fail "expected public key to be copied into ssh runtime"
   assert_contains "$mount_args" "$runtime_dir:/cache/.ssh:ro"
-  assert_contains "$codex_alias_args" "$runtime_dir:$codex_ssh_alias:ro"
-  assert_contains "$codex_alias_args" "/tmp/host-ssh-agent.sock:$codex_ssh_alias/agent.sock:rw"
-  assert_contains "$codex_alias_args" "SSH_AUTH_SOCK=$codex_ssh_alias/agent.sock"
-  assert_contains "$codex_alias_args" "GIT_SSH_COMMAND=ssh -F '$codex_ssh_alias/config.codex'"
-)
-
-test_codex_ssh_alias_cleanup() (
-  set -euo pipefail
-
-  local tmp_dir workspace result
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
-
-  workspace="$tmp_dir/workspace"
-  mkdir -p "$workspace"
-
-  result="$(cleanup_codex_ssh_alias_for "$workspace" 0)"
-  [ "$result" = "absent" ] || fail "expected generated codex ssh alias mountpoint to be removed"
-
-  result="$(cleanup_codex_ssh_alias_for "$workspace" 1)"
-  [ "$result" = "present" ] || fail "expected pre-existing codex ssh alias directory to be preserved"
-)
-
-test_codex_ssh_alias_git_exclude() (
-  set -euo pipefail
-
-  local tmp_dir repo exclude_contents status_output pattern_count
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
-
-  repo="$tmp_dir/repo"
-  mkdir -p "$repo/.agent-sandbox-codex-ssh"
-  git -C "$repo" init -q
-  printf 'runtime\n' > "$repo/.agent-sandbox-codex-ssh/config"
-
-  exclude_contents="$(codex_ssh_alias_exclude_for "$repo")"
-  pattern_count="$(printf '%s\n' "$exclude_contents" | grep -cxF ".agent-sandbox-codex-ssh/")"
-  [ "$pattern_count" = "1" ] || fail "expected exactly one codex ssh alias exclude pattern"
-
-  status_output="$(git -C "$repo" status --short)"
-  assert_not_contains "$status_output" ".agent-sandbox-codex-ssh"
+  assert_contains "$codex_sandbox_args" "--add-dir"
+  assert_contains "$codex_sandbox_args" "/cache/.ssh"
+  assert_contains "$codex_sandbox_args" "/run/host-services"
+  [ ! -e "$workspace/.agent-sandbox-codex-ssh" ] || fail "expected no codex ssh alias in the workspace"
 )
 
 test_dev_env_path_precedence() (
@@ -747,8 +651,6 @@ main() {
   run_test "config selectors are not passthrough env" test_config_selectors_are_not_passthrough_env
   run_test "ssh agent mount support" test_ssh_agent_mount_support
   run_test "ssh runtime generation" test_ssh_runtime_generation
-  run_test "codex ssh alias cleanup" test_codex_ssh_alias_cleanup
-  run_test "codex ssh alias git exclude" test_codex_ssh_alias_git_exclude
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
   run_test "need clear commands" test_need_clear_commands

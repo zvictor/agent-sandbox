@@ -203,7 +203,7 @@ Useful variants:
 
 `agent codex` can now use Codex's native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.
 
-For SSH operations under Codex's native sandbox, the launcher exposes a temporary `.agent-sandbox-codex-ssh` mountpoint inside the workspace and adds that path to the repository's local `.git/info/exclude` so it does not appear in `git status`.
+For SSH operations under Codex's native sandbox, the launcher exposes the sandbox SSH runtime paths to Codex with `--add-dir` rather than creating a temporary mountpoint inside the workspace.
 
 ## Common Recipes
 
