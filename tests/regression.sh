@@ -226,6 +226,22 @@ cleanup_codex_ssh_alias_for() (
   fi
 )
 
+codex_ssh_alias_exclude_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local exclude_file=""
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  WORKSPACE_PATH="$workspace_path"
+  ensure_codex_ssh_alias_git_exclude
+  ensure_codex_ssh_alias_git_exclude
+
+  exclude_file="$(git -C "$workspace_path" rev-parse --path-format=absolute --git-path info/exclude)"
+  cat "$exclude_file"
+)
+
 test_opencode_wrapper_default() (
   set -euo pipefail
 
@@ -529,6 +545,26 @@ test_codex_ssh_alias_cleanup() (
   [ "$result" = "present" ] || fail "expected pre-existing codex ssh alias directory to be preserved"
 )
 
+test_codex_ssh_alias_git_exclude() (
+  set -euo pipefail
+
+  local tmp_dir repo exclude_contents status_output pattern_count
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  repo="$tmp_dir/repo"
+  mkdir -p "$repo/.agent-sandbox-codex-ssh"
+  git -C "$repo" init -q
+  printf 'runtime\n' > "$repo/.agent-sandbox-codex-ssh/config"
+
+  exclude_contents="$(codex_ssh_alias_exclude_for "$repo")"
+  pattern_count="$(printf '%s\n' "$exclude_contents" | grep -cxF ".agent-sandbox-codex-ssh/")"
+  [ "$pattern_count" = "1" ] || fail "expected exactly one codex ssh alias exclude pattern"
+
+  status_output="$(git -C "$repo" status --short)"
+  assert_not_contains "$status_output" ".agent-sandbox-codex-ssh"
+)
+
 test_dev_env_path_precedence() (
   set -euo pipefail
 
@@ -712,6 +748,7 @@ main() {
   run_test "ssh agent mount support" test_ssh_agent_mount_support
   run_test "ssh runtime generation" test_ssh_runtime_generation
   run_test "codex ssh alias cleanup" test_codex_ssh_alias_cleanup
+  run_test "codex ssh alias git exclude" test_codex_ssh_alias_git_exclude
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
   run_test "need clear commands" test_need_clear_commands

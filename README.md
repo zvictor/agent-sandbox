@@ -203,6 +203,8 @@ Useful variants:
 
 `agent codex` can now use Codex's native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.
 
+For SSH operations under Codex's native sandbox, the launcher exposes a temporary `.agent-sandbox-codex-ssh` mountpoint inside the workspace and adds that path to the repository's local `.git/info/exclude` so it does not appear in `git status`.
+
 ## Common Recipes
 
 - Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.

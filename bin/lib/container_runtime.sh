@@ -636,6 +636,46 @@ shell_single_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+resolve_git_exclude_file() {
+  local workspace_path="$1"
+  local exclude_file=""
+
+  if exclude_file="$(git -C "$workspace_path" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)" && [ -n "$exclude_file" ]; then
+    printf '%s\n' "$exclude_file"
+    return 0
+  fi
+
+  (
+    cd "$workspace_path" || exit 1
+    exclude_file="$(git rev-parse --git-path info/exclude 2>/dev/null)" || exit 1
+    case "$exclude_file" in
+      /*) printf '%s\n' "$exclude_file" ;;
+      *) printf '%s/%s\n' "$PWD" "$exclude_file" ;;
+    esac
+  )
+}
+
+ensure_codex_ssh_alias_git_exclude() {
+  local exclude_file=""
+  local exclude_pattern=".agent-sandbox-codex-ssh/"
+
+  command -v git >/dev/null 2>&1 || return 0
+  exclude_file="$(resolve_git_exclude_file "$WORKSPACE_PATH" 2>/dev/null || true)"
+  [ -n "$exclude_file" ] || return 0
+
+  mkdir -p "$(dirname "$exclude_file")" 2>/dev/null || return 0
+  touch "$exclude_file" 2>/dev/null || return 0
+
+  if grep -qxF "$exclude_pattern" "$exclude_file" 2>/dev/null; then
+    return 0
+  fi
+
+  {
+    printf '\n# agent-sandbox runtime mountpoints\n'
+    printf '%s\n' "$exclude_pattern"
+  } >> "$exclude_file" 2>/dev/null || true
+}
+
 append_codex_ssh_alias_args() {
   local host_sock=""
   local codex_ssh_alias="$WORKSPACE_PATH/.agent-sandbox-codex-ssh"
@@ -646,6 +686,8 @@ append_codex_ssh_alias_args() {
   [ "$TOOL" = "codex" ] || return 0
   [ -n "${SSH_RUNTIME_DIR:-}" ] || return 0
   [ -d "$SSH_RUNTIME_DIR" ] || return 0
+
+  ensure_codex_ssh_alias_git_exclude
 
   if [ ! -e "$codex_ssh_alias" ]; then
     CODEX_SSH_ALIAS_CLEANUP_PATH="$codex_ssh_alias"
