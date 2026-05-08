@@ -26,6 +26,7 @@ usage:
   need missing <command> [args...]
   need run <command-or-installable> -- command args...
   need inject <command-or-installable>
+  need clear [--all|--legacy]
   need bootstrap-index
   need update-index
 
@@ -36,6 +37,17 @@ notes:
   - explicit installables like 'nixpkgs#pnpm' bypass lookup and use the ref you passed
 EOF
   exit 1
+}
+
+refuse_unsafe_rm_dir() {
+  local target_dir="$1"
+
+  case "$target_dir" in
+    ""|"/"|"/bin"|"/cache"|"/nix"|"/run"|"/tmp"|"/usr"|"/var")
+      echo "[agent] refusing to remove unsafe cache path: ${target_dir:-<empty>}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 tool_notice() {
@@ -557,6 +569,26 @@ inject_materialized_bins() {
   tool_notice "injected executables from $resolved_installable into $TOOLS_DIR"
 }
 
+clear_injected_bins() {
+  refuse_unsafe_rm_dir "$TOOLS_DIR"
+  rm -rf "$TOOLS_DIR"
+  tool_notice "cleared injected executables from $TOOLS_DIR"
+}
+
+clear_legacy_injected_bins() {
+  local legacy_tools_dir="$NEED_CACHE_DIR/bin"
+
+  refuse_unsafe_rm_dir "$legacy_tools_dir"
+  rm -rf "$legacy_tools_dir"
+  tool_notice "cleared legacy injected executables from $legacy_tools_dir"
+}
+
+clear_need_cache() {
+  refuse_unsafe_rm_dir "$NEED_CACHE_DIR"
+  rm -rf "$NEED_CACHE_DIR"
+  tool_notice "cleared need cache at $NEED_CACHE_DIR"
+}
+
 update_index() {
   local system=""
   local url=""
@@ -635,6 +667,25 @@ case "$command_name" in
     [ "$#" -eq 1 ] || usage
     materialize_installable "$1"
     inject_materialized_bins
+    ;;
+  clear)
+    case "${1:-}" in
+      "")
+        [ "$#" -eq 0 ] || usage
+        clear_injected_bins
+        ;;
+      --legacy)
+        [ "$#" -eq 1 ] || usage
+        clear_legacy_injected_bins
+        ;;
+      --all)
+        [ "$#" -eq 1 ] || usage
+        clear_need_cache
+        ;;
+      *)
+        usage
+        ;;
+    esac
     ;;
   *)
     lookup_guidance "$command_name" "$@"

@@ -256,6 +256,48 @@ source /etc/direnv/direnvrc
 EOF_DIRENV
 }
 
+prepare_path_guard_dir() {
+  local guarded_command=""
+
+  PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
+  PATH_GUARD_HOST_DIR="$(mktemp -d "$HELPER_TMPDIR/path-guard.XXXXXX")"
+
+  for guarded_command in git sh nix nix-shell need; do
+    ln -s "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
+  done
+}
+
+runtime_path_scope_key() {
+  local value="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$value" | sha256sum | awk '{print substr($1,1,16)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$value" | shasum -a 256 | awk '{print substr($1,1,16)}'
+  else
+    printf '%s' "$value" | tr -cd 'a-zA-Z0-9' | head -c 16
+  fi
+}
+
+compose_runtime_path() {
+  local dev_env_path="${1:-}"
+
+  if [ -n "$dev_env_path" ]; then
+    printf '%s:%s:%s:%s:%s\n' \
+      "$PATH_GUARD_CONTAINER_DIR" \
+      "$WORKSPACE_NODE_MODULES_BIN" \
+      "$dev_env_path" \
+      "$NEED_TOOLS_PATH" \
+      "$IMAGE_FALLBACK_PATH"
+  else
+    printf '%s:%s:%s:%s\n' \
+      "$PATH_GUARD_CONTAINER_DIR" \
+      "$WORKSPACE_NODE_MODULES_BIN" \
+      "$NEED_TOOLS_PATH" \
+      "$IMAGE_FALLBACK_PATH"
+  fi
+}
+
 ssh_runtime_file_is_sensitive() {
   local source_path="$1"
   local file_name=""
@@ -417,7 +459,11 @@ build_nix_config() {
     exit 1
   fi
   WORKSPACE_PATH="$(cd "$WORKSPACE_PATH" && pwd -P)"
-  WORKSPACE_RUNTIME_PATH="/cache/need/bin:/bin:/usr/bin:/usr/local/bin:$WORKSPACE_PATH/node_modules/.bin"
+  WORKSPACE_NODE_MODULES_BIN="$WORKSPACE_PATH/node_modules/.bin"
+  NEED_CACHE_PATH="${AGENT_NEED_CACHE_DIR:-/cache/need}"
+  NEED_TOOLS_PATH="${AGENT_NEED_TOOLS_DIR:-$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$PROJECT_ROOT")/bin}"
+  IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
+  WORKSPACE_RUNTIME_PATH="$(compose_runtime_path "")"
 
   NIX_CONFIG="sandbox = false
 substituters = https://cache.nixos.org
@@ -452,8 +498,15 @@ build_base_container_args() {
     -e TOOL_CACHE=/cache
     -e CODEX_CACHE=/cache
     -e PATH="$WORKSPACE_RUNTIME_PATH"
+    -e AGENT_NEED_TOOLS_DIR="$NEED_TOOLS_PATH"
     -e NIX_CONFIG="$NIX_CONFIG"
   )
+}
+
+append_path_guard_mount_args() {
+  if [ -n "${PATH_GUARD_HOST_DIR:-}" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
+    ARGS+=( -v "$PATH_GUARD_HOST_DIR:$PATH_GUARD_CONTAINER_DIR:ro${Z_SUFFIX}" )
+  fi
 }
 
 append_nix_mount_args() {
@@ -630,7 +683,6 @@ append_dev_env_args() {
   local env_spec=""
   local key=""
   local value=""
-  local runtime_path="$WORKSPACE_RUNTIME_PATH"
 
   if [ -n "${DEV_ENV_ENV_FILE:-}" ] && [ -f "$DEV_ENV_ENV_FILE" ]; then
     while IFS= read -r env_spec; do
@@ -639,7 +691,7 @@ append_dev_env_args() {
       value="${env_spec#*=}"
 
       if [ "$key" = "PATH" ]; then
-        ARGS+=( -e "PATH=${runtime_path}:$value" )
+        ARGS+=( -e "PATH=$(compose_runtime_path "$value")" )
         continue
       fi
 
@@ -834,9 +886,11 @@ append_stdio_and_target_args() {
 
 build_container_args() {
   prepare_tool_cache_dirs
+  prepare_path_guard_dir
   build_nix_config
   resolve_tool_config_roots
   build_base_container_args
+  append_path_guard_mount_args
   append_nix_mount_args
   append_runtime_identity_args
   append_host_socket_args

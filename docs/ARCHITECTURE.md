@@ -118,6 +118,7 @@ When `AGENT_DEV_ENV=host-helper` and `.envrc` exists, the launcher:
 - filters out build-system noise and unsupported values
 - caches the resulting env file
 - injects that snapshot into the container at startup
+- orders `PATH` so sandbox guardrail wrappers stay first, followed by project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks
 
 There is no live bridge back to host direnv.
 
@@ -127,6 +128,7 @@ When `AGENT_NEED_HELPER=1`, the launcher starts a narrow host-side worker that:
 - accepts only constrained installables
 - materializes them in the host store
 - returns resulting paths through a mounted request/response bridge
+- keeps `need inject` symlinks in a project-scoped bin directory by default
 
 This is the main way the sandbox supports missing tools without exposing the raw Nix daemon socket.
 

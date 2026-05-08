@@ -148,8 +148,12 @@ fi
 TMP_DIR=""
 HELPER_STATE_DIR=""
 LOGIN_STATE_DIR=""
+PATH_GUARD_HOST_DIR=""
 cleanup() {
   cleanup_codex_ssh_alias_path
+  if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
+    rm -rf "$PATH_GUARD_HOST_DIR"
+  fi
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
   fi

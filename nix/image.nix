@@ -239,7 +239,7 @@ let
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/config"
-    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
+    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
   '';
 
   imageBasePaths =

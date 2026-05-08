@@ -150,6 +150,46 @@ codex_ssh_alias_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
+dev_env_args_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local project_root="$2"
+  local env_file="$3"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
+  WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
+  NEED_CACHE_PATH="/cache/need"
+  NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
+  IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
+  DEV_ENV_ENV_FILE="$env_file"
+
+  ARGS=()
+  append_dev_env_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+runtime_path_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local project_root="$2"
+  local dev_env_path="${3:-}"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
+  WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
+  NEED_CACHE_PATH="/cache/need"
+  NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
+  IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
+
+  compose_runtime_path "$dev_env_path"
+)
+
 cleanup_codex_ssh_alias_for() (
   set -euo pipefail
 
@@ -489,6 +529,78 @@ test_codex_ssh_alias_cleanup() (
   [ "$result" = "present" ] || fail "expected pre-existing codex ssh alias directory to be preserved"
 )
 
+test_dev_env_path_precedence() (
+  set -euo pipefail
+
+  local tmp_dir workspace env_file output path_line
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+  env_file="$tmp_dir/dev.env"
+  printf 'PATH=/nix/store/bun/bin:/nix/store/node/bin:/bin\n' > "$env_file"
+
+  output="$(dev_env_args_for "$workspace" "$workspace" "$env_file")"
+  path_line="$(printf '%s\n' "$output" | sed -n 's/^PATH=//p')"
+
+  case "$path_line" in
+    "/run/agent-path-guard:$workspace/node_modules/.bin:/nix/store/bun/bin:/nix/store/node/bin:/bin:"*) ;;
+    *) fail "dev env PATH should come before need/image fallback paths: $path_line" ;;
+  esac
+  assert_contains "$path_line" ":/cache/need/projects/"
+  assert_not_contains "$path_line" "/cache/need/bin"
+)
+
+test_runtime_path_uses_project_scoped_need_bins() (
+  set -euo pipefail
+
+  local tmp_dir workspace output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  output="$(runtime_path_for "$workspace" "$workspace")"
+
+  case "$output" in
+    "/run/agent-path-guard:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
+    *) fail "runtime PATH should use project-scoped need bins after project-local bins: $output" ;;
+  esac
+  assert_not_contains "$output" "/cache/need/bin"
+)
+
+test_need_clear_commands() (
+  set -euo pipefail
+
+  local tmp_dir need_cache tools_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  need_cache="$tmp_dir/need"
+  tools_dir="$need_cache/projects/project-a/bin"
+  mkdir -p "$tools_dir" "$need_cache/bin" "$need_cache/materialized"
+  : > "$tools_dir/pnpm"
+  : > "$need_cache/bin/node"
+  : > "$need_cache/materialized/item.env"
+
+  output="$(AGENT_NEED_CACHE_DIR="$need_cache" AGENT_NEED_TOOLS_DIR="$tools_dir" bash "$REPO_ROOT/scripts/image/need.sh" clear 2>&1)"
+  assert_contains "$output" "cleared injected executables from $tools_dir"
+  [ ! -e "$tools_dir" ] || fail "expected scoped injected bins to be removed"
+  [ -e "$need_cache/bin/node" ] || fail "expected legacy injected bins to remain after scoped clear"
+  [ -e "$need_cache/materialized/item.env" ] || fail "expected materialization cache to remain after scoped clear"
+
+  output="$(AGENT_NEED_CACHE_DIR="$need_cache" AGENT_NEED_TOOLS_DIR="$tools_dir" bash "$REPO_ROOT/scripts/image/need.sh" clear --legacy 2>&1)"
+  assert_contains "$output" "cleared legacy injected executables from $need_cache/bin"
+  [ ! -e "$need_cache/bin" ] || fail "expected legacy injected bins to be removed"
+  [ -e "$need_cache/materialized/item.env" ] || fail "expected materialization cache to remain after legacy clear"
+
+  output="$(AGENT_NEED_CACHE_DIR="$need_cache" AGENT_NEED_TOOLS_DIR="$tools_dir" bash "$REPO_ROOT/scripts/image/need.sh" clear --all 2>&1)"
+  assert_contains "$output" "cleared need cache at $need_cache"
+  [ ! -e "$need_cache" ] || fail "expected full need cache to be removed"
+)
+
 codex_mount_args_for() (
   set -euo pipefail
 
@@ -553,11 +665,14 @@ test_codex_workspace_config_alias_mount_skips_duplicate_path() (
 test_image_includes_openssh() (
   set -euo pipefail
 
-  local image_file
+  local image_file rootfs_file
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+  rootfs_file="$(cat "$REPO_ROOT/bin/lib/rootfs.sh")"
 
   assert_contains "$image_file" "pkgs.openssh"
   assert_contains "$image_file" '"$out/run/host-services"'
+  assert_contains "$image_file" '"$out/run/agent-path-guard"'
+  assert_contains "$rootfs_file" "run/agent-path-guard"
 )
 
 test_need_defaults_to_unstable_nixpkgs() (
@@ -597,6 +712,9 @@ main() {
   run_test "ssh agent mount support" test_ssh_agent_mount_support
   run_test "ssh runtime generation" test_ssh_runtime_generation
   run_test "codex ssh alias cleanup" test_codex_ssh_alias_cleanup
+  run_test "dev env path precedence" test_dev_env_path_precedence
+  run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
+  run_test "need clear commands" test_need_clear_commands
   run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
   run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
   run_test "image includes openssh" test_image_includes_openssh

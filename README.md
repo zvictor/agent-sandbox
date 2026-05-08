@@ -495,6 +495,8 @@ AGENT_FORCE_REBUILD=1
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` environment snapshot for the project root before the container starts, caches the filtered result under `AGENT_CACHE_DIR`, and passes that environment into the sandbox at startup. There is no live host `direnv` bridge in the running container; if `.envrc` changes, restart the sandbox session to refresh the injected environment.
 
+When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then prefers project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
+
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input. If you need to force a specific `nixpkgs` tree for host-helper resolution, set `AGENT_DIRENV_NIX_PATH=/path/to/nixpkgs`.
 
 ### Nix binary cache inside container
@@ -554,9 +556,13 @@ need update-index
 need podman
 need run podman -- podman --version
 need inject pnpm
+need clear
+need clear --all
 ```
 
 The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent. Bare `need <command>` lookups use `nixos-unstable` by default; use `nixpkgs#...` when you explicitly want the stable channel.
+
+`need inject` writes ambient command symlinks to a project-scoped bin directory by default, so an injected tool in one checkout does not shadow another project's shell. `need clear` removes the current project's injected symlinks, `need clear --legacy` removes the old shared injected bin directory, and `need clear --all` removes the whole `need` cache for the current tool cache.
 
 If the nix command index is missing, the sandbox now starts downloading it in the background when the agent boots. That bootstrap is non-blocking, so the first interaction still runs immediately; `need update-index` remains available as the explicit refresh command.
 
@@ -576,6 +582,7 @@ need update-index
 need pnpm
 need run pnpm -- pnpm -v
 need inject pnpm
+need clear
 ```
 
 ### Mounts and environment passthrough

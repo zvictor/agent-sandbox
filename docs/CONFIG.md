@@ -144,6 +144,8 @@ These widen the sandbox boundary substantially.
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` snapshot before the container starts, caches the filtered result, and injects it into the sandbox at startup. There is no live bridge back to host direnv; restart the session to refresh `.envrc` changes.
 
+When the snapshot includes `PATH`, safety wrappers for `git`, `sh`, `nix`, `nix-shell`, and `need` stay first. Project-local bins and the dev-environment `PATH` come before ambient `need inject` bins and image fallback paths.
+
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input.
 
 ## Nix Helper And Command Expansion
@@ -156,7 +158,7 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 | `AGENT_NEED_BOOTSTRAP_INDEX` | `1` | Starts background `need update-index` when needed |
 | `AGENT_NEED_INDEX_URL` | nix-index release URL | Override the downloaded nix-index database |
 | `AGENT_NEED_CACHE_DIR` | `$XDG_CACHE_HOME/need` | Cache root for helper materializations |
-| `AGENT_NEED_TOOLS_DIR` | helper cache bin dir | Symlink target dir for `need inject` |
+| `AGENT_NEED_TOOLS_DIR` | project-scoped bin dir under `$XDG_CACHE_HOME/need` | Symlink target dir for `need inject` |
 | `AGENT_NEED_INDEX_DIR` | nix-index cache dir | Location of the local command index |
 
 Common commands:
@@ -166,9 +168,14 @@ need update-index
 need pnpm
 need run pnpm -- pnpm -v
 need inject pnpm
+need clear
+need clear --legacy
+need clear --all
 ```
 
 Bare `need <command>` lookups use `nixos-unstable` by default. Use `nixpkgs#...` when you explicitly want the stable channel, and keep using any other explicit ref exactly as passed.
+
+`need inject` is project-scoped by default. `need clear` removes only the current injected-bin scope, `need clear --legacy` removes the old shared injected-bin directory, and `need clear --all` removes all `need` cache state under `AGENT_NEED_CACHE_DIR`.
 
 The sandbox also prefers compatibility shims over sandbox-specific instructions when possible:
 - `nix shell <installable> --command ...`
