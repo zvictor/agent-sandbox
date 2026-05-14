@@ -16,7 +16,11 @@ mount_engine() {
 
   if [ "${LOGIN_TOOL:-}" = "$engine" ] && [ -n "${LOGIN_CONFIG_HOST_DIR:-}" ]; then
     mount_source="$LOGIN_CONFIG_HOST_DIR"
-    mkdir -p "$mount_source"
+    if ! mkdir -p "$mount_source"; then
+      echo "[agent] ERROR: could not create config directory for $engine: $mount_source" >&2
+      exit 1
+    fi
+    require_runtime_config_dir_access "$engine" "$mount_source"
     ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
     return 0
   fi
@@ -38,7 +42,7 @@ mount_engine() {
 
   resolved_auth_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir")"
   if [ -n "$resolved_auth_path" ]; then
-    if [ ! -f "$resolved_auth_path" ]; then
+    if [ ! -f "$resolved_auth_path" ] || [ ! -r "$resolved_auth_path" ]; then
       echo "[agent] ERROR: auth selector '$selector_value' for $engine did not resolve to a readable file: $resolved_auth_path" >&2
       exit 1
     fi
@@ -100,6 +104,30 @@ ensure_config_state_dir() {
   fi
 }
 
+require_runtime_config_dir_access() {
+  local engine="$1"
+  local resolved_path="$2"
+  local config_file=""
+
+  if [ ! -r "$resolved_path" ] || [ ! -w "$resolved_path" ] || [ ! -x "$resolved_path" ]; then
+    echo "[agent] ERROR: config directory for $engine must be readable, writable, and searchable: $resolved_path" >&2
+    echo "[agent] Hint: fix ownership/permissions on the host path, or select a different config root." >&2
+    exit 1
+  fi
+
+  case "$engine" in
+    codex)
+      config_file="$resolved_path/config.toml"
+      ;;
+  esac
+
+  if [ -n "$config_file" ] && [ -e "$config_file" ] && [ ! -r "$config_file" ]; then
+    echo "[agent] ERROR: config file for $engine is not readable: $config_file" >&2
+    echo "[agent] Hint: fix ownership/permissions on the host file, or select a different config root." >&2
+    exit 1
+  fi
+}
+
 ensure_runtime_config_dir() {
   local engine="$1"
   local config_mode="$2"
@@ -116,7 +144,11 @@ ensure_runtime_config_dir() {
         echo "[agent] ERROR: config path for $engine is not a directory: $resolved_path" >&2
         exit 1
       fi
-      mkdir -p "$resolved_path"
+      if ! mkdir -p "$resolved_path"; then
+        echo "[agent] ERROR: could not create config directory for $engine: $resolved_path" >&2
+        exit 1
+      fi
+      require_runtime_config_dir_access "$engine" "$resolved_path"
       printf '%s\n' "$resolved_path"
       ;;
     fresh)

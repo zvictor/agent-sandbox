@@ -52,8 +52,10 @@ doctor_auth_state() {
   resolved_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir")"
 
   if [ -n "$selector_value" ]; then
-    if [ -f "$resolved_path" ]; then
+    if [ -f "$resolved_path" ] && [ -r "$resolved_path" ]; then
       printf '%s (%s)\n' "$selector_value" "$resolved_path"
+    elif [ -f "$resolved_path" ]; then
+      printf '%s (unreadable: %s)\n' "$selector_value" "$resolved_path"
     else
       printf '%s (missing: %s)\n' "$selector_value" "$resolved_path"
     fi
@@ -78,7 +80,11 @@ doctor_config_state() {
       ;;
     host|project|path)
       if [ -d "$resolved_path" ]; then
-        printf '%s (%s)\n' "${selector_value:-$config_mode}" "$resolved_path"
+        if [ ! -r "$resolved_path" ] || [ ! -w "$resolved_path" ] || [ ! -x "$resolved_path" ]; then
+          printf '%s (unusable permissions: %s)\n' "${selector_value:-$config_mode}" "$resolved_path"
+        else
+          printf '%s (%s)\n' "${selector_value:-$config_mode}" "$resolved_path"
+        fi
       else
         printf '%s (will create: %s)\n' "${selector_value:-$config_mode}" "$resolved_path"
       fi
@@ -340,7 +346,7 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ -n "${CODEX_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CODEX_AUTH" "$CODEX_AUTH_BASE")" ]; then
+  if [ -n "${CODEX_AUTH:-}" ] && [ ! -r "$(resolve_auth_file_path "$CODEX_AUTH" "$CODEX_AUTH_BASE")" ]; then
     if printf '%s\n' "$CODEX_AUTH" | grep -Eq '^(/|\./|\.\./|~|~/)'; then
       doctor_note "Fix CODEX_AUTH=$CODEX_AUTH so it points to a readable credentials file, or unset it to use the default host Codex auth."
     else
@@ -349,12 +355,12 @@ print_doctor_suggestions() {
     printed="1"
   fi
 
-  if [ -n "${CLAUDE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$CLAUDE_AUTH" "$CLAUDE_AUTH_BASE")" ]; then
+  if [ -n "${CLAUDE_AUTH:-}" ] && [ ! -r "$(resolve_auth_file_path "$CLAUDE_AUTH" "$CLAUDE_AUTH_BASE")" ]; then
     doctor_note "Fix CLAUDE_AUTH=$CLAUDE_AUTH so it points to a readable credential file or named managed slot."
     printed="1"
   fi
 
-  if [ -n "${OPENCODE_AUTH:-}" ] && [ ! -f "$(resolve_auth_file_path "$OPENCODE_AUTH" "$OPENCODE_AUTH_BASE")" ]; then
+  if [ -n "${OPENCODE_AUTH:-}" ] && [ ! -r "$(resolve_auth_file_path "$OPENCODE_AUTH" "$OPENCODE_AUTH_BASE")" ]; then
     doctor_note "Fix OPENCODE_AUTH=$OPENCODE_AUTH so it points to a readable credential file or named managed slot."
     printed="1"
   fi

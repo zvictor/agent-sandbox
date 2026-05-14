@@ -546,6 +546,8 @@ codex_mount_args_for() (
 
   local workspace_path="$1"
   local config_root="$2"
+  local auth_base="${3:-}"
+  local auth_selector="${4:-}"
 
   split_csv_or_lines() {
     local value="$1"
@@ -559,7 +561,12 @@ codex_mount_args_for() (
   WORKSPACE_PATH="$workspace_path"
   CODEX_CONFIG_MODE=host
   CODEX_HOST_CONFIG="$config_root"
-  CODEX_AUTH_BASE=""
+  CODEX_AUTH_BASE="$auth_base"
+  if [ -n "$auth_selector" ]; then
+    CODEX_AUTH="$auth_selector"
+  else
+    unset CODEX_AUTH
+  fi
   Z_SUFFIX=""
   ARGS=()
   mount_standard_engine codex
@@ -600,6 +607,51 @@ test_codex_workspace_config_alias_mount_skips_duplicate_path() (
 
   assert_contains "$output" "$workspace/.codex:/cache/.codex:rw"
   assert_not_contains "$output" "$workspace/.codex:$workspace/.codex:rw"
+)
+
+test_codex_config_dir_requires_write_access() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root output status
+  tmp_dir="$(mktemp -d)"
+  trap 'chmod u+rwx "$config_root" 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  mkdir -p "$workspace" "$config_root"
+  chmod a-w "$config_root"
+
+  set +e
+  output="$(codex_mount_args_for "$workspace" "$config_root" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected unreadable config dir to fail"
+  assert_contains "$output" "config directory for codex must be readable, writable, and searchable: $config_root"
+)
+
+test_codex_auth_file_requires_read_access() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root auth_base auth_file output status
+  tmp_dir="$(mktemp -d)"
+  trap 'chmod u+rw "$auth_file" 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  auth_base="$tmp_dir/auth"
+  auth_file="$auth_base/work.json"
+  mkdir -p "$workspace" "$config_root" "$auth_base"
+  : > "$auth_file"
+  chmod a-r "$auth_file"
+
+  set +e
+  output="$(codex_mount_args_for "$workspace" "$config_root" "$auth_base" work 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected unreadable auth file to fail"
+  assert_contains "$output" "auth selector 'work' for codex did not resolve to a readable file: $auth_file"
 )
 
 test_image_includes_openssh() (
@@ -656,6 +708,8 @@ main() {
   run_test "need clear commands" test_need_clear_commands
   run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
   run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
+  run_test "codex config dir requires write access" test_codex_config_dir_requires_write_access
+  run_test "codex auth file requires read access" test_codex_auth_file_requires_read_access
   run_test "image includes openssh" test_image_includes_openssh
   run_test "need defaults to unstable nixpkgs" test_need_defaults_to_unstable_nixpkgs
 
