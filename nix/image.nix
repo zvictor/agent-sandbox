@@ -185,16 +185,16 @@ let
         if [ -z "$latest_version" ]; then
           if [ -z "$current_version" ]; then
             echo "Could not resolve latest ${pkg}; installing unpinned package..." >&2
-            (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add "${pkg}")
+            (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add --trust "${pkg}")
           fi
         elif [ "$current_version" != "$latest_version" ]; then
           echo "Installing ${pkg}@$latest_version..." >&2
-          (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add "${pkg}@$latest_version")
+          (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add --trust "${pkg}@$latest_version")
         fi
       else
         if [ ! -f "$pkg_json" ]; then
           echo "Installing ${pkg}..." >&2
-          (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add "${pkg}")
+          (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add --trust "${pkg}")
         fi
       fi
 
