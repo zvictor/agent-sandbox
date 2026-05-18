@@ -13,7 +13,7 @@ trim_whitespace() {
 
 is_project_config_key_allowed() {
   case "$1" in
-    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|OMP_*|PI_*|TESTCONTAINERS_*|GIT_ALLOW)
+    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|OMP_*|PI_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
       return 0
       ;;
     *)
@@ -236,6 +236,8 @@ resolve_effective_tools_list() {
   if [ -d "$CODEX_HOST_CONFIG" ] || [ "$CODEX_CONFIG_MODE" = "project" ] || [ "$CODEX_CONFIG_MODE" = "fresh" ] || [ -n "${CODEX_CONFIG:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codex"
   elif [ -n "${CODEX_AUTH:-}" ] || [ -d "${CODEX_AUTH_BASE:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }codex"
+  elif [ -n "${OPENAI_API_KEY:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codex"
   fi
 

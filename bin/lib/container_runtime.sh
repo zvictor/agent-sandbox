@@ -40,6 +40,24 @@ mount_engine() {
     selector_value="${!auth_env_name:-}"
   fi
 
+  # Synthesize auth.json from OPENAI_API_KEY when no CODEX_AUTH slot is set
+  if [ "$engine" = "codex" ] && [ -z "$selector_value" ] && [ -n "${OPENAI_API_KEY:-}" ]; then
+    local synth_auth_dir
+    synth_auth_dir="$(mktemp -d "$HELPER_TMPDIR/codex-auth.XXXXXX")"
+    local synth_json
+    synth_json=$(jq -n \
+      --arg key "$OPENAI_API_KEY" \
+      '{OPENAI_API_KEY: $key, email: "apikey@example.com", planType: "pro"}')
+    printf '%s\n' "$synth_json" > "$synth_auth_dir/auth.json"
+    chmod 600 "$synth_auth_dir/auth.json"
+    ARGS+=( -v "$synth_auth_dir/auth.json:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
+    if [ -n "${OPENAI_BASE_URL:-}" ]; then
+      printf 'openai_base_url = "%s"\n' "$OPENAI_BASE_URL" > "$synth_auth_dir/config.toml"
+      ARGS+=( -v "$synth_auth_dir/config.toml:$container_config_dir/config.toml:ro${Z_SUFFIX}" )
+    fi
+    return 0
+  fi
+
   resolved_auth_path="$(resolve_auth_file_path "$selector_value" "$auth_base_dir")"
   if [ -n "$resolved_auth_path" ]; then
     if [ ! -f "$resolved_auth_path" ] || [ ! -r "$resolved_auth_path" ]; then
