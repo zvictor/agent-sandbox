@@ -1,0 +1,4 @@
+interface:
+  display_name: "Need Command Injection"
+  short_description: "Recover missing CLI tools with need"
+  default_prompt: "Use $need-command-injection to recover missing CLI tools in this sandbox and continue the task."

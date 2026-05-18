@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fail-Fast KISS"
+  short_description: "Strict fail-fast replacement coding guidance"
+  default_prompt: "Use $fail-fast-kiss to refactor this code without compatibility layers or graceful degradation."
