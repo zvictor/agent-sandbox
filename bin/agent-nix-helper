@@ -151,6 +151,8 @@ serve_bridge() {
   local now=0
   local last_activity
   local stderr_file=""
+  local task_pid=""
+  declare -A bg_tasks=()
 
   mkdir -p "$requests_dir" "$processing_dir" "$responses_dir"
   last_activity="$(date +%s)"
@@ -175,28 +177,46 @@ serve_bridge() {
       done < "$processing_file"
 
       response_file="$responses_dir/$(basename "${processing_file%.req}").resp"
-      result_file="$processing_dir/result.$$"
-      stderr_file="$processing_dir/stderr.$$"
+      result_file="$processing_dir/result.$RANDOM.$$"
+      stderr_file="$processing_dir/stderr.$RANDOM.$$"
 
       case "$command" in
         materialize)
-          if materialize_installable "$installable" >"$result_file" 2>"$stderr_file"; then
-            write_ok_response "$response_file" "$result_file"
-          else
-            write_error_response "$response_file" "$installable" "$(tr '\n' ' ' < "$stderr_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
-          fi
+          (
+            set +e
+            if materialize_installable "$installable" >"$result_file" 2>"$stderr_file"; then
+              write_ok_response "$response_file" "$result_file"
+            else
+              write_error_response "$response_file" "$installable" "$(tr '\n' ' ' < "$stderr_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+            fi
+            rm -f "$processing_file" "$result_file" "$stderr_file"
+          ) &
+          bg_tasks["$!"]="$processing_file"
           ;;
         *)
           write_error_response "$response_file" "$installable" "unsupported command '$command'"
+          rm -f "$processing_file"
           ;;
       esac
 
-      rm -f "$processing_file" "$result_file" "$stderr_file"
       last_activity="$(date +%s)"
     done
 
+    for task_pid in "${!bg_tasks[@]}"; do
+      if ! kill -0 "$task_pid" 2>/dev/null; then
+        unset 'bg_tasks["$task_pid"]'
+      fi
+    done
+
+    if [ "${#bg_tasks[@]}" -gt 0 ]; then
+      last_activity="$(date +%s)"
+    fi
+
     now="$(date +%s)"
     if [ "$ttl" -gt 0 ] && [ $((now - last_activity)) -ge "$ttl" ]; then
+      for task_pid in "${!bg_tasks[@]}"; do
+        wait "$task_pid" 2>/dev/null || true
+      done
       exit 0
     fi
 
