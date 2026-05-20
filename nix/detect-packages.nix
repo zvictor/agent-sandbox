@@ -36,8 +36,10 @@ let
   fromShell =
     let
       shellExpr = import shellPath;
+      # Don't pass pkgs — let the project's shell.nix use its own nixpkgs
+      # (via fetchTarball or <nixpkgs>). Requires --impure on the nix build.
       shellDrv =
-        if builtins.isFunction shellExpr then shellExpr { inherit pkgs; } else shellExpr;
+        if builtins.isFunction shellExpr then shellExpr { } else shellExpr;
       fromBuildInputs = shellDrv.buildInputs or [ ];
       fromNativeBuildInputs = shellDrv.nativeBuildInputs or [ ];
       fromPackagesAttr = shellDrv.packages or [ ];

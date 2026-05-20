@@ -118,6 +118,7 @@ build_cached_artifact() {
         "${PROJECT_OVERRIDE_ARGS[@]}" \
         --print-out-paths \
         --no-link \
+        --impure \
         "${LOCK_ARGS[@]}"
     )"; then
       echo "$failure_message" >&2
