@@ -47,6 +47,11 @@ prepare_need_helper() {
     return 0
   fi
 
+  # Clean up stale PID file from a dead helper
+  if [ -f "$NEED_HELPER_PID_FILE" ]; then
+    rm -f "$NEED_HELPER_PID_FILE"
+  fi
+
   if ! mkdir "$lock_dir" 2>/dev/null; then
     if [ -d "$lock_dir" ] && ! need_helper_service_running; then
       rmdir "$lock_dir" 2>/dev/null || true
@@ -63,12 +68,12 @@ prepare_need_helper() {
 
   (
     umask 077
-    "$AGENT_BIN_DIR/agent-nix-helper" serve "$NEED_HELPER_DIR" "$NEED_HELPER_TTL" \
-      >"$NEED_HELPER_LOG_FILE" 2>&1
+    exec "$AGENT_BIN_DIR/agent-nix-helper" serve "$NEED_HELPER_DIR" "$NEED_HELPER_TTL" \
+      </dev/null >"$NEED_HELPER_LOG_FILE" 2>&1
   ) &
   service_pid="$!"
   printf '%s\n' "$service_pid" > "$NEED_HELPER_PID_FILE"
-  perf_log "need helper started in background (ttl=${NEED_HELPER_TTL}s)"
+  perf_log "need helper started in background (pid=$service_pid ttl=${NEED_HELPER_TTL}s)"
 
   rmdir "$lock_dir" 2>/dev/null || true
 }

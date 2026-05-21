@@ -142,6 +142,7 @@ serve_bridge() {
   local requests_dir="$bridge_dir/requests"
   local processing_dir="$bridge_dir/processing"
   local responses_dir="$bridge_dir/responses"
+  local heartbeat_file="$bridge_dir/heartbeat"
   local request_file=""
   local processing_file=""
   local response_file=""
@@ -150,14 +151,31 @@ serve_bridge() {
   local installable=""
   local now=0
   local last_activity
+  local last_heartbeat=0
   local stderr_file=""
   local task_pid=""
   declare -A bg_tasks=()
 
+  trap 'echo "[helper] received signal, exiting" >&2; rm -f "$heartbeat_file"; exit 0' TERM INT HUP
+  trap 'echo "[helper] error at line $LINENO (exit $?)" >&2' ERR
+
   mkdir -p "$requests_dir" "$processing_dir" "$responses_dir"
+
+  # Clean up stale request/response files from a previous dead helper
+  rm -f "$requests_dir"/*.req "$processing_dir"/*.req "$processing_dir"/result.* "$processing_dir"/stderr.* 2>/dev/null || true
+
+  echo "[helper] started (pid=$$, ttl=${ttl}s, bridge=$bridge_dir)" >&2
   last_activity="$(date +%s)"
 
   while :; do
+    # Write heartbeat every 30 seconds
+    now="$(date +%s)"
+    if [ $((now - last_heartbeat)) -ge 30 ]; then
+      printf '%s\n' "$now" > "$heartbeat_file.tmp"
+      mv -f "$heartbeat_file.tmp" "$heartbeat_file"
+      last_heartbeat="$now"
+    fi
+
     request_file=""
     for request_file in "$requests_dir"/*.req; do
       [ -f "$request_file" ] || continue
@@ -217,6 +235,7 @@ serve_bridge() {
       for task_pid in "${!bg_tasks[@]}"; do
         wait "$task_pid" 2>/dev/null || true
       done
+      rm -f "$heartbeat_file"
       exit 0
     fi
 

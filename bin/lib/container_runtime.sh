@@ -626,7 +626,7 @@ append_host_socket_args() {
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
   fi
 
-  if [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] && [ -S /nix/var/nix/daemon-socket/socket ]; then
+  if { [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] || [ "${NEED_HELPER_MODE:-0}" = "1" ]; } && [ -S /nix/var/nix/daemon-socket/socket ]; then
     ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
   fi
 

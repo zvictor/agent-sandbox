@@ -4,6 +4,8 @@ set -euo pipefail
 BRIDGE_DIR="${AGENT_NEED_HELPER_DIR:-/run/agent-nix-helper}"
 REQUESTS_DIR="$BRIDGE_DIR/requests"
 RESPONSES_DIR="$BRIDGE_DIR/responses"
+HEARTBEAT_FILE="$BRIDGE_DIR/heartbeat"
+HEARTBEAT_STALE_THRESHOLD=120
 TIMEOUT="${AGENT_NEED_TIMEOUT:-600}"
 HELPER_WAITED=0
 CACHE_HOME="${XDG_CACHE_HOME:-/cache}"
@@ -139,6 +141,16 @@ store_cached_materialization() {
   mv -f "$tmp_file" "$cache_file"
 }
 
+helper_alive() {
+  if [ ! -f "$HEARTBEAT_FILE" ]; then
+    return 1
+  fi
+
+  local heartbeat_age
+  heartbeat_age=$(( $(date +%s) - $(stat -c %Y "$HEARTBEAT_FILE" 2>/dev/null || echo 0) ))
+  [ "$heartbeat_age" -lt "$HEARTBEAT_STALE_THRESHOLD" ]
+}
+
 helper_request() {
   local target_installable="$1"
   local req_id=""
@@ -150,6 +162,13 @@ helper_request() {
   HELPER_WAITED=0
 
   mkdir -p "$REQUESTS_DIR" "$RESPONSES_DIR"
+
+  if ! helper_alive; then
+    echo "[agent] nix helper is not running (no recent heartbeat at $HEARTBEAT_FILE)" >&2
+    echo "[agent] restart the sandbox or run: agent doctor --verbose" >&2
+    exit 1
+  fi
+
   tool_notice "materializing $target_installable via the host Nix helper..."
   {
     printf 'command=materialize\n'
@@ -160,6 +179,11 @@ helper_request() {
     if [ -f "$response_file" ]; then
       HELPER_WAITED="$waited"
       return 0
+    fi
+
+    if [ "$waited" -gt 10 ] && [ $((waited % 30)) -eq 0 ] && ! helper_alive; then
+      echo "[agent] nix helper died during materialization (heartbeat gone)" >&2
+      exit 1
     fi
 
     sleep 1
@@ -447,13 +471,41 @@ materialize_installable() {
   resolve_target "$target" || return 1
 
   if ! load_cached_materialization "$resolved_installable"; then
-    [ -d "$BRIDGE_DIR" ] || {
-      echo "[agent] nix helper bridge is unavailable at $BRIDGE_DIR" >&2
+    if [ -d "$BRIDGE_DIR" ] && helper_alive; then
+      helper_request "$resolved_installable"
+      load_helper_response "$resolved_installable"
+      store_cached_materialization "$resolved_installable"
+    elif command -v nix >/dev/null 2>&1; then
+      tool_notice "host helper unavailable, building $resolved_installable directly..."
+      local nix_features="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
+      local -a out_paths
+      mapfile -t out_paths < <(
+        env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$resolved_installable"
+      ) || {
+        echo "[agent] nix build failed for '$resolved_installable'" >&2
+        exit 1
+      }
+      [ "${#out_paths[@]}" -gt 0 ] || {
+        echo "[agent] nix build produced no output for '$resolved_installable'" >&2
+        exit 1
+      }
+      out_path="${out_paths[0]}"
+      bin_path=""
+      local candidate_path
+      for candidate_path in "${out_paths[@]}"; do
+        if [ -d "$candidate_path/bin" ]; then
+          bin_path="$candidate_path/bin"
+          out_path="$candidate_path"
+          break
+        fi
+      done
+      installable="$resolved_installable"
+      store_cached_materialization "$resolved_installable"
+    else
+      echo "[agent] nix helper is not running and nix command is not available" >&2
+      echo "[agent] restart the sandbox or run: agent doctor --verbose" >&2
       exit 1
-    }
-    helper_request "$resolved_installable"
-    load_helper_response "$resolved_installable"
-    store_cached_materialization "$resolved_installable"
+    fi
   fi
 }
 
