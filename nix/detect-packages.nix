@@ -33,13 +33,39 @@ let
     inherit pkgs unstable;
   });
 
+  # Resolve the project's own nixpkgs from its flake.lock (pure, no --impure needed)
+  projectFlakeLockPath = "${projectPkgs}/flake.lock";
+  hasProjectFlakeLock = builtins.pathExists projectFlakeLockPath;
+  projectLockData = if hasProjectFlakeLock then builtins.fromJSON (builtins.readFile projectFlakeLockPath) else null;
+  nixpkgsInputName = if projectLockData != null then projectLockData.root.inputs.nixpkgs or null else null;
+  nixpkgsLocked = if nixpkgsInputName != null then projectLockData.nodes.${nixpkgsInputName}.locked or null else null;
+
+  # Resolve from pinned fetchTarball (written by bash when no flake.lock exists)
+  pinnedNixpkgsPath = "${projectPkgs}/.agent-sandbox-pinned-nixpkgs.json";
+  hasPinnedNixpkgs = builtins.pathExists pinnedNixpkgsPath;
+  pinnedNixpkgsData = if hasPinnedNixpkgs then builtins.fromJSON (builtins.readFile pinnedNixpkgsPath) else null;
+
+  projectOwnPkgs =
+    if nixpkgsLocked != null then
+      let
+        url = "https://github.com/${nixpkgsLocked.owner}/${nixpkgsLocked.repo}/archive/${nixpkgsLocked.rev}.tar.gz";
+      in
+      import (fetchTarball { inherit url; sha256 = nixpkgsLocked.narHash; }) { inherit (pkgs) system; }
+    else if pinnedNixpkgsData != null then
+      import (fetchTarball { inherit (pinnedNixpkgsData) url sha256; }) { inherit (pkgs) system; }
+    else
+      pkgs;
+
+  # Pass project's own nixpkgs when available, otherwise let shell.nix use its default
+  shellArgs =
+    if nixpkgsLocked != null || pinnedNixpkgsData != null then { pkgs = projectOwnPkgs; }
+    else { };
+
   fromShell =
     let
       shellExpr = import shellPath;
-      # Don't pass pkgs — let the project's shell.nix use its own nixpkgs
-      # (via fetchTarball or <nixpkgs>). Requires --impure on the nix build.
       shellDrv =
-        if builtins.isFunction shellExpr then shellExpr { } else shellExpr;
+        if builtins.isFunction shellExpr then shellExpr shellArgs else shellExpr;
       fromBuildInputs = shellDrv.buildInputs or [ ];
       fromNativeBuildInputs = shellDrv.nativeBuildInputs or [ ];
       fromPackagesAttr = shellDrv.packages or [ ];

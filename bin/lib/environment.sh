@@ -392,6 +392,5 @@ bootstrap_environment() {
   prepare_cache_dirs
   resolve_direnv_nix_path
   prepare_dev_env_state
-  log_debug_context
   prepare_project_store_input
 }

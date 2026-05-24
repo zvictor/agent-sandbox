@@ -73,6 +73,45 @@ stage_project_contract_allowlist() {
   fi
 }
 
+pin_shell_fetchtarball() {
+  local target_dir="$1"
+  local shell_file="$target_dir/shell.nix"
+  local content=""
+  local url=""
+  local hash=""
+  local cache_key=""
+  local cache_file=""
+  local pinned_file="$target_dir/.agent-sandbox-pinned-nixpkgs.json"
+
+  content="$(cat "$shell_file")"
+  url="$(printf '%s' "$content" | sed -n 's/.*fetchTarball[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+
+  if [ -z "$url" ]; then
+    return 0
+  fi
+
+  cache_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  cache_file="${HOME}/.cache/agent-sandbox/pinned-nixpkgs-${cache_key}.json"
+
+  if [ -f "$cache_file" ]; then
+    cp "$cache_file" "$pinned_file"
+    echo "[agent] pinned fetchTarball for shell.nix (cached): $url" >&2
+    return 0
+  fi
+
+  hash="$(nix-prefetch-url --unpack "$url" 2>/dev/null)"
+
+  if [ -z "$hash" ]; then
+    echo "[agent] warning: could not prefetch $url, shell.nix may need --impure" >&2
+    return 0
+  fi
+
+  printf '{"url":"%s","sha256":"%s"}\n' "$url" "$hash" > "$pinned_file"
+  mkdir -p "$(dirname "$cache_file")"
+  cp "$pinned_file" "$cache_file"
+  echo "[agent] pinned fetchTarball for shell.nix: $url" >&2
+}
+
 stage_project_contract_input() {
   local target_dir="$1"
   local file_path=""
@@ -81,6 +120,10 @@ stage_project_contract_input() {
   copy_if_present "$PROJECT_ROOT/default.nix" "$target_dir/default.nix"
   copy_if_present "$PROJECT_ROOT/flake.nix" "$target_dir/flake.nix"
   copy_if_present "$PROJECT_ROOT/flake.lock" "$target_dir/flake.lock"
+
+  if [ ! -f "$target_dir/flake.lock" ] && [ -f "$target_dir/shell.nix" ]; then
+    pin_shell_fetchtarball "$target_dir"
+  fi
 
   if [ -d "$PROJECT_NIX_DIR" ]; then
     while IFS= read -r file_path; do

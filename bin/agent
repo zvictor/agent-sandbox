@@ -172,6 +172,7 @@ fi
 prepare_runtime_artifacts
 prepare_container_api
 prepare_need_helper
+log_debug_context
 
 build_container_args
 
