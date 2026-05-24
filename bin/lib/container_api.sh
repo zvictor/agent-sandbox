@@ -89,7 +89,9 @@ container_api_start_podman_session() {
   CONTAINER_API_TTL="${AGENT_CONTAINER_API_TTL:-900}"
   key="$(hash_short "$(id -u)|$PROJECT_ROOT|$HOST_HOME")"
   CONTAINER_API_DIR="$CACHE_DIR/container-api/podman-session/$key"
-  CONTAINER_API_RUN_DIR="$CONTAINER_API_DIR/run"
+  # Socket must live under XDG_RUNTIME_DIR to stay within the 108-char Unix socket path limit.
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  CONTAINER_API_RUN_DIR="$runtime_dir/agent-api-$key"
   CONTAINER_API_SOCKET_PATH="$CONTAINER_API_RUN_DIR/podman.sock"
   CONTAINER_API_PID_FILE="$CONTAINER_API_DIR/service.pid"
   CONTAINER_API_LOG_FILE="$CONTAINER_API_DIR/service.log"
@@ -104,7 +106,7 @@ container_api_start_podman_session() {
     if container_api_service_running; then
       kill "$(cat "$CONTAINER_API_PID_FILE")" 2>/dev/null || true
     fi
-    rm -rf "$CONTAINER_API_DIR"
+    rm -rf "$CONTAINER_API_DIR" "$CONTAINER_API_RUN_DIR"
   fi
 
   mkdir -p "$CONTAINER_API_RUN_DIR" "$graphroot" "$runroot" "$tmpdir"
@@ -139,7 +141,6 @@ container_api_start_podman_session() {
 
   rm -f "$CONTAINER_API_SOCKET_PATH"
 
-  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   (
     umask 077
     env -u DOCKER_HOST -u CONTAINER_HOST \
@@ -152,6 +153,27 @@ container_api_start_podman_session() {
   service_pid="$!"
   printf '%s\n' "$service_pid" > "$CONTAINER_API_PID_FILE"
   perf_log "container api warmup started in background (mode=podman-session ttl=${CONTAINER_API_TTL}s)"
+
+  # Wait for the socket to be created before returning.
+  local _wait_count=0
+  while [ ! -S "$CONTAINER_API_SOCKET_PATH" ] && [ "$_wait_count" -lt 50 ]; do
+    if ! kill -0 "$service_pid" 2>/dev/null; then
+      echo "[agent] podman session service exited unexpectedly" >&2
+      cat "$CONTAINER_API_LOG_FILE" >&2 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+    _wait_count=$((_wait_count + 1))
+  done
+
+  if [ ! -S "$CONTAINER_API_SOCKET_PATH" ]; then
+    echo "[agent] fatal: podman session socket not ready at $CONTAINER_API_SOCKET_PATH" >&2
+    if [ -f "$CONTAINER_API_LOG_FILE" ]; then
+      echo "[agent] service log:" >&2
+      cat "$CONTAINER_API_LOG_FILE" >&2
+    fi
+    exit 1
+  fi
 
   rmdir "$lock_dir" 2>/dev/null || true
 }
