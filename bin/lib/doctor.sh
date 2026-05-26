@@ -171,7 +171,9 @@ print_doctor_json() {
   local opencode_config_state="${12}"
   local opencode_auth_state="${13}"
   local omp_config_state="${14}"
-  local suggestions="${15}"
+  local commandcode_config_state="${15}"
+  local commandcode_auth_state="${16}"
+  local suggestions="${17}"
 
   printf '{\n'
   printf '  "project": {\n'
@@ -209,7 +211,9 @@ print_doctor_json() {
   doctor_json_pair "claude_auth" "$claude_auth_state"; printf ',\n'
   doctor_json_pair "opencode_config" "$opencode_config_state"; printf ',\n'
   doctor_json_pair "opencode_auth" "$opencode_auth_state"; printf ',\n'
-  doctor_json_pair "omp_config" "$omp_config_state"; printf '\n'
+  doctor_json_pair "omp_config" "$omp_config_state"; printf ',\n'
+  doctor_json_pair "commandcode_config" "$commandcode_config_state"; printf ',\n'
+  doctor_json_pair "commandcode_auth" "$commandcode_auth_state"; printf '\n'
   printf '  },\n'
   printf '  "suggestions": [\n'
   if [ -n "$suggestions" ]; then
@@ -263,7 +267,9 @@ print_doctor_text_verbose() {
   local opencode_config_state="${12}"
   local opencode_auth_state="${13}"
   local omp_config_state="${14}"
-  local suggestions="${15}"
+  local commandcode_config_state="${15}"
+  local commandcode_auth_state="${16}"
+  local suggestions="${17}"
 
   printf 'Agent Sandbox Doctor\n\n'
 
@@ -303,6 +309,8 @@ print_doctor_text_verbose() {
   doctor_line "opencode_config" "$opencode_config_state"
   doctor_line "opencode_auth" "$opencode_auth_state"
   doctor_line "omp_config" "$omp_config_state"
+  doctor_line "commandcode_config" "$commandcode_config_state"
+  doctor_line "commandcode_auth" "$commandcode_auth_state"
 
   printf '\nSuggested next steps\n'
   printf '%s\n' "$suggestions" | sed 's/^/- /'
@@ -342,7 +350,7 @@ print_doctor_suggestions() {
   fi
 
   if [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "fallback-all" ]; then
-    doctor_note "No host agent config roots were detected, so all supported tools remain enabled. Set AGENT_TOOLS if you want a narrower project allowlist."
+    doctor_note "No host agent config roots were detected, so all supported tools remain enabled."
     printed="1"
   fi
 
@@ -395,6 +403,8 @@ print_doctor_and_exit() {
   local opencode_config_state=""
   local opencode_auth_state=""
   local omp_config_state=""
+  local commandcode_config_state=""
+  local commandcode_auth_state=""
   local suggestions=""
   local tools_source=""
 
@@ -440,6 +450,8 @@ print_doctor_and_exit() {
   opencode_config_state="$(doctor_config_state "$OPENCODE_CONFIG_SELECTOR" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG")"
   opencode_auth_state="$(doctor_auth_state "${OPENCODE_AUTH:-}" "$OPENCODE_AUTH_BASE")"
   omp_config_state="$(doctor_path_state "$OMP_HOST_CONFIG")"
+  commandcode_config_state="$(doctor_config_state "$COMMANDCODE_CONFIG_SELECTOR" "$COMMANDCODE_CONFIG_MODE" "$COMMANDCODE_HOST_CONFIG")"
+  commandcode_auth_state="$(doctor_auth_state "${COMMANDCODE_AUTH:-}" "$COMMANDCODE_AUTH_BASE")"
   suggestions="$(print_doctor_suggestions | sed 's/^- //')"
 
   if [ "$DOCTOR_OUTPUT" = "json" ]; then
@@ -458,6 +470,8 @@ print_doctor_and_exit() {
       "$opencode_config_state" \
       "$opencode_auth_state" \
       "$omp_config_state" \
+      "$commandcode_config_state" \
+      "$commandcode_auth_state" \
       "$suggestions"
     exit 0
   fi
@@ -478,6 +492,8 @@ print_doctor_and_exit() {
       "$opencode_config_state" \
       "$opencode_auth_state" \
       "$omp_config_state" \
+      "$commandcode_config_state" \
+      "$commandcode_auth_state" \
       "$suggestions"
   else
     print_doctor_text_summary "$runtime_mode" "$requested_container_api" "$codex_config_state" "$tools_list" "$suggestions"

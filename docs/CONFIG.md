@@ -34,7 +34,6 @@ Existing environment variables always win over file values.
 | --- | --- | --- | --- |
 | `AGENT_RUNTIME` | auto-detect | `podman`, `docker` | Selects the outer runtime |
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
-| `AGENT_TOOLS` | inferred | space-separated tools, `auto`, `all` | Narrows or expands the enabled tool surface |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
 | `AGENT_NEED_HELPER` | `1` | `0`, `1` | Enables or disables the narrow host-backed Nix helper |
 | `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex config root |

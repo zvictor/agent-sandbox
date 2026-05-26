@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KNOWN_TOOLS="codex claude opencode codemachine omp"
+KNOWN_TOOLS="codex claude opencode codemachine omp commandcode"
 NIX_FEATURES="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
 PERF_LOG="${AGENT_PERF_LOG:-1}"
 

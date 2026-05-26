@@ -70,6 +70,7 @@ login_auth_env_name_for_tool() {
     codex) printf '%s\n' "CODEX_AUTH" ;;
     claude) printf '%s\n' "CLAUDE_AUTH" ;;
     opencode) printf '%s\n' "OPENCODE_AUTH" ;;
+    commandcode) printf '%s\n' "COMMANDCODE_AUTH" ;;
     *)
       return 1
       ;;
@@ -81,6 +82,7 @@ login_config_env_name_for_tool() {
     codex) printf '%s\n' "CODEX_CONFIG" ;;
     claude) printf '%s\n' "CLAUDE_CONFIG" ;;
     opencode) printf '%s\n' "OPENCODE_CONFIG" ;;
+    commandcode) printf '%s\n' "COMMANDCODE_CONFIG" ;;
     *)
       return 1
       ;;
@@ -92,6 +94,7 @@ login_auth_base_dir_for_tool() {
     codex) printf '%s\n' "$CODEX_AUTH_BASE" ;;
     claude) printf '%s\n' "$CLAUDE_AUTH_BASE" ;;
     opencode) printf '%s\n' "$OPENCODE_AUTH_BASE" ;;
+    commandcode) printf '%s\n' "$COMMANDCODE_AUTH_BASE" ;;
     *)
       return 1
       ;;
@@ -103,6 +106,7 @@ login_active_credentials_file_for_tool() {
     codex) printf '%s\n' "auth.json" ;;
     claude) printf '%s\n' ".credentials.json" ;;
     opencode) printf '%s\n' "opencode.json" ;;
+    commandcode) printf '%s\n' "auth.json" ;;
     *)
       return 1
       ;;
@@ -114,6 +118,7 @@ login_config_dir_for_tool() {
     codex) printf '%s\n' "/cache/.codex" ;;
     claude) printf '%s\n' "/cache/.claude" ;;
     opencode) printf '%s\n' "/cache/.config/opencode" ;;
+    commandcode) printf '%s\n' "/cache/.commandcode" ;;
     *)
       return 1
       ;;

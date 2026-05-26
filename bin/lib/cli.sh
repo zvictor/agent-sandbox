@@ -138,12 +138,8 @@ validate_tool_access() {
   prepare_tool_resolution_context
   TOOLS_LIST="${EFFECTIVE_TOOLS_LIST:-$KNOWN_TOOLS}"
   if ! contains_word "$TOOL" $TOOLS_LIST; then
-    if [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "configured" ] || [ "${EFFECTIVE_TOOLS_SOURCE:-}" = "configured-all" ]; then
-      echo "[agent] tool '$TOOL' is disabled by AGENT_TOOLS='$TOOLS_LIST'" >&2
-    else
-      echo "[agent] tool '$TOOL' is not enabled for this project (effective tools: $TOOLS_LIST)" >&2
-      echo "[agent] set AGENT_TOOLS to override the inferred tool list if needed" >&2
-    fi
+    echo "[agent] tool '$TOOL' is not enabled for this project (effective tools: $TOOLS_LIST)" >&2
+    echo "[agent] set up config or auth for $TOOL to enable it" >&2
     exit 1
   fi
 }

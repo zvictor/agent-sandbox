@@ -222,11 +222,11 @@ test_runtime_resolution_parity() (
   local bad_runtime doctor_output run_output status=0
   bad_runtime="definitely-not-a-runtime"
 
-  doctor_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" AGENT_TOOLS=all ./scripts/agent doctor 2>&1)"
+  doctor_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" ./scripts/agent doctor 2>&1)"
   assert_contains "$doctor_output" "requested runtime '$bad_runtime' is not available"
 
   set +e
-  run_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" AGENT_TOOLS=all ./scripts/agent codex 2>&1)"
+  run_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" ./scripts/agent codex 2>&1)"
   status=$?
   set -e
 

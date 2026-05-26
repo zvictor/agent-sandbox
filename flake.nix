@@ -1,5 +1,5 @@
 {
-  description = "Reusable sandboxed agent runtime (codex/claude/opencode/codemachine/omp)";
+  description = "Reusable sandboxed agent runtime (codex/claude/opencode/codemachine/omp/commandcode)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -82,7 +82,8 @@
                 "$out/scripts/claude" \
                 "$out/scripts/opencode" \
                 "$out/scripts/codemachine" \
-                "$out/scripts/omp"
+                "$out/scripts/omp" \
+                "$out/scripts/commandcode"
               runHook postInstall
             '';
           };
@@ -127,6 +128,7 @@
           opencode = mkTool "opencode";
           codemachine = mkTool "codemachine";
           omp = mkTool "omp";
+          commandcode = mkTool "commandcode";
           default = mkTool "agent";
         }
       );
@@ -148,6 +150,7 @@
           opencode = mkApp "${p.opencode}/bin/opencode";
           codemachine = mkApp "${p.codemachine}/bin/codemachine";
           omp = mkApp "${p.omp}/bin/omp";
+          commandcode = mkApp "${p.commandcode}/bin/commandcode";
         }
       );
     };

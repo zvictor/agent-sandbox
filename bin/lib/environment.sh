@@ -13,7 +13,7 @@ trim_whitespace() {
 
 is_project_config_key_allowed() {
   case "$1" in
-    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|OMP_*|PI_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
+    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
       return 0
       ;;
     *)
@@ -220,17 +220,6 @@ resolve_host_home() {
 resolve_effective_tools_list() {
   local inferred_tools=""
 
-  if [ -n "${AGENT_TOOLS:-}" ] && [ "${AGENT_TOOLS}" != "auto" ]; then
-    if [ "$AGENT_TOOLS" = "all" ]; then
-      EFFECTIVE_TOOLS_LIST="$KNOWN_TOOLS"
-      EFFECTIVE_TOOLS_SOURCE="configured-all"
-    else
-      EFFECTIVE_TOOLS_LIST="$AGENT_TOOLS"
-      EFFECTIVE_TOOLS_SOURCE="configured"
-    fi
-    return 0
-  fi
-
   resolve_tool_config_roots
 
   if [ -d "$CODEX_HOST_CONFIG" ] || [ "$CODEX_CONFIG_MODE" = "project" ] || [ "$CODEX_CONFIG_MODE" = "fresh" ] || [ -n "${CODEX_CONFIG:-}" ]; then
@@ -257,18 +246,22 @@ resolve_effective_tools_list() {
     inferred_tools="${inferred_tools:+$inferred_tools }omp"
   fi
 
+  if [ -d "$COMMANDCODE_HOST_CONFIG" ] || [ "$COMMANDCODE_CONFIG_MODE" = "project" ] || [ "$COMMANDCODE_CONFIG_MODE" = "fresh" ] || [ -n "${COMMANDCODE_CONFIG:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }commandcode"
+  elif [ -n "${COMMANDCODE_AUTH:-}" ] || [ -d "${COMMANDCODE_AUTH_BASE:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }commandcode"
+  fi
+
   if [ -d "$CODEX_HOST_CONFIG" ] && [ -d "$CLAUDE_HOST_CONFIG" ] && [ -d "$OPENCODE_HOST_CONFIG" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }codemachine"
   fi
 
-  if [ -n "$inferred_tools" ]; then
-    EFFECTIVE_TOOLS_LIST="$inferred_tools"
-    EFFECTIVE_TOOLS_SOURCE="inferred"
-    return 0
-  fi
-
   EFFECTIVE_TOOLS_LIST="$KNOWN_TOOLS"
-  EFFECTIVE_TOOLS_SOURCE="fallback-all"
+  if [ -n "$inferred_tools" ]; then
+    EFFECTIVE_TOOLS_SOURCE="inferred"
+  else
+    EFFECTIVE_TOOLS_SOURCE="fallback-all"
+  fi
 }
 
 prepare_tool_resolution_context() {

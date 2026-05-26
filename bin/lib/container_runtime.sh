@@ -276,6 +276,11 @@ mount_standard_engine() {
     omp)
       mount_engine "omp" "host" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" "" ""
       ;;
+    commandcode)
+      mount_engine "commandcode" "$COMMANDCODE_CONFIG_MODE" "$COMMANDCODE_HOST_CONFIG" "/cache/.commandcode" \
+        "COMMANDCODE_CONFIG_DIR=/cache/.commandcode" \
+        "COMMANDCODE_AUTH" "$COMMANDCODE_AUTH_BASE" "auth.json"
+      ;;
     *)
       echo "[agent] ERROR: unsupported engine mount '$engine'" >&2
       exit 1
@@ -285,7 +290,7 @@ mount_standard_engine() {
 
 mount_tool_configs() {
   case "$TOOL" in
-    codex | opencode | claude | omp)
+    codex | opencode | claude | omp | commandcode)
       mount_standard_engine "$TOOL"
       ;;
     codemachine)
@@ -802,12 +807,12 @@ append_auto_mount_dir_args() {
 append_passthrough_env_args() {
   local key value prefix
 
-  DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nOMP_\nPI_\nAGENT_'
+  DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nCOMMANDCODE_\nOMP_\nPI_\nAGENT_'
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
   while IFS='=' read -r key value; do
     case "$key" in
-      CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH|SSH_AUTH_SOCK)
+      CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|COMMANDCODE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH|COMMANDCODE_AUTH|SSH_AUTH_SOCK)
         # These are launcher selectors. Once resolved to mounted config/auth
         # paths, forwarding them into the tool can make the inner CLI
         # reinterpret them against the sandbox filesystem. SSH_AUTH_SOCK is
@@ -850,10 +855,12 @@ resolve_tool_config_roots() {
   CODEX_CONFIG_DEFAULT_HOST="$HOST_HOME/.codex"
   OPENCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.config/opencode"
   CLAUDE_CONFIG_DEFAULT_HOST="$HOST_HOME/.claude"
+  COMMANDCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.commandcode"
 
   CODEX_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.codex"
   OPENCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.config/opencode"
   CLAUDE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.claude"
+  COMMANDCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.commandcode"
 
   IFS='|' read -r CODEX_CONFIG_MODE CODEX_CONFIG_SELECTOR CODEX_HOST_CONFIG <<EOF
 $(resolve_config_root "${CODEX_CONFIG:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_PROJECT_PATH")
@@ -864,11 +871,15 @@ EOF
   IFS='|' read -r CLAUDE_CONFIG_MODE CLAUDE_CONFIG_SELECTOR CLAUDE_HOST_CONFIG <<EOF
 $(resolve_config_root "${CLAUDE_CONFIG:-}" "$CLAUDE_CONFIG_DEFAULT_HOST" "$CLAUDE_CONFIG_PROJECT_PATH")
 EOF
+  IFS='|' read -r COMMANDCODE_CONFIG_MODE COMMANDCODE_CONFIG_SELECTOR COMMANDCODE_HOST_CONFIG <<EOF
+$(resolve_config_root "${COMMANDCODE_CONFIG:-}" "$COMMANDCODE_CONFIG_DEFAULT_HOST" "$COMMANDCODE_CONFIG_PROJECT_PATH")
+EOF
 
   AGENT_AUTH_HOME="${AGENT_AUTH_HOME:-$HOST_HOME/.local/share/agent-sandbox/auth}"
   CODEX_AUTH_BASE="${CODEX_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/codex}"
   OPENCODE_AUTH_BASE="${OPENCODE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/opencode}"
   CLAUDE_AUTH_BASE="${CLAUDE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/claude}"
+  COMMANDCODE_AUTH_BASE="${COMMANDCODE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/commandcode}"
 }
 
 append_stdio_and_target_args() {

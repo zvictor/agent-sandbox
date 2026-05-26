@@ -111,6 +111,11 @@ let
       bin = "omp";
       latest = true;
     };
+    commandcode = {
+      pkg = "command-code";
+      bin = "cmd";
+      latest = true;
+    };
   };
 
   needCommand = pkgs.runCommand "need" { } ''

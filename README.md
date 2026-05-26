@@ -199,7 +199,7 @@ Useful variants:
 - `agent init --force`: overwrite an existing defaults file
 - `agent init --stdout`: print the template instead of writing it
 
-`agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention. It also suggests a narrower commented `AGENT_TOOLS` line based on the host config roots it detects.
+`agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention.
 
 `agent codex` can now use Codex's native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.
 
@@ -473,7 +473,6 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_PROJECT_NIX_DIR`: package contract directory; defaults to `$AGENT_PROJECT_ROOT/nix`
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake source
 - `AGENT_RUNTIME`: `podman` or `docker`; defaults to auto-detect
-- `AGENT_TOOLS`: tool allowlist override; use a space-separated list, `auto` to infer from detected host config roots, or `all` to enable every supported tool. When unset, the launcher behaves like `auto` and falls back to all tools only when nothing can be inferred.
 - `AGENT_CACHE_DIR`: cache directory for GC roots, tool installs, and helper temp files
 - `AGENT_HOST_HOME`: host home used for discovering `~/.codex`, `~/.claude`, `~/.omp`, `.gitconfig`, and similar paths
 

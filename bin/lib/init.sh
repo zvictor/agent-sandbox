@@ -65,44 +65,6 @@ EOF
   printf '# %s=work\n' "$env_name"
 }
 
-render_tool_allowlist_setting() {
-  local detected_tools=""
-  local count=0
-
-  if [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ] || [ -d "$CODEX_CONFIG_PROJECT_PATH" ]; then
-    detected_tools="${detected_tools:+$detected_tools }codex"
-    count=$((count + 1))
-  fi
-
-  if [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ] || [ -d "$CLAUDE_CONFIG_PROJECT_PATH" ]; then
-    detected_tools="${detected_tools:+$detected_tools }claude"
-    count=$((count + 1))
-  fi
-
-  if [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ] || [ -d "$OPENCODE_CONFIG_PROJECT_PATH" ]; then
-    detected_tools="${detected_tools:+$detected_tools }opencode"
-    count=$((count + 1))
-  fi
-
-  if [ -d "$OMP_HOST_CONFIG" ]; then
-    detected_tools="${detected_tools:+$detected_tools }omp"
-    count=$((count + 1))
-  fi
-
-  if { [ -d "$CODEX_HOST_CONFIG" ] || [ -d "$CODEX_AUTH_BASE" ] || [ -d "$CODEX_CONFIG_PROJECT_PATH" ]; } \
-    && { [ -d "$CLAUDE_HOST_CONFIG" ] || [ -d "$CLAUDE_AUTH_BASE" ] || [ -d "$CLAUDE_CONFIG_PROJECT_PATH" ]; } \
-    && { [ -d "$OPENCODE_HOST_CONFIG" ] || [ -d "$OPENCODE_AUTH_BASE" ] || [ -d "$OPENCODE_CONFIG_PROJECT_PATH" ]; }
-  then
-    detected_tools="${detected_tools:+$detected_tools }codemachine"
-  fi
-
-  if [ -n "$detected_tools" ]; then
-    printf '# AGENT_TOOLS="%s"\n' "$detected_tools"
-  else
-    printf '# AGENT_TOOLS="codex claude opencode"\n'
-  fi
-}
-
 render_config_setting() {
   local env_name="$1"
   local project_path="$2"
@@ -141,6 +103,7 @@ EOF
       render_config_setting "CODEX_CONFIG" "$CODEX_CONFIG_PROJECT_PATH"
       render_config_setting "CLAUDE_CONFIG" "$CLAUDE_CONFIG_PROJECT_PATH"
       render_config_setting "OPENCODE_CONFIG" "$OPENCODE_CONFIG_PROJECT_PATH"
+      render_config_setting "COMMANDCODE_CONFIG" "$COMMANDCODE_CONFIG_PROJECT_PATH"
     } | sed '/^$/d'
   )"
 
@@ -157,6 +120,7 @@ EOF
       render_auth_setting "CODEX_AUTH" "$CODEX_AUTH_BASE"
       render_auth_setting "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE"
       render_auth_setting "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE"
+      render_auth_setting "COMMANDCODE_AUTH" "$COMMANDCODE_AUTH_BASE"
     } | sed '/^$/d'
   )"
 
@@ -167,6 +131,7 @@ EOF
     printf '# CODEX_AUTH=work\n'
     printf '# CLAUDE_AUTH=work\n'
     printf '# OPENCODE_AUTH=work\n'
+    printf '# COMMANDCODE_AUTH=work\n'
   fi
 
   cat <<'EOF'
@@ -174,12 +139,6 @@ EOF
 # agent login codex work
 # agent login codex work --config project
 EOF
-
-  cat <<'EOF'
-
-# Optional tool allowlist:
-EOF
-  render_tool_allowlist_setting
 }
 
 resolve_project_config_target_file() {
