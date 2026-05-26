@@ -50,7 +50,8 @@ let
 
   libstdcCompat = pkgs.runCommand "libstdc-compat" { } ''
     mkdir -p "$out/usr/lib"
-    ln -s ${pkgs.stdenv.cc.cc.lib}/lib/libstdc++.so.6 "$out/usr/lib/libstdc++.so.6"
+    cp -L ${pkgs.stdenv.cc.cc.lib}/lib/libstdc++.so.6 "$out/usr/lib/libstdc++.so.6"
+    chmod 755 "$out/usr/lib/libstdc++.so.6"
   '';
 
   gitWrapper = pkgs.writeShellScriptBin "git" ''
