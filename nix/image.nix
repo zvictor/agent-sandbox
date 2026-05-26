@@ -289,6 +289,7 @@ let
       Entrypoint = [ "/bin/codex" ];
       Env = [
         "PATH=/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
+        "LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"
