@@ -48,6 +48,11 @@ let
     ln -s ${pkgs.bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"
   '';
 
+  libstdcCompat = pkgs.runCommand "libstdc-compat" { } ''
+    mkdir -p "$out/usr/lib"
+    ln -s ${pkgs.stdenv.cc.cc.lib}/lib/libstdc++.so.6 "$out/usr/lib/libstdc++.so.6"
+  '';
+
   gitWrapper = pkgs.writeShellScriptBin "git" ''
     #!/bin/sh
     set -e
@@ -257,6 +262,7 @@ let
       direnvEtc
       bashBin
       bubblewrapCompat
+      libstdcCompat
       pkgs.coreutils
       pkgs.gnugrep
       pkgs.gnused
@@ -269,7 +275,6 @@ let
       pkgs.fx
       pkgs.bun
       pkgs.nix-index
-      pkgs.stdenv.cc.cc.lib
     ]
     ++ helpers
     ++ devPackagesImage
@@ -289,7 +294,6 @@ let
       Entrypoint = [ "/bin/codex" ];
       Env = [
         "PATH=/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
-        "LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"
