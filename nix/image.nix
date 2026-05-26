@@ -269,6 +269,7 @@ let
       pkgs.fx
       pkgs.bun
       pkgs.nix-index
+      pkgs.stdenv.cc.cc.lib
     ]
     ++ helpers
     ++ devPackagesImage
