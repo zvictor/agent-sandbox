@@ -539,6 +539,7 @@ build_base_container_args() {
     -e XDG_CACHE_HOME=/cache
     -e TOOL_CACHE=/cache
     -e CODEX_CACHE=/cache
+    -e LD_LIBRARY_PATH=/usr/lib:/lib
     -e PATH="$WORKSPACE_RUNTIME_PATH"
     -e AGENT_NEED_TOOLS_DIR="$NEED_TOOLS_PATH"
     -e NIX_CONFIG="$NIX_CONFIG"
