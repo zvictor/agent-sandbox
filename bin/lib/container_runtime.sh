@@ -902,6 +902,18 @@ append_stdio_and_target_args() {
   fi
 }
 
+run_with_logical_argv0() {
+  local logical_argv0="$1"
+  shift
+
+  bash -c 'exec -a "$1" bash -c '"'"'"$@"; status=$?; exit "$status"'"'"' "$1" "${@:2}"' \
+    agent-runtime-supervisor "$logical_argv0" "$@"
+}
+
+run_container_runtime() {
+  run_with_logical_argv0 "$TOOL" "$RUNTIME" run "${ARGS[@]}"
+}
+
 build_container_args() {
   prepare_tool_cache_dirs
   prepare_path_guard_dir

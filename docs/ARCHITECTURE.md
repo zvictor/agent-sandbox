@@ -31,6 +31,12 @@ resolve CLI command
 
 The main entrypoint is [`bin/agent`](../bin/agent).
 
+The final container runtime is launched under a small supervisor whose
+`argv[0]` is the selected tool name (`codex`, `claude`, `opencode`, and so
+on). The runtime executable itself still receives its normal command name and
+arguments, but process observers that inspect the foreground job can see the
+logical agent instead of only `podman` or `docker`.
+
 ## Major Components
 
 ### Entry Points

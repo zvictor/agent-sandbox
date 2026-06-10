@@ -183,13 +183,13 @@ fi
 set +e
 if [ "$MODE" = "podman-rootfs" ]; then
   perf_log "podman rootfs run mode: $ROOTFS_RUN_MODE"
-  "$RUNTIME" run "${ARGS[@]}"
+  run_container_runtime
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "[agent] podman --rootfs run failed." >&2
   fi
 else
-  "$RUNTIME" run "${ARGS[@]}"
+  run_container_runtime
   status=$?
 fi
 set -e

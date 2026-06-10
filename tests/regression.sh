@@ -188,6 +188,23 @@ runtime_path_for() (
   compose_runtime_path "$dev_env_path"
 )
 
+logical_runtime_argv0_for() (
+  set -euo pipefail
+
+  local tool_name="$1"
+  local runtime_path="$2"
+  local ready_file="$3"
+  local stop_file="$4"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  TOOL="$tool_name"
+  RUNTIME="$runtime_path"
+  ARGS=(alpha beta)
+
+  AGENT_RUNTIME_READY_FILE="$ready_file" AGENT_RUNTIME_STOP_FILE="$stop_file" run_container_runtime
+)
+
 test_opencode_wrapper_default() (
   set -euo pipefail
 
@@ -232,6 +249,89 @@ test_runtime_resolution_parity() (
 
   [ "$status" -ne 0 ] || fail "expected agent run with an unavailable runtime to fail"
   assert_contains "$run_output" "[agent] requested runtime '$bad_runtime' is not available"
+)
+
+test_runtime_invocation_exposes_logical_agent_argv0() (
+  set -euo pipefail
+
+  process_parent_pid() {
+    local process_id="$1"
+    awk '{print $4}' "/proc/$process_id/stat" 2>/dev/null || true
+  }
+
+  process_is_descendant_of() {
+    local root_pid="$1"
+    local process_id="$2"
+    local parent_pid=""
+
+    while [ -n "$process_id" ] && [ "$process_id" != "1" ]; do
+      parent_pid="$(process_parent_pid "$process_id")"
+      [ -n "$parent_pid" ] || return 1
+      [ "$parent_pid" = "$root_pid" ] && return 0
+      process_id="$parent_pid"
+    done
+
+    return 1
+  }
+
+  local tmp_dir runtime_probe ready_file stop_file pid supervisor_cmdline runtime_output cmdline_path candidate_pid candidate_cmdline
+  if [ ! -d /proc/$$ ]; then
+    return 0
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  runtime_probe="$tmp_dir/runtime-probe"
+  ready_file="$tmp_dir/ready"
+  stop_file="$tmp_dir/stop"
+
+  cat > "$runtime_probe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'runtime_argv0=%s\n' "$0" > "$AGENT_RUNTIME_READY_FILE"
+printf 'runtime_args=%s\n' "$*" >> "$AGENT_RUNTIME_READY_FILE"
+cp "$AGENT_RUNTIME_READY_FILE" "${AGENT_RUNTIME_READY_FILE}.copy"
+
+while [ ! -e "$AGENT_RUNTIME_STOP_FILE" ]; do
+  sleep 0.05
+done
+EOF
+  chmod +x "$runtime_probe"
+
+  logical_runtime_argv0_for codex "$runtime_probe" "$ready_file" "$stop_file" &
+  pid=$!
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$ready_file.copy" ] && break
+    sleep 0.05
+  done
+
+  [ -f "$ready_file.copy" ] || fail "runtime probe did not start"
+
+  supervisor_cmdline=""
+  for cmdline_path in /proc/[0-9]*/cmdline; do
+    [ -r "$cmdline_path" ] || continue
+    candidate_pid="${cmdline_path#/proc/}"
+    candidate_pid="${candidate_pid%/cmdline}"
+    process_is_descendant_of "$pid" "$candidate_pid" || continue
+    candidate_cmdline="$(tr '\0' ' ' <"$cmdline_path" 2>/dev/null || true)"
+    case "$candidate_cmdline" in
+      codex\ -c*)
+        supervisor_cmdline="$candidate_cmdline"
+        break
+        ;;
+    esac
+  done
+
+  runtime_output="$(cat "$ready_file.copy")"
+  : > "$stop_file"
+  wait "$pid"
+
+  assert_contains "$supervisor_cmdline" "codex -c"
+  assert_contains "$runtime_output" "runtime_argv0=$runtime_probe"
+  assert_contains "$runtime_output" "runtime_args=run alpha beta"
 )
 
 test_host_home_fallbacks_present() (
@@ -558,6 +658,10 @@ codex_mount_args_for() (
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
+  HELPER_TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$HELPER_TMPDIR"' EXIT
+
+  HOST_HOME="$workspace_path"
   WORKSPACE_PATH="$workspace_path"
   CODEX_CONFIG_MODE=host
   CODEX_HOST_CONFIG="$config_root"
@@ -692,6 +796,7 @@ run_test() {
 main() {
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
+  run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0
   run_test "host home fallbacks present" test_host_home_fallbacks_present
   run_test "git wrapper policy" test_git_wrapper_policy
   run_test "device passthrough support" test_device_passthrough_support

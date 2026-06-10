@@ -80,6 +80,11 @@ Practical consequences:
 - Docker is the fallback path for non-Linux hosts or hosts that do not meet the Podman requirements
 - if the selected runtime does not satisfy its requirements, the launcher fails fast
 
+For host-side process observers, the runtime is launched under a supervisor
+whose `argv[0]` is the selected logical tool name. Observers that inspect the
+foreground job can see `codex`, `claude`, `opencode`, and similar names even
+though the container still runs through Podman or Docker internally.
+
 ## Host Project Contract
 
 The launcher looks for the host project's package contract in this order:
