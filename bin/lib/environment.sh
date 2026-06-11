@@ -22,6 +22,51 @@ is_project_config_key_allowed() {
   esac
 }
 
+# Expand $VAR and ${VAR} patterns in a string using current environment
+expand_config_variables() {
+  local value="$1"
+  local result="$value"
+  local tmpfile
+  local iteration=0
+
+  tmpfile=$(mktemp)
+
+  while [ $iteration -lt 10 ]; do
+    local prev="$result"
+    iteration=$((iteration + 1))
+
+    > "$tmpfile"
+
+    env | awk -F= 'NF >= 1 {print length($1), $1}' | sort -rn | while read -r len var_name; do
+      case "$var_name" in
+        "" | [0-9]* | *[!a-zA-Z0-9_]* ) continue ;;
+      esac
+
+      local var_val
+      var_val=$(eval printf '%s' "\$$var_name" 2>/dev/null) || continue
+
+      case "$var_val" in
+        *"\$$var_name"* | *"\${$var_name}"* ) continue ;;
+      esac
+
+      # Escape sed RHS metacharacters: backslash, ampersand, and the delimiter (|).
+      # Order: backslash first to prevent double-escaping.
+      var_val=$(printf '%s' "$var_val" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g')
+
+      printf 's|\\${%s}|%s|g\n' "$var_name" "$var_val"
+      printf 's|\\$%s$|%s|\n' "$var_name" "$var_val"
+      printf 's|\\$%s\\([^(a-zA-Z0-9_]\\)|%s\\1|g\n' "$var_name" "$var_val"
+    done > "$tmpfile"
+
+    result=$(printf '%s' "$result" | sed -f "$tmpfile")
+
+    [ "$result" = "$prev" ] && break
+  done
+
+  rm -f "$tmpfile"
+  printf '%s' "$result"
+}
+
 resolve_project_config_file() {
   PROJECT_CONFIG_FILE=""
 
@@ -78,6 +123,9 @@ load_project_config() {
       value="${value#\'}"
       value="${value%\'}"
     fi
+
+    # Expand variable references like $VAR and ${VAR}
+    value=$(expand_config_variables "$value")
 
     if [ -z "${!key+x}" ]; then
       printf -v "$key" '%s' "$value"
