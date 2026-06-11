@@ -36,6 +36,22 @@ mount_engine() {
     ARGS+=( -v "$mount_source:$workspace_alias_path:rw${Z_SUFFIX}" )
   fi
 
+  # Force file-based MCP OAuth credential storage inside the container.
+  # The default "auto" mode may use kernel keyutils on Linux, which don't
+  # persist across container restarts.  When the mounted config dir has no
+  # config.toml, inject one with the file-store setting so credentials land
+  # in $CODEX_HOME/.credentials.json (which survives container restarts via
+  # the rw directory mount).
+  if [ "$engine" = "codex" ] && [ ! -f "$mount_source/config.toml" ]; then
+    local fallback_config
+    fallback_config="$(mktemp "$HELPER_TMPDIR/codex-config.XXXXXX")"
+    printf 'mcp_oauth_credentials_store = "file"\n' > "$fallback_config"
+    if [ -f "$HOST_HOME/.codex/config.toml" ]; then
+      grep -v '^mcp_oauth_credentials_store' "$HOST_HOME/.codex/config.toml" >> "$fallback_config" || true
+    fi
+    ARGS+=( -v "$fallback_config:$container_config_dir/config.toml:ro${Z_SUFFIX}" )
+  fi
+
   if [ -n "$auth_env_name" ]; then
     selector_value="${!auth_env_name:-}"
   fi
