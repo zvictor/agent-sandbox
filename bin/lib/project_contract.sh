@@ -10,6 +10,20 @@ copy_if_present() {
   fi
 }
 
+is_mutable_fetchtarball_url() {
+  case "$1" in
+    http://nixos.org/channels/*/nixexprs.tar.xz|https://nixos.org/channels/*/nixexprs.tar.xz)
+      return 0
+      ;;
+    http://channels.nixos.org/*/nixexprs.tar.xz|https://channels.nixos.org/*/nixexprs.tar.xz)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 normalize_project_contract_path() {
   local rel_path="$1"
 
@@ -81,6 +95,7 @@ pin_shell_fetchtarball() {
   local hash=""
   local cache_key=""
   local cache_file=""
+  local cacheable="1"
   local pinned_file="$target_dir/.agent-sandbox-pinned-nixpkgs.json"
 
   content="$(cat "$shell_file")"
@@ -93,7 +108,11 @@ pin_shell_fetchtarball() {
   cache_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
   cache_file="${HOME}/.cache/agent-sandbox/pinned-nixpkgs-${cache_key}.json"
 
-  if [ -f "$cache_file" ]; then
+  if is_mutable_fetchtarball_url "$url"; then
+    cacheable="0"
+  fi
+
+  if [ "$cacheable" = "1" ] && [ -f "$cache_file" ]; then
     cp "$cache_file" "$pinned_file"
     echo "[agent] pinned fetchTarball for shell.nix (cached): $url" >&2
     return 0
@@ -107,9 +126,13 @@ pin_shell_fetchtarball() {
   fi
 
   printf '{"url":"%s","sha256":"%s"}\n' "$url" "$hash" > "$pinned_file"
-  mkdir -p "$(dirname "$cache_file")"
-  cp "$pinned_file" "$cache_file"
-  echo "[agent] pinned fetchTarball for shell.nix: $url" >&2
+  if [ "$cacheable" = "1" ]; then
+    mkdir -p "$(dirname "$cache_file")"
+    cp "$pinned_file" "$cache_file"
+    echo "[agent] pinned fetchTarball for shell.nix: $url" >&2
+  else
+    echo "[agent] pinned fetchTarball for shell.nix (refreshed mutable URL): $url" >&2
+  fi
 }
 
 stage_project_contract_input() {

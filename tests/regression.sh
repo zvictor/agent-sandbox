@@ -33,6 +33,54 @@ assert_not_contains() {
   esac
 }
 
+pin_shell_fetchtarball_for() (
+  set -euo pipefail
+
+  local url="$1"
+  local cached_hash="$2"
+  local fresh_hash="$3"
+  local tmp_dir target_dir bin_dir cache_key cache_file output calls
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  target_dir="$tmp_dir/project"
+  bin_dir="$tmp_dir/bin"
+  mkdir -p "$target_dir" "$bin_dir" "$tmp_dir/home/.cache/agent-sandbox"
+
+  printf '{ pkgs ? import (fetchTarball "%s") {} }: pkgs.mkShell { packages = []; }\n' "$url" > "$target_dir/shell.nix"
+
+  cache_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  cache_file="$tmp_dir/home/.cache/agent-sandbox/pinned-nixpkgs-${cache_key}.json"
+  if [ -n "$cached_hash" ]; then
+    printf '{"url":"%s","sha256":"%s"}\n' "$url" "$cached_hash" > "$cache_file"
+  fi
+
+  cat > "$bin_dir/nix-prefetch-url" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called %s\n' "\$*" >> "$tmp_dir/prefetch.log"
+printf '%s\n' "$fresh_hash"
+EOF
+  chmod +x "$bin_dir/nix-prefetch-url"
+
+  source "$REPO_ROOT/bin/lib/project_contract.sh"
+  output="$(HOME="$tmp_dir/home" PATH="$bin_dir:/usr/bin:/bin" pin_shell_fetchtarball "$target_dir" 2>&1)"
+
+  if [ -f "$tmp_dir/prefetch.log" ]; then
+    calls="$(wc -l < "$tmp_dir/prefetch.log")"
+  else
+    calls="0"
+  fi
+
+  printf 'output=%s\n' "$output"
+  printf 'pinned=%s\n' "$(cat "$target_dir/.agent-sandbox-pinned-nixpkgs.json")"
+  printf 'calls=%s\n' "$calls"
+  if [ -f "$cache_file" ]; then
+    printf 'cache=%s\n' "$(cat "$cache_file")"
+  fi
+)
+
 workspace_mount_args_for() (
   set -euo pipefail
 
@@ -346,6 +394,31 @@ test_host_home_fallbacks_present() (
   assert_contains "$environment_file" 'done < <(find /Users -mindepth 1 -maxdepth 1 -type d -user "$(id -u)" 2>/dev/null)'
   assert_contains "$environment_file" 'project_root_tail="${PROJECT_ROOT#/home/}"'
   assert_contains "$environment_file" 'project_root_tail="${PROJECT_ROOT#/Users/}"'
+)
+
+test_stable_fetchtarball_uses_cached_pin() (
+  set -euo pipefail
+
+  local output
+  output="$(pin_shell_fetchtarball_for "https://example.com/nixpkgs-abc123.tar.gz" "cachedhash" "freshhash")"
+
+  assert_contains "$output" "pinned={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
+  assert_contains "$output" "cache={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
+  assert_contains "$output" "calls=0"
+  assert_contains "$output" "(cached)"
+)
+
+test_mutable_channel_fetchtarball_refreshes_stale_pin() (
+  set -euo pipefail
+
+  local output
+  output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "stalehash" "freshhash")"
+
+  assert_contains "$output" "pinned={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"freshhash\"}"
+  assert_contains "$output" "cache={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
+  assert_contains "$output" "calls=1"
+  assert_contains "$output" "refreshed mutable URL"
+  assert_not_contains "$output" "(cached)"
 )
 
 test_git_wrapper_policy() (
@@ -798,6 +871,8 @@ main() {
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0
   run_test "host home fallbacks present" test_host_home_fallbacks_present
+  run_test "stable fetchTarball uses cached pin" test_stable_fetchtarball_uses_cached_pin
+  run_test "mutable channel fetchTarball refreshes stale pin" test_mutable_channel_fetchtarball_refreshes_stale_pin
   run_test "git wrapper policy" test_git_wrapper_policy
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script
