@@ -19,6 +19,7 @@ BOOTSTRAP_PID_FILE="$INDEX_DIR/.bootstrap.pid"
 BOOTSTRAP_LOG_FILE="$INDEX_DIR/bootstrap.log"
 INDEX_BOOTSTRAP_STATE="unknown"
 DEFAULT_NIXPKGS_FLAKE_REF="github:NixOS/nixpkgs/nixos-unstable"
+PROTECTED_INJECTED_COMMANDS="sudo sudoedit"
 
 usage() {
   cat >&2 <<'EOF'
@@ -54,6 +55,46 @@ refuse_unsafe_rm_dir() {
 
 tool_notice() {
   echo "[agent] $*" >&2
+}
+
+is_protected_injected_command() {
+  local command_name="$1"
+  local protected_command=""
+
+  for protected_command in $PROTECTED_INJECTED_COMMANDS; do
+    if [ "$command_name" = "$protected_command" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+refuse_protected_injected_command() {
+  local command_name="$1"
+  local command_base=""
+  local command_path=""
+
+  command_base="$(basename "$command_name")"
+  if is_protected_injected_command "$command_base"; then
+    command_path="/agent-sudo/bin/$command_base"
+    echo "[agent] refusing to inject privileged command '$command_base'; use the sandbox runtime's $command_path" >&2
+    exit 1
+  fi
+}
+
+refuse_protected_bin_path() {
+  local protected_command=""
+  local candidate_path=""
+
+  [ -n "${bin_path:-}" ] || return 0
+
+  for protected_command in $PROTECTED_INJECTED_COMMANDS; do
+    candidate_path="$bin_path/$protected_command"
+    if [ -e "$candidate_path" ] || [ -L "$candidate_path" ]; then
+      refuse_protected_injected_command "$protected_command"
+    fi
+  done
 }
 
 cache_key() {
@@ -610,6 +651,8 @@ inject_materialized_bins() {
     exit 1
   }
 
+  refuse_protected_bin_path
+
   mkdir -p "$TOOLS_DIR"
   for entry in "$bin_path"/*; do
     [ -e "$entry" ] || continue
@@ -711,6 +754,7 @@ case "$command_name" in
     [ "$#" -ge 1 ] || usage
     materialize_installable "$target"
     if [ -n "$bin_path" ]; then
+      refuse_protected_bin_path
       PATH="$bin_path:$PATH" exec "$@"
     fi
     exec "$@"

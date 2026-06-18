@@ -33,6 +33,24 @@ assert_not_contains() {
   esac
 }
 
+write_need_materialization_cache() {
+  local need_cache="$1"
+  local installable="$2"
+  local out_path="$3"
+  local bin_path="$4"
+  local cache_key cache_file
+
+  cache_key="$(printf '%s' "$installable" | sha256sum | awk '{print $1}')"
+  cache_file="$need_cache/materialized/$cache_key.env"
+  mkdir -p "$(dirname "$cache_file")"
+  {
+    printf 'status=ok\n'
+    printf 'installable=%s\n' "$installable"
+    printf 'out_path=%s\n' "$out_path"
+    printf 'bin_path=%s\n' "$bin_path"
+  } > "$cache_file"
+}
+
 pin_shell_fetchtarball_for() (
   set -euo pipefail
 
@@ -79,6 +97,42 @@ EOF
   if [ -f "$cache_file" ]; then
     printf 'cache=%s\n' "$(cat "$cache_file")"
   fi
+)
+
+stage_symlinked_shell_contract() (
+  set -euo pipefail
+
+  local tmp_dir project_dir target_dir
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  project_dir="$tmp_dir/project"
+  target_dir="$tmp_dir/staged"
+  mkdir -p "$project_dir/main/nix" "$target_dir"
+
+  ln -s main/shell.nix "$project_dir/shell.nix"
+  printf '{ pkgs ? import <nixpkgs> {} }: import ./nix/default.nix { inherit pkgs; }\n' > "$project_dir/main/shell.nix"
+  printf '{ pkgs }: []\n' > "$project_dir/main/nix/default.nix"
+  printf 'font template\n' > "$project_dir/main/nix/fonts.conf.in"
+
+  source "$REPO_ROOT/bin/lib/project_contract.sh"
+
+  PROJECT_ROOT="$project_dir"
+  PROJECT_NIX_DIR="$project_dir/nix"
+  unset AGENT_PROJECT_NIX_DIR
+  unset AGENT_PROJECT_CONTRACT_FILES
+
+  stage_project_contract_input "$target_dir"
+
+  if [ -L "$target_dir/shell.nix" ]; then
+    printf 'shell_is_symlink=1\n'
+  else
+    printf 'shell_is_symlink=0\n'
+  fi
+  printf 'shell=%s\n' "$(cat "$target_dir/shell.nix")"
+  printf 'default=%s\n' "$(cat "$target_dir/nix/default.nix")"
+  printf 'template=%s\n' "$(cat "$target_dir/nix/fonts.conf.in")"
 )
 
 workspace_mount_args_for() (
@@ -206,6 +260,7 @@ dev_env_args_for() (
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
+  SUDO_RUNTIME_PATH="/agent-sudo/bin"
   WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
   NEED_CACHE_PATH="/cache/need"
   NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
@@ -228,12 +283,208 @@ runtime_path_for() (
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
+  SUDO_RUNTIME_PATH="/agent-sudo/bin"
   WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
   NEED_CACHE_PATH="/cache/need"
   NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
   IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
 
   compose_runtime_path "$dev_env_path"
+)
+
+runtime_mode_for() (
+  set -euo pipefail
+
+  local runtime="$1"
+  local container_host="${2:-}"
+
+  source "$REPO_ROOT/bin/lib/artifact_prep.sh"
+
+  RUNTIME="$runtime"
+  OS_NAME="Linux"
+  if [ -n "$container_host" ]; then
+    CONTAINER_HOST="$container_host"
+  else
+    unset CONTAINER_HOST
+  fi
+
+  resolve_runtime_mode
+
+  printf '%s\n' "$MODE"
+)
+
+stream_image_helper_invocation_for() (
+  set -euo pipefail
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  source "$REPO_ROOT/bin/lib/artifact_prep.sh"
+
+  nix_cmd() {
+    printf 'TMPDIR=%s\n' "${TMPDIR:-}"
+    printf 'argv=%s\n' "$*"
+  }
+
+  SANDBOX_FLAKE="path:/sandbox"
+  PROJECT_OVERRIDE_ARGS=(--override-input projectPkgs path:/project-store)
+  LOCK_ARGS=(--no-update-lock-file)
+  CACHE_DIR="$tmp_dir/cache"
+
+  run_stream_image_helper copyToDockerDaemon --probe flag
+)
+
+path_guard_entries_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  HELPER_TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$HELPER_TMPDIR" "$PATH_GUARD_HOST_DIR"' EXIT
+
+  prepare_path_guard_dir
+
+  find "$PATH_GUARD_HOST_DIR" -maxdepth 1 -type l -printf '%f -> %l\n' | LC_ALL=C sort
+)
+
+base_container_args_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  TOOL="codex"
+  WORKSPACE_PATH="/workspace"
+  WORKSPACE_RUNTIME_PATH="/cache/need/bin:/bin:/usr/bin:/usr/local/bin"
+  TOOL_CACHE_DIR="/cache/tools/codex"
+  NEED_TOOLS_PATH="/cache/need/projects/project/bin"
+  NIX_CONFIG="sandbox = false"
+  Z_SUFFIX=""
+  ARGS=()
+
+  build_base_container_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+runtime_identity_args_for() (
+  set -euo pipefail
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  mkdir -p "$tmp_dir/rootfs/agent-sudo/bin" "$tmp_dir/helper"
+  printf '#!/bin/sh\n' > "$tmp_dir/rootfs/agent-sudo/bin/sudo"
+  chmod 0755 "$tmp_dir/rootfs/agent-sudo/bin/sudo"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  podman() {
+    if [ "${1:-}" = "unshare" ]; then
+      shift
+      printf 'podman_unshare=%s\n' "$*" >> "$tmp_dir/podman.log"
+      if [ "${1:-}" = "chmod" ]; then
+        shift
+        command chmod "$@"
+        return
+      fi
+      return 0
+    fi
+    return 1
+  }
+
+  MODE="podman-rootfs"
+  RUNTIME="podman"
+  ROOTFS_OUT="$tmp_dir/rootfs"
+  HELPER_TMPDIR="$tmp_dir/helper"
+  Z_SUFFIX=""
+  USER="agenttest"
+  LOGNAME="agenttest"
+  ARGS=()
+
+  append_runtime_identity_mount_args
+
+  printf 'args:\n'
+  printf '%s\n' "${ARGS[@]}"
+  printf 'passwd:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/passwd")"
+  printf 'group:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/group")"
+  printf 'sudoers:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/sudoers")"
+  printf 'sudo_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo")"
+  printf 'sudoedit_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit")"
+  cat "$tmp_dir/podman.log"
+)
+
+stdio_target_args_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  MODE="podman-rootfs"
+  TOOL="codex"
+  ROOTFS_IMAGE_ARG="/tmp/rootfs:O"
+  IMAGE_ID="sha256:unused"
+  SSH_RUNTIME_DIR=""
+  REMAINING_ARGS=(--probe)
+  ARGS=()
+
+  append_stdio_and_target_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+container_api_stale_pid_cleanup_for() (
+  set -euo pipefail
+
+  local tmp_dir stale_pid
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  source "$REPO_ROOT/bin/lib/container_api.sh"
+
+  CONTAINER_API_PID_FILE="$tmp_dir/service.pid"
+  CONTAINER_API_SOCKET_PATH="$tmp_dir/podman.sock"
+  printf '%s\n' "$$" > "$CONTAINER_API_PID_FILE"
+  : > "$CONTAINER_API_SOCKET_PATH"
+
+  kill() {
+    if [ "${1:-}" = "-0" ]; then
+      command kill "$@"
+      return $?
+    fi
+
+    printf 'kill_call=%s\n' "$*" >> "$tmp_dir/kill.log"
+    return 0
+  }
+
+  stale_pid="$(container_api_read_service_pid)"
+  printf 'stale_pid=%s\n' "$stale_pid"
+
+  if container_api_service_running; then
+    printf 'running=1\n'
+  else
+    printf 'running=0\n'
+  fi
+
+  container_api_discard_cached_service "$stale_pid"
+
+  if [ -f "$CONTAINER_API_PID_FILE" ]; then
+    printf 'pid_exists=1\n'
+  else
+    printf 'pid_exists=0\n'
+  fi
+
+  if [ -e "$CONTAINER_API_SOCKET_PATH" ]; then
+    printf 'socket_exists=1\n'
+  else
+    printf 'socket_exists=0\n'
+  fi
+
+  if [ -f "$tmp_dir/kill.log" ]; then
+    cat "$tmp_dir/kill.log"
+  else
+    printf 'kill_log=empty\n'
+  fi
 )
 
 logical_runtime_argv0_for() (
@@ -419,6 +670,18 @@ test_mutable_channel_fetchtarball_refreshes_stale_pin() (
   assert_contains "$output" "calls=1"
   assert_contains "$output" "refreshed mutable URL"
   assert_not_contains "$output" "(cached)"
+)
+
+test_symlinked_shell_stages_resolved_nix_contract() (
+  set -euo pipefail
+
+  local output
+  output="$(stage_symlinked_shell_contract)"
+
+  assert_contains "$output" "shell_is_symlink=0"
+  assert_contains "$output" "shell={ pkgs ? import <nixpkgs> {} }: import ./nix/default.nix { inherit pkgs; }"
+  assert_contains "$output" "default={ pkgs }: []"
+  assert_contains "$output" "template=font template"
 )
 
 test_git_wrapper_policy() (
@@ -658,7 +921,7 @@ test_dev_env_path_precedence() (
   path_line="$(printf '%s\n' "$output" | sed -n 's/^PATH=//p')"
 
   case "$path_line" in
-    "/run/agent-path-guard:$workspace/node_modules/.bin:/nix/store/bun/bin:/nix/store/node/bin:/bin:"*) ;;
+    "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/nix/store/bun/bin:/nix/store/node/bin:/bin:"*) ;;
     *) fail "dev env PATH should come before need/image fallback paths: $path_line" ;;
   esac
   assert_contains "$path_line" ":/cache/need/projects/"
@@ -678,10 +941,167 @@ test_runtime_path_uses_project_scoped_need_bins() (
   output="$(runtime_path_for "$workspace" "$workspace")"
 
   case "$output" in
-    "/run/agent-path-guard:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
+    "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
     *) fail "runtime PATH should use project-scoped need bins after project-local bins: $output" ;;
   esac
   assert_not_contains "$output" "/cache/need/bin"
+)
+
+test_runtime_modes_preserve_podman_rootfs() (
+  set -euo pipefail
+
+  local output status
+
+  output="$(runtime_mode_for podman)"
+  assert_contains "$output" "podman-rootfs"
+
+  output="$(runtime_mode_for docker)"
+  assert_contains "$output" "docker-oci"
+
+  set +e
+  output="$(runtime_mode_for podman "ssh://podman.example" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected remote podman runtime mode to fail"
+  assert_contains "$output" "podman mode requires local Linux with /nix/store and no CONTAINER_HOST"
+)
+
+test_stream_image_helper_uses_docker_helper_attr() (
+  set -euo pipefail
+
+  local output
+  output="$(stream_image_helper_invocation_for)"
+
+  assert_contains "$output" "TMPDIR="
+  assert_contains "$output" "/cache/tmp"
+  assert_contains "$output" "argv=run path:/sandbox#streamImage.copyToDockerDaemon --override-input projectPkgs path:/project-store --no-update-lock-file -- --probe flag"
+)
+
+test_runtime_identity_mounts_passwd_and_sudo_overlay() (
+  set -euo pipefail
+
+  local output
+  output="$(runtime_identity_args_for)"
+
+  assert_contains "$output" "/etc/passwd:ro"
+  assert_contains "$output" "/etc/group:ro"
+  assert_contains "$output" "/etc/sudo.conf:ro"
+  assert_contains "$output" "/etc/sudoers:ro"
+  assert_contains "$output" "/agent-sudo/bin/sudo:ro"
+  assert_contains "$output" "/agent-sudo/bin/sudoedit:ro"
+  assert_contains "$output" "USER=agenttest"
+  assert_contains "$output" "LOGNAME=agenttest"
+  assert_contains "$output" "agenttest:x:"
+  assert_contains "$output" "ALL ALL=(ALL:ALL) NOPASSWD: ALL"
+  assert_contains "$output" "sudo_mode=4755"
+  assert_contains "$output" "sudoedit_mode=4755"
+  assert_contains "$output" "podman_unshare=chown 1:1"
+)
+
+test_stdio_target_uses_podman_rootfs() (
+  set -euo pipefail
+
+  local output
+  output="$(stdio_target_args_for)"
+
+  assert_contains "$output" "--rootfs"
+  assert_contains "$output" "/tmp/rootfs:O"
+  assert_not_contains "$output" "sha256:unused"
+)
+
+test_path_guard_excludes_privileged_sudo() (
+  set -euo pipefail
+
+  local output
+  output="$(path_guard_entries_for)"
+
+  assert_not_contains "$output" "sudo ->"
+  assert_not_contains "$output" "sudoedit ->"
+)
+
+test_base_container_allows_sudo_privilege_gain() (
+  set -euo pipefail
+
+  local output
+  output="$(base_container_args_for)"
+
+  assert_contains "$output" "--cap-drop=ALL"
+  assert_contains "$output" "--cap-add=SETUID"
+  assert_contains "$output" "--cap-add=SETGID"
+  assert_not_contains "$output" "--security-opt=no-new-privileges"
+)
+
+test_need_run_allows_command_side_sandbox_sudo() (
+  set -euo pipefail
+
+  local tmp_dir need_cache installable out_dir bin_dir sudo_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  need_cache="$tmp_dir/need"
+  installable="nixpkgs#jq"
+  out_dir="$tmp_dir/out"
+  bin_dir="$out_dir/bin"
+  sudo_dir="$tmp_dir/sandbox-bin"
+  mkdir -p "$bin_dir" "$sudo_dir"
+  printf '#!/usr/bin/env bash\nprintf "fake-jq\\n"\n' > "$bin_dir/jq"
+  printf '#!/usr/bin/env bash\nprintf "sandbox-sudo:%%s\\n" "$*"\n' > "$sudo_dir/sudo"
+  chmod +x "$bin_dir/jq" "$sudo_dir/sudo"
+
+  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir"
+
+  output="$(
+    AGENT_NEED_CACHE_DIR="$need_cache" \
+    AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    PATH="$sudo_dir:/usr/bin:/bin" \
+    bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sudo id
+  )"
+
+  assert_contains "$output" "sandbox-sudo:id"
+)
+
+test_need_run_refuses_materialized_sudo_shadow() (
+  set -euo pipefail
+
+  local tmp_dir need_cache installable out_dir bin_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  need_cache="$tmp_dir/need"
+  installable="nixpkgs#sudo"
+  out_dir="$tmp_dir/out"
+  bin_dir="$out_dir/bin"
+  mkdir -p "$bin_dir"
+  printf '#!/usr/bin/env bash\nprintf "unsafe-sudo\\n"\n' > "$bin_dir/sudo"
+  chmod +x "$bin_dir/sudo"
+
+  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir"
+
+  set +e
+  output="$(
+    AGENT_NEED_CACHE_DIR="$need_cache" \
+    AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    PATH="/usr/bin:/bin" \
+    bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sh -c 'sudo id' 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected need run to reject a sudo-providing bin path"
+  assert_contains "$output" "refusing to inject privileged command 'sudo'"
+)
+
+test_container_api_does_not_kill_stale_reused_pid() (
+  set -euo pipefail
+
+  local output
+  output="$(container_api_stale_pid_cleanup_for)"
+
+  assert_contains "$output" "running=0"
+  assert_contains "$output" "pid_exists=0"
+  assert_contains "$output" "socket_exists=0"
+  assert_contains "$output" "kill_log=empty"
 )
 
 test_need_clear_commands() (
@@ -767,6 +1187,7 @@ test_codex_workspace_config_alias_mount() (
 
   assert_contains "$output" "$config_root:/cache/.codex:rw"
   assert_contains "$output" "$config_root:$workspace/.codex:rw"
+  [ -d "$workspace/.codex" ] || fail "expected codex workspace alias target to be created"
 )
 
 
@@ -784,6 +1205,26 @@ test_codex_workspace_config_alias_mount_skips_duplicate_path() (
 
   assert_contains "$output" "$workspace/.codex:/cache/.codex:rw"
   assert_not_contains "$output" "$workspace/.codex:$workspace/.codex:rw"
+)
+
+test_codex_workspace_config_alias_mount_resolves_symlink_target() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root shared_config output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  shared_config="$tmp_dir/.codex"
+  mkdir -p "$workspace" "$config_root" "$shared_config"
+  ln -s ../.codex "$workspace/.codex"
+
+  output="$(codex_mount_args_for "$workspace" "$config_root")"
+
+  assert_contains "$output" "$config_root:/cache/.codex:rw"
+  assert_contains "$output" "$config_root:$shared_config:rw"
+  assert_not_contains "$output" "$config_root:$workspace/.codex:rw"
 )
 
 test_codex_config_dir_requires_write_access() (
@@ -834,14 +1275,31 @@ test_codex_auth_file_requires_read_access() (
 test_image_includes_openssh() (
   set -euo pipefail
 
-  local image_file rootfs_file
+  local image_file artifact_file rootfs_file
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+  artifact_file="$(cat "$REPO_ROOT/bin/lib/artifact_prep.sh")"
   rootfs_file="$(cat "$REPO_ROOT/bin/lib/rootfs.sh")"
 
   assert_contains "$image_file" "pkgs.openssh"
+  assert_contains "$image_file" "sudoPackage = pkgs.sudo.overrideAttrs"
+  assert_contains "$image_file" '"--without-pam"'
+  assert_contains "$image_file" "sudoConfig"
+  assert_contains "$image_file" "sudoRuntime"
+  assert_contains "$image_file" "ALL ALL=(ALL:ALL) NOPASSWD: ALL"
+  assert_contains "$image_file" "sudoImagePerms"
+  assert_contains "$image_file" 'regex = "agent-sudo/bin/sudo$"'
+  assert_contains "$image_file" 'regex = "agent-sudo/bin/sudoedit$"'
+  assert_contains "$image_file" 'mode = "4755"'
+  assert_contains "$image_file" 'rm -rf "$out/agent-sudo"'
+  assert_contains "$image_file" 'install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudo" "$out/agent-sudo/bin/sudo"'
+  assert_contains "$image_file" 'install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudoedit" "$out/agent-sudo/bin/sudoedit"'
+  assert_contains "$image_file" 'install -Dm0440 -T "${sudoConfig}/etc/sudoers.d/agent-sandbox" "$out/etc/sudoers"'
   assert_contains "$image_file" '"$out/run/host-services"'
   assert_contains "$image_file" '"$out/run/agent-path-guard"'
   assert_contains "$rootfs_file" "run/agent-path-guard"
+  assert_contains "$artifact_file" "prepare_rootfs_artifact"
+  assert_contains "$artifact_file" "copyToDockerDaemon"
+  assert_not_contains "$artifact_file" "copyToPodman"
 )
 
 test_need_defaults_to_unstable_nixpkgs() (
@@ -873,6 +1331,7 @@ main() {
   run_test "host home fallbacks present" test_host_home_fallbacks_present
   run_test "stable fetchTarball uses cached pin" test_stable_fetchtarball_uses_cached_pin
   run_test "mutable channel fetchTarball refreshes stale pin" test_mutable_channel_fetchtarball_refreshes_stale_pin
+  run_test "symlinked shell stages resolved nix contract" test_symlinked_shell_stages_resolved_nix_contract
   run_test "git wrapper policy" test_git_wrapper_policy
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script
@@ -885,9 +1344,19 @@ main() {
   run_test "ssh runtime generation" test_ssh_runtime_generation
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
+  run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
+  run_test "stream image helper uses docker helper attr" test_stream_image_helper_uses_docker_helper_attr
+  run_test "runtime identity mounts passwd and sudo overlay" test_runtime_identity_mounts_passwd_and_sudo_overlay
+  run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
+  run_test "path guard excludes privileged sudo" test_path_guard_excludes_privileged_sudo
+  run_test "base container allows sudo privilege gain" test_base_container_allows_sudo_privilege_gain
+  run_test "need run allows command-side sandbox sudo" test_need_run_allows_command_side_sandbox_sudo
+  run_test "need run refuses materialized sudo shadow" test_need_run_refuses_materialized_sudo_shadow
+  run_test "podman session ignores stale reused pid" test_container_api_does_not_kill_stale_reused_pid
   run_test "need clear commands" test_need_clear_commands
   run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
   run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
+  run_test "codex workspace config alias mount resolves symlink target" test_codex_workspace_config_alias_mount_resolves_symlink_target
   run_test "codex config dir requires write access" test_codex_config_dir_requires_write_access
   run_test "codex auth file requires read access" test_codex_auth_file_requires_read_access
   run_test "image includes openssh" test_image_includes_openssh

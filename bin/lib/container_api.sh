@@ -66,14 +66,79 @@ container_api_get_main_podman_graphroot() {
   env -u DOCKER_HOST -u CONTAINER_HOST podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || true
 }
 
+container_api_pid_is_expected_service() {
+  local pid="$1"
+  local cmdline=""
+
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -r "/proc/$pid/cmdline" ] || return 1
+
+  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  case "$cmdline" in
+    *podman*" system service "*"--time "*"unix://$CONTAINER_API_SOCKET_PATH"*) return 0 ;;
+    *podman*" system service "*"unix://$CONTAINER_API_SOCKET_PATH"*) return 0 ;;
+  esac
+
+  return 1
+}
+
 container_api_service_running() {
   [ -n "${CONTAINER_API_PID_FILE:-}" ] || return 1
   [ -f "$CONTAINER_API_PID_FILE" ] || return 1
 
   local pid
   pid="$(cat "$CONTAINER_API_PID_FILE" 2>/dev/null || true)"
-  [ -n "$pid" ] || return 1
-  kill -0 "$pid" 2>/dev/null
+  container_api_pid_is_expected_service "$pid"
+}
+
+container_api_discard_cached_service() {
+  local service_pid="$1"
+
+  if container_api_pid_is_expected_service "$service_pid"; then
+    kill "$service_pid" 2>/dev/null || true
+  fi
+
+  rm -f "$CONTAINER_API_PID_FILE" "$CONTAINER_API_SOCKET_PATH"
+}
+
+container_api_wait_for_socket() {
+  local service_pid="${1:-}"
+  local wait_seconds="${AGENT_CONTAINER_API_WAIT_SECONDS:-30}"
+  local wait_count=0
+  local max_wait_count
+
+  case "$wait_seconds" in
+    ''|*[!0-9]*)
+      wait_seconds=30
+      ;;
+  esac
+
+  max_wait_count=$((wait_seconds * 10))
+  [ "$max_wait_count" -gt 0 ] || max_wait_count=1
+
+  while [ ! -S "$CONTAINER_API_SOCKET_PATH" ] && [ "$wait_count" -lt "$max_wait_count" ]; do
+    if [ -n "$service_pid" ] && ! kill -0 "$service_pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.1
+    wait_count=$((wait_count + 1))
+  done
+
+  [ -S "$CONTAINER_API_SOCKET_PATH" ]
+}
+
+container_api_read_service_pid() {
+  [ -f "$CONTAINER_API_PID_FILE" ] || return 0
+  cat "$CONTAINER_API_PID_FILE" 2>/dev/null || true
+}
+
+container_api_report_socket_failure() {
+  echo "[agent] fatal: podman session socket not ready at $CONTAINER_API_SOCKET_PATH" >&2
+  if [ -f "$CONTAINER_API_LOG_FILE" ]; then
+    echo "[agent] service log:" >&2
+    cat "$CONTAINER_API_LOG_FILE" >&2
+  fi
 }
 
 container_api_start_podman_session() {
@@ -103,9 +168,7 @@ container_api_start_podman_session() {
   lock_dir="$CONTAINER_API_DIR/.lock"
 
   if [ "${AGENT_CONTAINER_API_RESET:-0}" = "1" ]; then
-    if container_api_service_running; then
-      kill "$(cat "$CONTAINER_API_PID_FILE")" 2>/dev/null || true
-    fi
+    container_api_discard_cached_service "$(container_api_read_service_pid)"
     rm -rf "$CONTAINER_API_DIR" "$CONTAINER_API_RUN_DIR"
   fi
 
@@ -122,21 +185,32 @@ container_api_start_podman_session() {
   container_api_write_storage_conf "$CONTAINER_API_STORAGE_CONF" "$graphroot" "$runroot" "$main_graphroot"
 
   if container_api_service_running; then
-    return 0
+    service_pid="$(container_api_read_service_pid)"
+    if container_api_wait_for_socket "$service_pid"; then
+      return 0
+    fi
+    container_api_discard_cached_service "$service_pid"
   fi
 
   if ! mkdir "$lock_dir" 2>/dev/null; then
     if [ -d "$lock_dir" ] && ! container_api_service_running; then
       rmdir "$lock_dir" 2>/dev/null || true
       mkdir "$lock_dir" 2>/dev/null || return 0
-    else
+    elif container_api_wait_for_socket "$(container_api_read_service_pid)"; then
       return 0
+    else
+      container_api_report_socket_failure
+      exit 1
     fi
   fi
 
   if container_api_service_running; then
     rmdir "$lock_dir" 2>/dev/null || true
-    return 0
+    service_pid="$(container_api_read_service_pid)"
+    if container_api_wait_for_socket "$service_pid"; then
+      return 0
+    fi
+    container_api_discard_cached_service "$service_pid"
   fi
 
   rm -f "$CONTAINER_API_SOCKET_PATH"
@@ -154,24 +228,14 @@ container_api_start_podman_session() {
   printf '%s\n' "$service_pid" > "$CONTAINER_API_PID_FILE"
   perf_log "container api warmup started in background (mode=podman-session ttl=${CONTAINER_API_TTL}s)"
 
-  # Wait for the socket to be created before returning.
-  local _wait_count=0
-  while [ ! -S "$CONTAINER_API_SOCKET_PATH" ] && [ "$_wait_count" -lt 50 ]; do
+  if ! container_api_wait_for_socket "$service_pid"; then
     if ! kill -0 "$service_pid" 2>/dev/null; then
       echo "[agent] podman session service exited unexpectedly" >&2
       cat "$CONTAINER_API_LOG_FILE" >&2 2>/dev/null || true
-      break
+    else
+      container_api_report_socket_failure
     fi
-    sleep 0.1
-    _wait_count=$((_wait_count + 1))
-  done
-
-  if [ ! -S "$CONTAINER_API_SOCKET_PATH" ]; then
-    echo "[agent] fatal: podman session socket not ready at $CONTAINER_API_SOCKET_PATH" >&2
-    if [ -f "$CONTAINER_API_LOG_FILE" ]; then
-      echo "[agent] service log:" >&2
-      cat "$CONTAINER_API_LOG_FILE" >&2
-    fi
+    rmdir "$lock_dir" 2>/dev/null || true
     exit 1
   fi
 
