@@ -6,7 +6,41 @@ copy_if_present() {
 
   if [ -f "$source_path" ]; then
     mkdir -p "$(dirname "$target_path")"
-    cp -a "$source_path" "$target_path"
+    cp -aL "$source_path" "$target_path"
+  fi
+}
+
+resolve_existing_path() {
+  local path="$1"
+
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$path"
+  elif command -v readlink >/dev/null 2>&1; then
+    readlink -f "$path"
+  else
+    return 1
+  fi
+}
+
+resolve_project_contract_nix_dir() {
+  local resolved_shell=""
+  local shell_dir=""
+
+  if [ -d "$PROJECT_NIX_DIR" ]; then
+    printf '%s\n' "$PROJECT_NIX_DIR"
+    return 0
+  fi
+
+  if [ -n "${AGENT_PROJECT_NIX_DIR:-}" ] || [ ! -e "$PROJECT_ROOT/shell.nix" ]; then
+    return 0
+  fi
+
+  resolved_shell="$(resolve_existing_path "$PROJECT_ROOT/shell.nix" 2>/dev/null || true)"
+  [ -n "$resolved_shell" ] || return 0
+
+  shell_dir="$(dirname "$resolved_shell")"
+  if [ -d "$shell_dir/nix" ]; then
+    printf '%s\n' "$shell_dir/nix"
   fi
 }
 
@@ -65,12 +99,16 @@ stage_project_contract_path() {
 
 stage_project_contract_allowlist() {
   local target_dir="$1"
-  local allowlist_path="$PROJECT_NIX_DIR/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+  local source_nix_dir="${2:-$PROJECT_NIX_DIR}"
+  local allowlist_path=""
   local rel_path=""
 
-  copy_if_present "$allowlist_path" "$target_dir/nix/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+  if [ -n "$source_nix_dir" ]; then
+    allowlist_path="$source_nix_dir/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+    copy_if_present "$allowlist_path" "$target_dir/nix/$PROJECT_CONTRACT_ALLOWLIST_FILE_NAME"
+  fi
 
-  if [ -f "$allowlist_path" ]; then
+  if [ -n "$allowlist_path" ] && [ -f "$allowlist_path" ]; then
     while IFS= read -r rel_path; do
       rel_path="$(normalize_project_contract_path "$rel_path")"
       [ -n "$rel_path" ] || continue
@@ -137,6 +175,7 @@ pin_shell_fetchtarball() {
 
 stage_project_contract_input() {
   local target_dir="$1"
+  local source_nix_dir=""
   local file_path=""
 
   copy_if_present "$PROJECT_ROOT/shell.nix" "$target_dir/shell.nix"
@@ -148,14 +187,16 @@ stage_project_contract_input() {
     pin_shell_fetchtarball "$target_dir"
   fi
 
-  if [ -d "$PROJECT_NIX_DIR" ]; then
+  source_nix_dir="$(resolve_project_contract_nix_dir)"
+  if [ -n "$source_nix_dir" ] && [ -d "$source_nix_dir" ]; then
     while IFS= read -r file_path; do
+      [ -f "$source_nix_dir/$file_path" ] || continue
       mkdir -p "$target_dir/nix/$(dirname "$file_path")"
-      cp -a "$PROJECT_NIX_DIR/$file_path" "$target_dir/nix/$file_path"
+      cp -aL "$source_nix_dir/$file_path" "$target_dir/nix/$file_path"
     done < <(
-      cd "$PROJECT_NIX_DIR" && find . -type f \( -name '*.nix' -o -name '*.lock' \) -print | sed 's#^\./##' | LC_ALL=C sort
+      cd "$source_nix_dir" && find . \( -type f -o -type l \) -print | sed 's#^\./##' | LC_ALL=C sort
     )
   fi
 
-  stage_project_contract_allowlist "$target_dir"
+  stage_project_contract_allowlist "$target_dir" "$source_nix_dir"
 }

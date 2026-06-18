@@ -128,6 +128,47 @@ let
     install -Dm0755 ${../scripts/image/need.sh} "$out/bin/need"
   '';
 
+  sudoPackage = pkgs.sudo.overrideAttrs (oldAttrs: {
+    configureFlags = oldAttrs.configureFlags ++ [ "--without-pam" ];
+    buildInputs = builtins.filter (pkg: pkg != pkgs.pam) (oldAttrs.buildInputs or [ ]);
+  });
+
+  sudoConfig = pkgs.runCommand "agent-sudo-config" { } ''
+    mkdir -p "$out/etc/sudoers.d"
+    cat > "$out/etc/sudoers.d/agent-sandbox" <<'EOF'
+Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
+ALL ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+    chmod 0440 "$out/etc/sudoers.d/agent-sandbox"
+  '';
+
+  sudoRuntime = pkgs.runCommand "agent-sudo-runtime" { } ''
+    mkdir -p "$out/agent-sudo/bin"
+    cp -L ${sudoPackage}/bin/sudo "$out/agent-sudo/bin/sudo"
+    cp -L ${sudoPackage}/bin/sudo "$out/agent-sudo/bin/sudoedit"
+  '';
+
+  sudoImagePerms = [
+    {
+      path = sudoRuntime;
+      regex = "agent-sudo/bin/sudo$";
+      mode = "4755";
+      uid = 0;
+      gid = 0;
+      uname = "root";
+      gname = "root";
+    }
+    {
+      path = sudoRuntime;
+      regex = "agent-sudo/bin/sudoedit$";
+      mode = "4755";
+      uid = 0;
+      gid = 0;
+      uname = "root";
+      gname = "root";
+    }
+  ];
+
   agentCompatScript = pkgs.replaceVars ../scripts/image/agent-compat.sh {
     nixReal = "${pkgs.nix}/bin/nix";
     nixShellReal = "${pkgs.nix}/bin/nix-shell";
@@ -270,6 +311,7 @@ let
       pkgs.gawk
       pkgs.findutils
       pkgs.openssh
+      sudoPackage
       pkgs.curl
       pkgs.wget
       pkgs.jq
@@ -281,7 +323,7 @@ let
     ++ devPackagesImage
     ++ toolLaunchers
     ++ compatWrappers
-    ++ [ needCommand ];
+    ++ [ needCommand sudoConfig sudoRuntime ];
 
   imageSpec = {
     name = "agent-base";
@@ -289,12 +331,13 @@ let
     maxLayers = 120;
 
     copyToRoot = imageBasePaths;
+    perms = sudoImagePerms;
 
     config = {
       WorkingDir = "/";
       Entrypoint = [ "/bin/codex" ];
       Env = [
-        "PATH=/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
+        "PATH=/agent-sudo/bin:/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"
@@ -315,15 +358,23 @@ rec {
     pathsToLink = [ "/" ];
     paths = imageBasePaths;
     postBuild = ''
-      # Podman --rootfs reads /etc/passwd via SecureJoin before mounts are
-      # applied; keep NSS files as real files (not /nix/store symlinks).
+      # Keep NSS files as real files for direct rootfs inspection/debugging.
       rm -f "$out/etc/passwd" "$out/etc/group" "$out/etc/nsswitch.conf"
       install -Dm0644 -T "${pkgs.dockerTools.fakeNss}/etc/passwd" "$out/etc/passwd"
       install -Dm0644 -T "${pkgs.dockerTools.fakeNss}/etc/group" "$out/etc/group"
       install -Dm0644 -T "${pkgs.dockerTools.fakeNss}/etc/nsswitch.conf" "$out/etc/nsswitch.conf"
 
-      # In rootfs mode Podman mounts volumes before command execution and
-      # expects destination paths to be normal directories, not symlink chains.
+      # Keep rootfs bind-mount targets as real nodes. crun is strict about
+      # top-level symlink mount destinations in `podman --rootfs` containers.
+      rm -rf "$out/agent-sudo"
+      install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudo" "$out/agent-sudo/bin/sudo"
+      install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudoedit" "$out/agent-sudo/bin/sudoedit"
+      rm -f "$out/etc/sudo.conf" "$out/etc/sudoers" "$out/etc/sudoers.dist" "$out/etc/sudo_logsrvd.conf"
+      : > "$out/etc/sudo.conf"
+      install -Dm0440 -T "${sudoConfig}/etc/sudoers.d/agent-sandbox" "$out/etc/sudoers"
+
+      # Keep common runtime mount destinations as normal directories, not
+      # symlink chains.
       for d in \
         cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var/run \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db

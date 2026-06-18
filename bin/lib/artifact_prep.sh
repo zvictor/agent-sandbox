@@ -166,8 +166,20 @@ prepare_stream_image_artifact() {
       "streamImage" \
       "image derivation cache hit for streamImage" \
       "nix build streamImage" \
-      "[agent] streamImage build failed for docker mode."
+      "[agent] streamImage build failed for runtime mode."
   )"
+}
+
+run_stream_image_helper() {
+  local helper_attr="$1"
+  shift 1
+
+  local helper_tmpdir="${AGENT_HELPER_TMPDIR:-${CACHE_DIR:-${TMPDIR:-/tmp}}/tmp}"
+  mkdir -p "$helper_tmpdir" >/dev/null 2>&1 || true
+
+  TMPDIR="$helper_tmpdir" nix_cmd run "${SANDBOX_FLAKE}#streamImage.${helper_attr}" \
+    "${PROJECT_OVERRIDE_ARGS[@]}" \
+    "${LOCK_ARGS[@]}" -- "$@"
 }
 
 load_runtime_image_id() {

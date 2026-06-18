@@ -9,6 +9,8 @@ mount_engine() {
   local active_credentials_file="$8"
   local workspace_alias_path="${9:-}"
   local mount_source=""
+  local workspace_alias_mount_path=""
+  local workspace_alias_is_symlink="0"
   local resolved_auth_path=""
   local selector_value=""
 
@@ -30,10 +32,17 @@ mount_engine() {
     mount_source="$CACHE_DIR/empty-config/$engine"
     mkdir -p "$mount_source"
   fi
+  mount_source="$(resolve_mount_dir "$mount_source")"
 
   ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
   if [ -n "$workspace_alias_path" ] && [ "$workspace_alias_path" != "$mount_source" ]; then
-    ARGS+=( -v "$mount_source:$workspace_alias_path:rw${Z_SUFFIX}" )
+    if [ -L "$workspace_alias_path" ]; then
+      workspace_alias_is_symlink="1"
+    fi
+    workspace_alias_mount_path="$(ensure_workspace_alias_mount_target "$engine" "$workspace_alias_path")"
+    if [ "$workspace_alias_mount_path" != "$mount_source" ] || [ "$workspace_alias_is_symlink" = "1" ]; then
+      ARGS+=( -v "$mount_source:$workspace_alias_mount_path:rw${Z_SUFFIX}" )
+    fi
   fi
 
   # Force file-based MCP OAuth credential storage inside the container.
@@ -83,6 +92,32 @@ mount_engine() {
     ARGS+=( -v "$resolved_auth_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
     ARGS+=( -e "${engine^^}_AUTH=$selector_value" )
   fi
+}
+
+resolve_mount_dir() {
+  local dir_path="$1"
+
+  (
+    cd "$dir_path" &&
+    pwd -P
+  )
+}
+
+ensure_workspace_alias_mount_target() {
+  local engine="$1"
+  local alias_path="$2"
+
+  if [ -e "$alias_path" ] && [ ! -d "$alias_path" ]; then
+    echo "[agent] ERROR: workspace config alias for $engine is not a directory: $alias_path" >&2
+    exit 1
+  fi
+
+  if ! mkdir -p "$alias_path"; then
+    echo "[agent] ERROR: could not create workspace config alias for $engine: $alias_path" >&2
+    exit 1
+  fi
+
+  resolve_mount_dir "$alias_path"
 }
 
 expand_host_selector_path() {
@@ -354,15 +389,17 @@ compose_runtime_path() {
   local dev_env_path="${1:-}"
 
   if [ -n "$dev_env_path" ]; then
-    printf '%s:%s:%s:%s:%s\n' \
+    printf '%s:%s:%s:%s:%s:%s\n' \
       "$PATH_GUARD_CONTAINER_DIR" \
+      "$SUDO_RUNTIME_PATH" \
       "$WORKSPACE_NODE_MODULES_BIN" \
       "$dev_env_path" \
       "$NEED_TOOLS_PATH" \
       "$IMAGE_FALLBACK_PATH"
   else
-    printf '%s:%s:%s:%s\n' \
+    printf '%s:%s:%s:%s:%s\n' \
       "$PATH_GUARD_CONTAINER_DIR" \
+      "$SUDO_RUNTIME_PATH" \
       "$WORKSPACE_NODE_MODULES_BIN" \
       "$NEED_TOOLS_PATH" \
       "$IMAGE_FALLBACK_PATH"
@@ -520,6 +557,7 @@ build_nix_config() {
   WORKSPACE_NODE_MODULES_BIN="$WORKSPACE_PATH/node_modules/.bin"
   NEED_CACHE_PATH="${AGENT_NEED_CACHE_DIR:-/cache/need}"
   NEED_TOOLS_PATH="${AGENT_NEED_TOOLS_DIR:-$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$PROJECT_ROOT")/bin}"
+  SUDO_RUNTIME_PATH="/agent-sudo/bin"
   IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
   WORKSPACE_RUNTIME_PATH="$(compose_runtime_path "")"
 
@@ -544,7 +582,8 @@ build_base_container_args() {
     --rm
     --name "$CONTAINER_NAME"
     --cap-drop=ALL
-    --security-opt=no-new-privileges
+    --cap-add=SETUID
+    --cap-add=SETGID
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
     --memory="${AGENT_MEMORY_LIMIT:-4g}"
     --cpus="${AGENT_CPU_LIMIT:-2}"
@@ -577,6 +616,136 @@ append_nix_mount_args() {
     ARGS+=( -v "${AGENT_NIX_BINCACHE_DIR}:/nixcache:ro${Z_SUFFIX}" )
   else
     ARGS+=( -v "agent-nix-bincache:/nixcache:rw" )
+  fi
+}
+
+sanitize_runtime_account_name() {
+  local raw_name="$1"
+
+  case "$raw_name" in
+    ""|[!A-Za-z_]*|*[!A-Za-z0-9_-]*)
+      printf '%s\n' "agent"
+      ;;
+    *)
+      printf '%s\n' "$raw_name"
+      ;;
+  esac
+}
+
+runtime_root_chown() {
+  if [ "$RUNTIME" = "podman" ]; then
+    # With --userns=keep-id, host uid 0 in `podman unshare` maps to the
+    # caller's container uid, while uid 1 maps to container root.
+    if ! podman unshare chown 1:1 "$@"; then
+      echo "[agent] ERROR: failed to prepare podman root-owned runtime files" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  if [ "$(id -u)" = "0" ]; then
+    chown 0:0 "$@"
+  fi
+}
+
+runtime_root_chmod() {
+  local mode="$1"
+  shift
+
+  if [ "$RUNTIME" = "podman" ]; then
+    if ! podman unshare chmod "$mode" "$@"; then
+      echo "[agent] ERROR: failed to set podman runtime file modes" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  chmod "$mode" "$@"
+}
+
+prepare_runtime_identity_dir() {
+  local uid gid account_name group_name sudo_source
+
+  if [ -n "${RUNTIME_IDENTITY_HOST_DIR:-}" ] && [ -d "$RUNTIME_IDENTITY_HOST_DIR" ]; then
+    return
+  fi
+
+  uid="$(id -u)"
+  gid="$(id -g)"
+  account_name="$(sanitize_runtime_account_name "${USER:-${LOGNAME:-agent}}")"
+  group_name="$account_name"
+  if [ "$uid" = "0" ]; then
+    account_name="root"
+  fi
+  if [ "$gid" = "0" ]; then
+    group_name="root"
+  fi
+
+  RUNTIME_USER_NAME="$account_name"
+  RUNTIME_IDENTITY_HOST_DIR="$(mktemp -d "$HELPER_TMPDIR/runtime-identity.XXXXXX")"
+
+  {
+    printf 'root:x:0:0:root:/root:/bin/sh\n'
+    if [ "$uid" != "0" ]; then
+      printf '%s:x:%s:%s:Agent Sandbox:/cache:/bin/sh\n' "$account_name" "$uid" "$gid"
+    fi
+  } > "$RUNTIME_IDENTITY_HOST_DIR/passwd"
+
+  {
+    printf 'root:x:0:\n'
+    if [ "$gid" != "0" ]; then
+      printf '%s:x:%s:%s\n' "$group_name" "$gid" "$account_name"
+    fi
+  } > "$RUNTIME_IDENTITY_HOST_DIR/group"
+
+  if [ "$MODE" = "podman-rootfs" ]; then
+    sudo_source="$ROOTFS_OUT/agent-sudo/bin/sudo"
+    if [ ! -x "$sudo_source" ]; then
+      echo "[agent] ERROR: rootfs is missing /agent-sudo/bin/sudo" >&2
+      exit 1
+    fi
+
+    mkdir -p "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin"
+    cp -fL "$sudo_source" "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo"
+    cp -fL "$sudo_source" "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit"
+
+    : > "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf"
+    cat > "$RUNTIME_IDENTITY_HOST_DIR/sudoers" <<'EOF_SUDOERS'
+Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
+ALL ALL=(ALL:ALL) NOPASSWD: ALL
+EOF_SUDOERS
+
+    runtime_root_chown \
+      "$RUNTIME_IDENTITY_HOST_DIR/passwd" \
+      "$RUNTIME_IDENTITY_HOST_DIR/group" \
+      "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf" \
+      "$RUNTIME_IDENTITY_HOST_DIR/sudoers" \
+      "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo" \
+      "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit"
+    runtime_root_chmod 0644 \
+      "$RUNTIME_IDENTITY_HOST_DIR/passwd" \
+      "$RUNTIME_IDENTITY_HOST_DIR/group" \
+      "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf"
+    runtime_root_chmod 0440 "$RUNTIME_IDENTITY_HOST_DIR/sudoers"
+    runtime_root_chmod 4755 \
+      "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo" \
+      "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit"
+  fi
+}
+
+append_runtime_identity_mount_args() {
+  prepare_runtime_identity_dir
+
+  ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/passwd:/etc/passwd:ro${Z_SUFFIX}" )
+  ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/group:/etc/group:ro${Z_SUFFIX}" )
+  ARGS+=( -e "USER=$RUNTIME_USER_NAME" )
+  ARGS+=( -e "LOGNAME=$RUNTIME_USER_NAME" )
+
+  if [ "$MODE" = "podman-rootfs" ]; then
+    ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf:/etc/sudo.conf:ro${Z_SUFFIX}" )
+    ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/sudoers:/etc/sudoers:ro${Z_SUFFIX}" )
+    ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo:/agent-sudo/bin/sudo:ro${Z_SUFFIX}" )
+    ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit:/agent-sudo/bin/sudoedit:ro${Z_SUFFIX}" )
   fi
 }
 
@@ -906,10 +1075,11 @@ append_stdio_and_target_args() {
   fi
 
   ARGS+=( --entrypoint "/bin/$TOOL" )
-  RUN_TARGET="$IMAGE_ID"
   if [ "$MODE" = "podman-rootfs" ]; then
     ARGS+=( --rootfs )
     RUN_TARGET="$ROOTFS_IMAGE_ARG"
+  else
+    RUN_TARGET="$IMAGE_ID"
   fi
   ARGS+=( "$RUN_TARGET" )
   append_codex_ssh_sandbox_args
@@ -938,6 +1108,7 @@ build_container_args() {
   build_base_container_args
   append_path_guard_mount_args
   append_nix_mount_args
+  append_runtime_identity_mount_args
   append_runtime_identity_args
   append_host_socket_args
   append_ssh_runtime_mount_args

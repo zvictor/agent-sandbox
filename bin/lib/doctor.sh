@@ -115,7 +115,7 @@ doctor_runtime_mode() {
 
   if [ "$RUNTIME" = "podman" ]; then
     if [ "$OS_NAME" != "Linux" ]; then
-      printf 'unavailable: podman rootfs requires Linux\n'
+      printf 'unavailable: podman rootfs mode requires Linux\n'
       return 0
     fi
     if [ ! -d /nix/store ]; then

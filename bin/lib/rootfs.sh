@@ -111,15 +111,3 @@ prepare_writable_rootfs_mirror() {
 
   printf '%s\n' "$target_dir"
 }
-
-run_stream_image_helper() {
-  local helper_attr="$1"
-  shift 1
-
-  local helper_tmpdir="${AGENT_HELPER_TMPDIR:-${CACHE_DIR:-${TMPDIR:-/tmp}}/tmp}"
-  mkdir -p "$helper_tmpdir" >/dev/null 2>&1 || true
-
-  TMPDIR="$helper_tmpdir" nix_cmd run "${SANDBOX_FLAKE}#streamImage.${helper_attr}" \
-    "${PROJECT_OVERRIDE_ARGS[@]}" \
-    "${LOCK_ARGS[@]}" -- "$@"
-}

@@ -149,9 +149,13 @@ TMP_DIR=""
 HELPER_STATE_DIR=""
 LOGIN_STATE_DIR=""
 PATH_GUARD_HOST_DIR=""
+RUNTIME_IDENTITY_HOST_DIR=""
 cleanup() {
   if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
+  fi
+  if [ -n "$RUNTIME_IDENTITY_HOST_DIR" ] && [ -d "$RUNTIME_IDENTITY_HOST_DIR" ]; then
+    rm -rf "$RUNTIME_IDENTITY_HOST_DIR"
   fi
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
@@ -181,16 +185,10 @@ if [ "${AGENT_DEBUG:-0}" = "1" ]; then
 fi
 
 set +e
-if [ "$MODE" = "podman-rootfs" ]; then
-  perf_log "podman rootfs run mode: $ROOTFS_RUN_MODE"
-  run_container_runtime
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    echo "[agent] podman --rootfs run failed." >&2
-  fi
-else
-  run_container_runtime
-  status=$?
+run_container_runtime
+status=$?
+if [ "$MODE" = "podman-rootfs" ] && [ "$status" -ne 0 ]; then
+  echo "[agent] podman --rootfs run failed." >&2
 fi
 set -e
 
