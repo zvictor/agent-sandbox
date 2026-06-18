@@ -65,6 +65,7 @@ Existing environment variables always win over file values.
 | `AGENT_PIDS_LIMIT` | `512` | Container PID limit |
 | `AGENT_WORKSPACE_PATH` | current directory | Workspace mounted at the same absolute path inside the sandbox |
 | `AGENT_PODMAN_ROOTFS_MODE` | `auto` | Podman rootfs mode: `auto`, `overlay`, or `mirror` |
+| `AGENT_ALLOW_SUDO` | `0` | Enables container-local sudo when set to `1` |
 | `AGENT_PERF_LOG` | `1` | Enable or disable timing logs |
 | `AGENT_FORCE_REBUILD` | `0` | Rebuild cached runtime artifacts |
 | `AGENT_NIX_EXPERIMENTAL_FEATURES` | `nix-command flakes` | Extra Nix experimental features for launcher commands |
@@ -144,7 +145,7 @@ These widen the sandbox boundary substantially.
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` snapshot before the container starts, caches the filtered result, and injects it into the sandbox at startup. There is no live bridge back to host direnv; restart the session to refresh `.envrc` changes.
 
-When the snapshot includes `PATH`, safety wrappers for `git`, `sh`, `nix`, `nix-shell`, and `need` stay first, followed by the privileged `/agent-sudo/bin` path. Project-local bins and the dev-environment `PATH` come before ambient `need inject` bins and image fallback paths.
+When the snapshot includes `PATH`, safety wrappers for `git`, `sh`, `nix`, `nix-shell`, and `need` stay first. Project-local bins and the dev-environment `PATH` come before ambient `need inject` bins and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after the safety wrappers.
 
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input.
 

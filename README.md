@@ -229,7 +229,7 @@ You can rely on these behaviors:
 - The selected workspace is mounted read-write at the same absolute path inside the sandbox.
 - Tool config mounts are explicit rather than ambient.
 - The current repo's Git state is protected from common mutating commands by default; `git clone` is the one explicit exception.
-- `sudo` is present in the base image and the outer runtime does not set `no-new-privileges`.
+- Container-local `sudo` is disabled by default and is enabled only with `AGENT_ALLOW_SUDO=1`.
 - `agent doctor` uses the same runtime resolution rules as real execution.
 - Podman runs the rootfs artifact directly; Docker runs the OCI image artifact.
 
@@ -499,10 +499,11 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_WORKSPACE_PATH`: workspace directory mounted at the same absolute path inside the sandbox; defaults to current directory
 - `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`
 - `AGENT_DEV_ENV`: `host-helper` or `none`; default `host-helper`
+- `AGENT_ALLOW_SUDO`: set to `1` to enable container-local sudo; default `0`
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` environment snapshot for the project root before the container starts, caches the filtered result under `AGENT_CACHE_DIR`, and passes that environment into the sandbox at startup. There is no live host `direnv` bridge in the running container; if `.envrc` changes, restart the sandbox session to refresh the injected environment.
 
-When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then the privileged `/agent-sudo/bin` path, then project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
+When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after the safety wrappers. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
 
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input. If you need to force a specific `nixpkgs` tree for host-helper resolution, set `AGENT_DIRENV_NIX_PATH=/path/to/nixpkgs`.
 

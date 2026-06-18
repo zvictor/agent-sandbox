@@ -78,7 +78,11 @@ refuse_protected_injected_command() {
   command_base="$(basename "$command_name")"
   if is_protected_injected_command "$command_base"; then
     command_path="/agent-sudo/bin/$command_base"
-    echo "[agent] refusing to inject privileged command '$command_base'; use the sandbox runtime's $command_path" >&2
+    if [ "${AGENT_ALLOW_SUDO:-0}" = "1" ]; then
+      echo "[agent] refusing to inject privileged command '$command_base'; use the sandbox runtime's $command_path" >&2
+    else
+      echo "[agent] refusing to inject privileged command '$command_base'; enable AGENT_ALLOW_SUDO=1 to use sandbox runtime sudo" >&2
+    fi
     exit 1
   fi
 }

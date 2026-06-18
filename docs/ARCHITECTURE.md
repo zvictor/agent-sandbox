@@ -106,7 +106,7 @@ Podman path:
 - requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`
 - builds `rootfs`
 - runs it directly with `podman --rootfs`
-- mounts a tiny runtime identity/sudo overlay so NSS and setuid sudo work under the user namespace
+- mounts a tiny runtime identity overlay for NSS; when `AGENT_ALLOW_SUDO=1`, the same overlay also provides root-owned setuid sudo under the user namespace
 
 Docker path:
 - builds `streamImage`
@@ -122,7 +122,7 @@ When `AGENT_DEV_ENV=host-helper` and `.envrc` exists, the launcher:
 - filters out build-system noise and unsupported values
 - caches the resulting env file
 - injects that snapshot into the container at startup
-- orders `PATH` so sandbox guardrail wrappers stay first, followed by `/agent-sudo/bin`, project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks
+- orders `PATH` so sandbox guardrail wrappers stay first, then project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks; `AGENT_ALLOW_SUDO=1` inserts `/agent-sudo/bin` immediately after the wrappers
 
 There is no live bridge back to host direnv.
 

@@ -135,10 +135,12 @@ let
 
   sudoConfig = pkgs.runCommand "agent-sudo-config" { } ''
     mkdir -p "$out/etc/sudoers.d"
-    cat > "$out/etc/sudoers.d/agent-sandbox" <<'EOF'
+    cat > "$out/etc/sudoers" <<'EOF'
 Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
 ALL ALL=(ALL:ALL) NOPASSWD: ALL
 EOF
+    cp "$out/etc/sudoers" "$out/etc/sudoers.d/agent-sandbox"
+    chmod 0440 "$out/etc/sudoers"
     chmod 0440 "$out/etc/sudoers.d/agent-sandbox"
   '';
 
@@ -146,6 +148,8 @@ EOF
     mkdir -p "$out/agent-sudo/bin"
     cp -L ${sudoPackage}/bin/sudo "$out/agent-sudo/bin/sudo"
     cp -L ${sudoPackage}/bin/sudo "$out/agent-sudo/bin/sudoedit"
+    mkdir -p "$out/nix-support"
+    printf '%s\n' ${sudoPackage} > "$out/nix-support/agent-sudo-package"
   '';
 
   sudoImagePerms = [
@@ -311,7 +315,6 @@ EOF
       pkgs.gawk
       pkgs.findutils
       pkgs.openssh
-      sudoPackage
       pkgs.curl
       pkgs.wget
       pkgs.jq
@@ -337,7 +340,7 @@ EOF
       WorkingDir = "/";
       Entrypoint = [ "/bin/codex" ];
       Env = [
-        "PATH=/agent-sudo/bin:/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
+        "PATH=/cache/need/bin:/bin:/usr/bin:/usr/local/bin:${pkgs.lib.makeBinPath devPackagesFinal}:${pkgs.bashInteractive}/bin"
         "HOME=/cache"
         "XDG_CACHE_HOME=/cache"
         "TOOL_CACHE=/cache"

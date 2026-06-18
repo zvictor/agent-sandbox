@@ -256,11 +256,15 @@ dev_env_args_for() (
   local workspace_path="$1"
   local project_root="$2"
   local env_file="$3"
+  local allow_sudo="${4:-0}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
-  SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  SUDO_RUNTIME_PATH=""
+  if [ "$allow_sudo" = "1" ]; then
+    SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  fi
   WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
   NEED_CACHE_PATH="/cache/need"
   NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
@@ -279,11 +283,15 @@ runtime_path_for() (
   local workspace_path="$1"
   local project_root="$2"
   local dev_env_path="${3:-}"
+  local allow_sudo="${4:-0}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
-  SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  SUDO_RUNTIME_PATH=""
+  if [ "$allow_sudo" = "1" ]; then
+    SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  fi
   WORKSPACE_NODE_MODULES_BIN="$workspace_path/node_modules/.bin"
   NEED_CACHE_PATH="/cache/need"
   NEED_TOOLS_PATH="$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$project_root")/bin"
@@ -351,7 +359,15 @@ path_guard_entries_for() (
 base_container_args_for() (
   set -euo pipefail
 
+  local allow_sudo="${1:-0}"
+
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  if [ "$allow_sudo" = "1" ]; then
+    export AGENT_ALLOW_SUDO=1
+  else
+    unset AGENT_ALLOW_SUDO
+  fi
 
   TOOL="codex"
   WORKSPACE_PATH="/workspace"
@@ -370,7 +386,8 @@ base_container_args_for() (
 runtime_identity_args_for() (
   set -euo pipefail
 
-  local tmp_dir
+  local tmp_dir allow_sudo
+  allow_sudo="${1:-0}"
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -379,6 +396,12 @@ runtime_identity_args_for() (
   chmod 0755 "$tmp_dir/rootfs/agent-sudo/bin/sudo"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  if [ "$allow_sudo" = "1" ]; then
+    export AGENT_ALLOW_SUDO=1
+  else
+    unset AGENT_ALLOW_SUDO
+  fi
 
   podman() {
     if [ "${1:-}" = "unshare" ]; then
@@ -409,10 +432,19 @@ runtime_identity_args_for() (
   printf '%s\n' "${ARGS[@]}"
   printf 'passwd:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/passwd")"
   printf 'group:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/group")"
-  printf 'sudoers:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/sudoers")"
-  printf 'sudo_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo")"
-  printf 'sudoedit_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit")"
-  cat "$tmp_dir/podman.log"
+  if [ -f "$RUNTIME_IDENTITY_HOST_DIR/sudoers" ]; then
+    printf 'sudoers:\n%s\n' "$(cat "$RUNTIME_IDENTITY_HOST_DIR/sudoers")"
+  fi
+  if [ -e "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo" ]; then
+    printf 'sudo_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo")"
+    printf 'sudoedit_mode=%s\n' "$(stat -c '%a' "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudoedit")"
+  fi
+  if [ -d "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo-disabled" ]; then
+    printf 'sudo_disabled_mask=1\n'
+  fi
+  if [ -f "$tmp_dir/podman.log" ]; then
+    cat "$tmp_dir/podman.log"
+  fi
 )
 
 stdio_target_args_for() (
@@ -921,11 +953,12 @@ test_dev_env_path_precedence() (
   path_line="$(printf '%s\n' "$output" | sed -n 's/^PATH=//p')"
 
   case "$path_line" in
-    "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/nix/store/bun/bin:/nix/store/node/bin:/bin:"*) ;;
+    "/run/agent-path-guard:$workspace/node_modules/.bin:/nix/store/bun/bin:/nix/store/node/bin:/bin:"*) ;;
     *) fail "dev env PATH should come before need/image fallback paths: $path_line" ;;
   esac
   assert_contains "$path_line" ":/cache/need/projects/"
   assert_not_contains "$path_line" "/cache/need/bin"
+  assert_not_contains "$path_line" "/agent-sudo/bin"
 )
 
 test_runtime_path_uses_project_scoped_need_bins() (
@@ -941,10 +974,29 @@ test_runtime_path_uses_project_scoped_need_bins() (
   output="$(runtime_path_for "$workspace" "$workspace")"
 
   case "$output" in
-    "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
+    "/run/agent-path-guard:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
     *) fail "runtime PATH should use project-scoped need bins after project-local bins: $output" ;;
   esac
   assert_not_contains "$output" "/cache/need/bin"
+  assert_not_contains "$output" "/agent-sudo/bin"
+)
+
+test_runtime_path_includes_sudo_when_enabled() (
+  set -euo pipefail
+
+  local tmp_dir workspace output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  output="$(runtime_path_for "$workspace" "$workspace" "" 1)"
+
+  case "$output" in
+    "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
+    *) fail "runtime PATH should include sudo path when enabled: $output" ;;
+  esac
 )
 
 test_runtime_modes_preserve_podman_rootfs() (
@@ -978,11 +1030,31 @@ test_stream_image_helper_uses_docker_helper_attr() (
   assert_contains "$output" "argv=run path:/sandbox#streamImage.copyToDockerDaemon --override-input projectPkgs path:/project-store --no-update-lock-file -- --probe flag"
 )
 
-test_runtime_identity_mounts_passwd_and_sudo_overlay() (
+test_runtime_identity_masks_sudo_by_default() (
   set -euo pipefail
 
   local output
   output="$(runtime_identity_args_for)"
+
+  assert_contains "$output" "/etc/passwd:ro"
+  assert_contains "$output" "/etc/group:ro"
+  assert_contains "$output" ":/agent-sudo:ro"
+  assert_not_contains "$output" "/etc/sudo.conf:ro"
+  assert_not_contains "$output" "/etc/sudoers:ro"
+  assert_not_contains "$output" "/agent-sudo/bin/sudo:ro"
+  assert_not_contains "$output" "/agent-sudo/bin/sudoedit:ro"
+  assert_contains "$output" "USER=agenttest"
+  assert_contains "$output" "LOGNAME=agenttest"
+  assert_contains "$output" "agenttest:x:"
+  assert_contains "$output" "sudo_disabled_mask=1"
+  assert_not_contains "$output" "sudo_mode=4755"
+)
+
+test_runtime_identity_mounts_sudo_overlay_when_enabled() (
+  set -euo pipefail
+
+  local output
+  output="$(runtime_identity_args_for 1)"
 
   assert_contains "$output" "/etc/passwd:ro"
   assert_contains "$output" "/etc/group:ro"
@@ -1020,16 +1092,42 @@ test_path_guard_excludes_privileged_sudo() (
   assert_not_contains "$output" "sudoedit ->"
 )
 
-test_base_container_allows_sudo_privilege_gain() (
+test_base_container_disables_sudo_by_default() (
   set -euo pipefail
 
   local output
   output="$(base_container_args_for)"
 
   assert_contains "$output" "--cap-drop=ALL"
+  assert_contains "$output" "--security-opt=no-new-privileges"
+  assert_not_contains "$output" "--cap-add=SETUID"
+  assert_not_contains "$output" "--cap-add=SETGID"
+)
+
+test_base_container_allows_sudo_when_enabled() (
+  set -euo pipefail
+
+  local output
+  output="$(base_container_args_for 1)"
+
+  assert_contains "$output" "--cap-drop=ALL"
   assert_contains "$output" "--cap-add=SETUID"
   assert_contains "$output" "--cap-add=SETGID"
   assert_not_contains "$output" "--security-opt=no-new-privileges"
+)
+
+test_sudo_flag_rejects_invalid_values() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(AGENT_ALLOW_SUDO=yes bash -c 'source "$1"; sudo_enabled' bash "$REPO_ROOT/bin/lib/container_runtime.sh" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected invalid AGENT_ALLOW_SUDO to fail"
+  assert_contains "$output" "AGENT_ALLOW_SUDO must be 0 or 1"
 )
 
 test_need_run_allows_command_side_sandbox_sudo() (
@@ -1090,6 +1188,7 @@ test_need_run_refuses_materialized_sudo_shadow() (
 
   [ "$status" -ne 0 ] || fail "expected need run to reject a sudo-providing bin path"
   assert_contains "$output" "refusing to inject privileged command 'sudo'"
+  assert_contains "$output" "enable AGENT_ALLOW_SUDO=1"
 )
 
 test_container_api_does_not_kill_stale_reused_pid() (
@@ -1285,6 +1384,7 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"--without-pam"'
   assert_contains "$image_file" "sudoConfig"
   assert_contains "$image_file" "sudoRuntime"
+  assert_contains "$image_file" 'agent-sudo-package'
   assert_contains "$image_file" "ALL ALL=(ALL:ALL) NOPASSWD: ALL"
   assert_contains "$image_file" "sudoImagePerms"
   assert_contains "$image_file" 'regex = "agent-sudo/bin/sudo$"'
@@ -1294,6 +1394,8 @@ test_image_includes_openssh() (
   assert_contains "$image_file" 'install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudo" "$out/agent-sudo/bin/sudo"'
   assert_contains "$image_file" 'install -Dm0755 -T "${sudoRuntime}/agent-sudo/bin/sudoedit" "$out/agent-sudo/bin/sudoedit"'
   assert_contains "$image_file" 'install -Dm0440 -T "${sudoConfig}/etc/sudoers.d/agent-sandbox" "$out/etc/sudoers"'
+  assert_not_contains "$image_file" '      sudoPackage'
+  assert_not_contains "$image_file" '"PATH=/agent-sudo/bin:'
   assert_contains "$image_file" '"$out/run/host-services"'
   assert_contains "$image_file" '"$out/run/agent-path-guard"'
   assert_contains "$rootfs_file" "run/agent-path-guard"
@@ -1344,12 +1446,16 @@ main() {
   run_test "ssh runtime generation" test_ssh_runtime_generation
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
+  run_test "runtime path includes sudo when enabled" test_runtime_path_includes_sudo_when_enabled
   run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
   run_test "stream image helper uses docker helper attr" test_stream_image_helper_uses_docker_helper_attr
-  run_test "runtime identity mounts passwd and sudo overlay" test_runtime_identity_mounts_passwd_and_sudo_overlay
+  run_test "runtime identity masks sudo by default" test_runtime_identity_masks_sudo_by_default
+  run_test "runtime identity mounts sudo overlay when enabled" test_runtime_identity_mounts_sudo_overlay_when_enabled
   run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
   run_test "path guard excludes privileged sudo" test_path_guard_excludes_privileged_sudo
-  run_test "base container allows sudo privilege gain" test_base_container_allows_sudo_privilege_gain
+  run_test "base container disables sudo by default" test_base_container_disables_sudo_by_default
+  run_test "base container allows sudo when enabled" test_base_container_allows_sudo_when_enabled
+  run_test "sudo flag rejects invalid values" test_sudo_flag_rejects_invalid_values
   run_test "need run allows command-side sandbox sudo" test_need_run_allows_command_side_sandbox_sudo
   run_test "need run refuses materialized sudo shadow" test_need_run_refuses_materialized_sudo_shadow
   run_test "podman session ignores stale reused pid" test_container_api_does_not_kill_stale_reused_pid

@@ -387,23 +387,20 @@ runtime_path_scope_key() {
 
 compose_runtime_path() {
   local dev_env_path="${1:-}"
+  local -a path_parts=()
 
-  if [ -n "$dev_env_path" ]; then
-    printf '%s:%s:%s:%s:%s:%s\n' \
-      "$PATH_GUARD_CONTAINER_DIR" \
-      "$SUDO_RUNTIME_PATH" \
-      "$WORKSPACE_NODE_MODULES_BIN" \
-      "$dev_env_path" \
-      "$NEED_TOOLS_PATH" \
-      "$IMAGE_FALLBACK_PATH"
-  else
-    printf '%s:%s:%s:%s:%s\n' \
-      "$PATH_GUARD_CONTAINER_DIR" \
-      "$SUDO_RUNTIME_PATH" \
-      "$WORKSPACE_NODE_MODULES_BIN" \
-      "$NEED_TOOLS_PATH" \
-      "$IMAGE_FALLBACK_PATH"
+  path_parts+=( "$PATH_GUARD_CONTAINER_DIR" )
+  if [ -n "${SUDO_RUNTIME_PATH:-}" ]; then
+    path_parts+=( "$SUDO_RUNTIME_PATH" )
   fi
+  path_parts+=( "$WORKSPACE_NODE_MODULES_BIN" )
+  if [ -n "$dev_env_path" ]; then
+    path_parts+=( "$dev_env_path" )
+  fi
+  path_parts+=( "$NEED_TOOLS_PATH" "$IMAGE_FALLBACK_PATH" )
+
+  local IFS=:
+  printf '%s\n' "${path_parts[*]}"
 }
 
 ssh_runtime_file_is_sensitive() {
@@ -557,7 +554,10 @@ build_nix_config() {
   WORKSPACE_NODE_MODULES_BIN="$WORKSPACE_PATH/node_modules/.bin"
   NEED_CACHE_PATH="${AGENT_NEED_CACHE_DIR:-/cache/need}"
   NEED_TOOLS_PATH="${AGENT_NEED_TOOLS_DIR:-$NEED_CACHE_PATH/projects/$(runtime_path_scope_key "$PROJECT_ROOT")/bin}"
-  SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  SUDO_RUNTIME_PATH=""
+  if sudo_enabled; then
+    SUDO_RUNTIME_PATH="/agent-sudo/bin"
+  fi
   IMAGE_FALLBACK_PATH="/bin:/usr/bin:/usr/local/bin"
   WORKSPACE_RUNTIME_PATH="$(compose_runtime_path "")"
 
@@ -574,6 +574,21 @@ require-sigs = false"
   fi
 }
 
+sudo_enabled() {
+  case "${AGENT_ALLOW_SUDO:-0}" in
+    ""|0)
+      return 1
+      ;;
+    1)
+      return 0
+      ;;
+    *)
+      echo "[agent] ERROR: AGENT_ALLOW_SUDO must be 0 or 1" >&2
+      exit 1
+      ;;
+  esac
+}
+
 build_base_container_args() {
   CONTAINER_NAME="agent-${TOOL}-$(printf '%s%s' "${RANDOM:-0}" "${RANDOM:-0}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
   CONTAINER_NAME="${CONTAINER_NAME:0:63}"
@@ -582,8 +597,18 @@ build_base_container_args() {
     --rm
     --name "$CONTAINER_NAME"
     --cap-drop=ALL
-    --cap-add=SETUID
-    --cap-add=SETGID
+  )
+
+  if sudo_enabled; then
+    ARGS+=(
+      --cap-add=SETUID
+      --cap-add=SETGID
+    )
+  else
+    ARGS+=( --security-opt=no-new-privileges )
+  fi
+
+  ARGS+=(
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
     --memory="${AGENT_MEMORY_LIMIT:-4g}"
     --cpus="${AGENT_CPU_LIMIT:-2}"
@@ -698,6 +723,11 @@ prepare_runtime_identity_dir() {
     fi
   } > "$RUNTIME_IDENTITY_HOST_DIR/group"
 
+  if ! sudo_enabled; then
+    mkdir -p "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo-disabled"
+    return
+  fi
+
   if [ "$MODE" = "podman-rootfs" ]; then
     sudo_source="$ROOTFS_OUT/agent-sudo/bin/sudo"
     if [ ! -x "$sudo_source" ]; then
@@ -741,7 +771,9 @@ append_runtime_identity_mount_args() {
   ARGS+=( -e "USER=$RUNTIME_USER_NAME" )
   ARGS+=( -e "LOGNAME=$RUNTIME_USER_NAME" )
 
-  if [ "$MODE" = "podman-rootfs" ]; then
+  if ! sudo_enabled; then
+    ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo-disabled:/agent-sudo:ro${Z_SUFFIX}" )
+  elif [ "$MODE" = "podman-rootfs" ]; then
     ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf:/etc/sudo.conf:ro${Z_SUFFIX}" )
     ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/sudoers:/etc/sudoers:ro${Z_SUFFIX}" )
     ARGS+=( -v "$RUNTIME_IDENTITY_HOST_DIR/agent-sudo/bin/sudo:/agent-sudo/bin/sudo:ro${Z_SUFFIX}" )

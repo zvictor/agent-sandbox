@@ -12,12 +12,12 @@ The short version: this project is an outer container sandbox with a few targete
 
 ### 1. Container and process boundary
 
-Interactive runs execute inside a Podman rootfs container or Docker-loaded OCI image, not directly on the host. The launcher drops Linux capabilities and adds back only `SETUID` and `SETGID` so container-local `sudo` can complete UID/GID transitions, includes a root-owned no-PAM setuid `sudo` in the base image, mounts `/tmp` as tmpfs, and applies memory/CPU/PID limits. See:
+Interactive runs execute inside a Podman rootfs container or Docker-loaded OCI image, not directly on the host. By default, the launcher drops Linux capabilities, sets `no-new-privileges`, masks `/agent-sudo`, mounts `/tmp` as tmpfs, and applies memory/CPU/PID limits. When `AGENT_ALLOW_SUDO=1`, the launcher adds back only `SETUID` and `SETGID`, exposes the root-owned no-PAM setuid sudo path, and treats sudo as container-local privilege escalation. See:
 
 - [`container_runtime.sh`](../bin/lib/container_runtime.sh)
 - [`image.nix`](../nix/image.nix)
 
-Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities. Sudo is treated as container-local privilege escalation, not host privilege escalation.
+Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities. Enabling sudo does not grant host root, but it does widen the in-container boundary and is therefore explicit.
 
 ### 2. Filesystem scope is explicit, not ambient
 
