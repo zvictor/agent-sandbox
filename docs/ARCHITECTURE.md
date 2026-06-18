@@ -8,7 +8,7 @@ This document explains how the launcher resolves a project, prepares artifacts, 
 
 1. Resolve the host project, sandbox flake, runtime, and tool/config/auth selectors.
 2. Stage the project's Nix package contract into the store.
-3. Prepare the runtime artifact: Podman `rootfs` or Docker `streamImage`.
+3. Prepare the runtime artifact: Podman `rootfs` or Docker OCI `streamImage`.
 4. Start optional helper services such as the narrow Nix helper, direnv snapshot helper, or isolated Podman session API.
 5. Assemble mounts, env vars, and entrypoint args, then run the selected tool inside the container.
 
@@ -22,7 +22,7 @@ resolve CLI command
   -> resolve runtime and sandbox flake
   -> stage project contract input
   -> add staged contract to the Nix store
-  -> build or reuse rootfs / streamImage
+  -> build or reuse the selected runtime artifact
   -> start helper services if enabled
   -> resolve tool config and auth mounts
   -> build container args
@@ -51,7 +51,7 @@ logical agent instead of only `podman` or `docker`.
 - [`bin/lib/environment.sh`](../bin/lib/environment.sh): project root, config loading, runtime resolution, cache dirs, store input
 - [`bin/lib/project_contract.sh`](../bin/lib/project_contract.sh): contract staging and allowlist handling
 - [`bin/lib/artifact_prep.sh`](../bin/lib/artifact_prep.sh): build/load caching for `rootfs` and `streamImage`
-- [`bin/lib/rootfs.sh`](../bin/lib/rootfs.sh): Podman rootfs overlay vs mirror handling
+- [`bin/lib/rootfs.sh`](../bin/lib/rootfs.sh): Podman rootfs mirror preparation
 - [`bin/lib/container_runtime.sh`](../bin/lib/container_runtime.sh): mount/env assembly and final `podman` or `docker run` args
 - [`bin/lib/container_api.sh`](../bin/lib/container_api.sh): isolated Podman session API or raw host socket modes
 - [`bin/lib/dev_env.sh`](../bin/lib/dev_env.sh): host direnv snapshotting
@@ -86,29 +86,27 @@ Only contract-related files are staged into the Nix store. This narrows invalida
 
 Staged inputs include:
 - top-level `shell.nix`, `default.nix`, `flake.nix`, `flake.lock`
-- `nix/**/*.nix`
-- `nix/**/*.lock`
+- all files under the selected project `nix/` contract directory
 - extra allowlisted paths from `nix/agent-sandbox.paths`
 - extra allowlisted paths from `AGENT_PROJECT_CONTRACT_FILES`
 
 ## Artifact Model
 
-The launcher builds two low-level artifacts:
+The launcher builds one runtime artifact for the selected backend:
 
-- `rootfs`: exploded filesystem for the Podman fast path
-- `streamImage`: OCI image for Docker loading via `copyToDockerDaemon`
+- `rootfs`: exploded filesystem used by local Linux Podman through `podman --rootfs`
+- `streamImage`: OCI image loaded into Docker via `copyToDockerDaemon`
 
 Cache strategy:
 - Nix outputs are persisted as GC roots under `AGENT_CACHE_DIR/gcroots`
-- Docker image IDs are cached under `AGENT_CACHE_DIR/images`
+- Docker runtime image IDs are cached under `AGENT_CACHE_DIR/images`
 - Podman mirror state can be cached under `AGENT_CACHE_DIR/rootfs-cache`
 
 Podman path:
-- requires Linux
-- requires local `/nix/store`
-- rejects `CONTAINER_HOST`
-- uses `--rootfs ...:O`
-- falls back to a cached writable mirror when the host overlay mode is unreliable
+- requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`
+- builds `rootfs`
+- runs it directly with `podman --rootfs`
+- mounts a tiny runtime identity/sudo overlay so NSS and setuid sudo work under the user namespace
 
 Docker path:
 - builds `streamImage`
@@ -124,7 +122,7 @@ When `AGENT_DEV_ENV=host-helper` and `.envrc` exists, the launcher:
 - filters out build-system noise and unsupported values
 - caches the resulting env file
 - injects that snapshot into the container at startup
-- orders `PATH` so sandbox guardrail wrappers stay first, followed by project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks
+- orders `PATH` so sandbox guardrail wrappers stay first, followed by `/agent-sudo/bin`, project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks
 
 There is no live bridge back to host direnv.
 
@@ -200,5 +198,5 @@ When behavior is surprising:
 1. Run `./scripts/agent doctor`.
 2. Run `AGENT_DEBUG=1 ./scripts/agent <tool>`.
 3. Check the selected config/auth roots and helper modes.
-4. Check whether you are on the Podman rootfs path or the Docker image path.
+4. Check whether the selected runtime is using Podman `--rootfs` or Docker `copyToDockerDaemon`.
 5. Check whether a helper bridge or raw socket mode widened the boundary.

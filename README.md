@@ -13,10 +13,10 @@ Supported tools:
 
 `agent-sandbox` is a Nix-based containerized runtime system that executes AI coding agents (such as Codex, Claude Code, OpenCode, CodeMachine, and OMP) inside isolated container environments. It integrates with host project dependencies through Nix package contracts while maintaining safety boundaries between the agent and the host system.
 
-The system provides two primary artifacts:
+The system provides two runtime artifacts, selected by backend:
 
-* `rootfs`: An exploded filesystem used by Podman's fast `--rootfs` mode on Linux
-* `streamImage`: An OCI image loaded into Docker via `copyToDockerDaemon`
+* `rootfs`: an exploded filesystem used by local Linux Podman through `podman --rootfs`
+* `streamImage`: an OCI image loaded into Docker via `copyToDockerDaemon`
 
 And multiple user-facing entry points:
 
@@ -30,7 +30,7 @@ AI coding agents need access to development tools, project dependencies, and the
 
 agent-sandbox resolves this tension by:
 
-* **Isolating execution context**: Agents run inside containers with dropped capabilities, resource limits, and explicit filesystem mounts rather than ambient host access
+* **Isolating execution context**: Agents run inside containers with a narrow capability set, resource limits, and explicit filesystem mounts rather than ambient host access
 * **Preserving workspace access**: The project directory is mounted at its real path, allowing agents to work naturally while limiting scope
 * **Integrating project dependencies**: Nix contracts (`nix/packages.nix` or `shell.nix`) make host project tooling available inside the container without manual duplication
 Centralizing safety defaults**: Tool-specific wrappers apply consistent safety settings (e.g., `codex --yolo`, `claude --dangerously-skip-permissions`) so the container boundary becomes the primary protection layer
@@ -69,15 +69,15 @@ From a local checkout:
 The runtime paths are intentionally minimal.
 
 - `podman` uses the local Linux `--rootfs` fast path
-- default: `--rootfs ...:O`
-  - on rootless native overlay hosts that break `:O`, the launcher falls back to a cached local writable rootfs mirror and still uses `--rootfs ...:O`
+  - default: `--rootfs ...:O`
+  - on rootless native overlay hosts that break `:O`, the launcher uses a cached local writable rootfs mirror and still runs `podman --rootfs ...:O`
 - `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`
 
 There is no compatibility matrix beyond that.
 
 Practical consequences:
-- Podman requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`
-- Docker is the fallback path for non-Linux hosts or hosts that do not meet the Podman requirements
+- Podman requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`.
+- Docker is the fallback path when Podman is not available.
 - if the selected runtime does not satisfy its requirements, the launcher fails fast
 
 For host-side process observers, the runtime is launched under a supervisor
@@ -152,13 +152,13 @@ If neither `nix/packages.nix` nor `shell.nix` exists, the launcher still starts 
 When the launcher stages project package inputs for Nix evaluation, it copies only contract-related files:
 
 - top-level `shell.nix`, `default.nix`, `flake.nix`, `flake.lock`
-- files under `nix/` matching `*.nix` or `*.lock`
+- files under the selected project `nix/` contract directory
 - extra project files listed in `nix/agent-sandbox.paths`
 - extra project files listed in `AGENT_PROJECT_CONTRACT_FILES`
 
 Changes outside that set do not invalidate the sandbox package input.
 
-If your Nix contract depends on non-Nix files, list them explicitly in `nix/agent-sandbox.paths`:
+If your Nix contract depends on files outside the selected `nix/` directory, list them explicitly in `nix/agent-sandbox.paths`:
 
 ```text
 package.json
@@ -229,8 +229,9 @@ You can rely on these behaviors:
 - The selected workspace is mounted read-write at the same absolute path inside the sandbox.
 - Tool config mounts are explicit rather than ambient.
 - The current repo's Git state is protected from common mutating commands by default; `git clone` is the one explicit exception.
+- `sudo` is present in the base image and the outer runtime does not set `no-new-privileges`.
 - `agent doctor` uses the same runtime resolution rules as real execution.
-- Podman rootfs mode is only used on local Linux with `/nix/store` and no `CONTAINER_HOST`.
+- Podman runs the rootfs artifact directly; Docker runs the OCI image artifact.
 
 You should not rely on these behaviors:
 - Strong protection against workspace writes.
@@ -244,12 +245,12 @@ The full threat model is in [docs/SANDBOX-SAFETY.md](docs/SANDBOX-SAFETY.md).
 
 The runtime paths are intentionally narrow:
 - `podman` uses the local Linux `--rootfs` fast path.
-- On rootless native overlay hosts that break `:O`, the launcher falls back to a cached local writable rootfs mirror and still runs Podman `--rootfs ...:O`.
+- On rootless native overlay hosts that break `:O`, the launcher uses a cached local writable rootfs mirror and still runs Podman `--rootfs ...:O`.
 - `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`.
 
 Practical consequences:
 - Podman requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`.
-- Docker is the fallback for non-Linux hosts or hosts that do not satisfy the Podman requirements.
+- Docker is the fallback when Podman is not available.
 - If the selected runtime does not satisfy its requirements, the launcher fails fast.
 
 For the implementation flow and file map, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -483,7 +484,7 @@ AGENT_FORCE_REBUILD=1
 
 ### Build, Cache, and Logs
 
-- `AGENT_FORCE_REBUILD=1`: discard cached `rootfs` or `streamImage` artifact and rebuild it
+- `AGENT_FORCE_REBUILD=1`: discard cached runtime artifacts and rebuild them
 - `AGENT_PERF_LOG=0|1`: disable or enable timing logs; default `1`
 - `AGENT_NIX_EXPERIMENTAL_FEATURES`: override extra Nix experimental features; default `nix-command flakes`
 - `AGENT_HELPER_TMPDIR`: temp directory for helper runs
@@ -501,7 +502,7 @@ AGENT_FORCE_REBUILD=1
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` environment snapshot for the project root before the container starts, caches the filtered result under `AGENT_CACHE_DIR`, and passes that environment into the sandbox at startup. There is no live host `direnv` bridge in the running container; if `.envrc` changes, restart the sandbox session to refresh the injected environment.
 
-When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then prefers project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
+When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then the privileged `/agent-sudo/bin` path, then project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
 
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input. If you need to force a specific `nixpkgs` tree for host-helper resolution, set `AGENT_DIRENV_NIX_PATH=/path/to/nixpkgs`.
 
@@ -515,13 +516,14 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 
 - `AGENT_CONTAINER_API`: `none`, `auto`, `podman-session`, `podman-host`, or `docker-host`; default `none`
 - `AGENT_CONTAINER_API_TTL`: inactivity timeout in seconds for `podman-session`; default `900`
+- `AGENT_CONTAINER_API_WAIT_SECONDS`: socket readiness timeout for `podman-session`; default `30`
 - `AGENT_CONTAINER_API_RESET=1`: discard the cached `podman-session` state directory before starting it again
 
 Recommended for Testcontainers:
 
 - `AGENT_CONTAINER_API=auto`
 
-In `podman-session` mode, the launcher starts a dedicated rootless Podman API service in the background, stores its state under `AGENT_CACHE_DIR`, and mounts only that session socket into the agent container. Startup does not block on socket readiness; the inner Podman API warms up in parallel with normal agent boot.
+In `podman-session` mode, the launcher starts a dedicated rootless Podman API service, stores its state under `AGENT_CACHE_DIR`, waits for the session socket to become ready, and mounts only that session socket into the agent container.
 
 In `auto` mode, the launcher chooses `podman-session` when host Podman is available and usable, otherwise it falls back to `none`.
 
@@ -535,7 +537,7 @@ These are disabled by default because they significantly widen the sandbox bound
 
 For full generic `nix-shell` and `nix shell` workflows inside the sandbox, the launcher still prepares the writable profile and gcroot directories under `/cache`, but materializing packages that are not already present in the mounted store still requires `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`.
 
-Full flake builds such as `nix build .#rootfs` and `nix develop` also require either running on the host or starting the sandbox with `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`. Without the daemon socket, the container only has a read-only `/nix` mount and local Nix fails when it tries to create `/nix/var/nix/temproots`.
+Full flake builds such as `nix build .#streamImage` and `nix develop` also require either running on the host or starting the sandbox with `AGENT_ALLOW_NIX_DAEMON_SOCKET=1`. Without the daemon socket, the container only has a read-only `/nix` mount and local Nix fails when it tries to create `/nix/var/nix/temproots`.
 
 For the common “give me a tool and run it” cases, the sandbox now intercepts the narrow subset automatically:
 
@@ -650,7 +652,7 @@ These are still accepted by the launcher, but they are not the preferred interfa
 
 The launcher also reacts to a few standard host environment variables. These are not treated as part of the primary sandbox API:
 
-- `CONTAINER_HOST`: if set, Podman rootfs mode is rejected; use Docker path instead
+- `CONTAINER_HOST`: if set, Podman mode is rejected because local `podman --rootfs` execution is required
 - `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket when `AGENT_CONTAINER_API=podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
@@ -666,8 +668,8 @@ The launcher also reacts to a few standard host environment variables. These are
 
 These outputs are intended for debugging or integration work, not normal interactive use.
 
-- `.#rootfs`: exploded root filesystem for Podman local Linux path
-- `.#streamImage`: OCI image derivation for Docker path
+- `.#rootfs`: exploded filesystem artifact used by the Podman runtime path
+- `.#streamImage`: OCI image derivation used by the Docker runtime path
 
 Examples:
 

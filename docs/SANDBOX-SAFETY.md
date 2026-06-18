@@ -12,12 +12,12 @@ The short version: this project is an outer container sandbox with a few targete
 
 ### 1. Container and process boundary
 
-Interactive runs execute inside either a Podman rootfs container or a Docker-loaded OCI image, not directly on the host. The launcher drops all Linux capabilities, sets `no-new-privileges`, mounts `/tmp` as tmpfs, and applies memory/CPU/PID limits. See:
+Interactive runs execute inside a Podman rootfs container or Docker-loaded OCI image, not directly on the host. The launcher drops Linux capabilities and adds back only `SETUID` and `SETGID` so container-local `sudo` can complete UID/GID transitions, includes a root-owned no-PAM setuid `sudo` in the base image, mounts `/tmp` as tmpfs, and applies memory/CPU/PID limits. See:
 
 - [`container_runtime.sh`](../bin/lib/container_runtime.sh)
 - [`image.nix`](../nix/image.nix)
 
-Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities.
+Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities. Sudo is treated as container-local privilege escalation, not host privilege escalation.
 
 ### 2. Filesystem scope is explicit, not ambient
 
@@ -243,7 +243,6 @@ Local implementation:
 - [`container_runtime.sh`](../bin/lib/container_runtime.sh)
 - [`image.nix`](../nix/image.nix)
 - [`project_contract.sh`](../bin/lib/project_contract.sh)
-- [`rootfs.sh`](../bin/lib/rootfs.sh)
 - [`agent`](../bin/agent)
 - [`flake.nix`](../flake.nix)
 - [`README.md`](../README.md)
