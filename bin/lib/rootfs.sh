@@ -1,11 +1,16 @@
-ROOTFS_MIRROR_FORMAT=3
-ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/podman\nrun/secrets\nvar\nvar/run\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp'
+ROOTFS_MIRROR_FORMAT=4
+ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/podman\nrun/secrets\nvar\nvar/run\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp\nproc\nsys\nsys/fs\nsys/fs/cgroup\ndev\ndev/net'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
 ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gitconfig\nrun/.containerenv\nvar/run/docker.sock\nrun/podman/podman.sock\nnix/var/nix/daemon-socket/socket'
 
 detect_podman_rootfs_mode() {
   local override="${AGENT_PODMAN_ROOTFS_MODE:-auto}"
   local info
+
+  if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ]; then
+    printf 'overlay\n'
+    return
+  fi
 
   case "$override" in
     auto|overlay|mirror) ;;

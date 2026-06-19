@@ -20,6 +20,19 @@ resolve_container_api_mode() {
     fi
   fi
 
+  if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ]; then
+    case "$CONTAINER_API_MODE" in
+      ""|none|auto)
+        CONTAINER_API_MODE="none"
+        return 0
+        ;;
+      *)
+        echo "[agent] AGENT_SANDBOX_PROFILE=firecracker-host does not support AGENT_CONTAINER_API=$CONTAINER_API_MODE" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
   case "$CONTAINER_API_MODE" in
     none|auto|podman-session|podman-host|docker-host) ;;
     *)

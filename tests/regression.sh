@@ -305,9 +305,12 @@ runtime_mode_for() (
 
   local runtime="$1"
   local container_host="${2:-}"
+  local profile="${3:-default}"
 
   source "$REPO_ROOT/bin/lib/artifact_prep.sh"
 
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
   RUNTIME="$runtime"
   OS_NAME="Linux"
   if [ -n "$container_host" ]; then
@@ -360,9 +363,12 @@ base_container_args_for() (
   set -euo pipefail
 
   local allow_sudo="${1:-0}"
+  local profile="${2:-default}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
   if [ "$allow_sudo" = "1" ]; then
     export AGENT_ALLOW_SUDO=1
   else
@@ -386,8 +392,9 @@ base_container_args_for() (
 runtime_identity_args_for() (
   set -euo pipefail
 
-  local tmp_dir allow_sudo
+  local tmp_dir allow_sudo profile
   allow_sudo="${1:-0}"
+  profile="${2:-default}"
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -397,6 +404,8 @@ runtime_identity_args_for() (
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
   if [ "$allow_sudo" = "1" ]; then
     export AGENT_ALLOW_SUDO=1
   else
@@ -415,6 +424,26 @@ runtime_identity_args_for() (
       return 0
     fi
     return 1
+  }
+
+  sudo() {
+    printf 'sudo=%s\n' "$*" >> "$tmp_dir/sudo.log"
+    if [ "${1:-}" = "-n" ]; then
+      shift
+    fi
+    case "${1:-}" in
+      chown)
+        return 0
+        ;;
+      chmod)
+        shift
+        command chmod "$@"
+        return
+        ;;
+      *)
+        return 0
+        ;;
+    esac
   }
 
   MODE="podman-rootfs"
@@ -445,6 +474,132 @@ runtime_identity_args_for() (
   if [ -f "$tmp_dir/podman.log" ]; then
     cat "$tmp_dir/podman.log"
   fi
+  if [ -f "$tmp_dir/sudo.log" ]; then
+    cat "$tmp_dir/sudo.log"
+  fi
+)
+
+runtime_identity_run_args_for() (
+  set -euo pipefail
+
+  local profile="${1:-default}"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
+  RUNTIME="podman"
+  OS_NAME="Linux"
+  ARGS=()
+
+  append_runtime_identity_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+firecracker_host_args_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  SANDBOX_PROFILE="firecracker-host"
+  AGENT_SANDBOX_PROFILE="firecracker-host"
+  ARGS=()
+
+  append_firecracker_host_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+firecracker_preflight_for() (
+  set -euo pipefail
+
+  local fail_case="${1:-none}"
+  local tmp_dir workspace
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  source "$REPO_ROOT/bin/lib/environment.sh"
+
+  sudo() {
+    if [ "${1:-}" = "-n" ]; then
+      shift
+    fi
+
+    case "$*" in
+      true)
+        return 0
+        ;;
+      "podman info")
+        return 0
+        ;;
+      "podman info --format {{.Host.Security.Rootless}}")
+        if [ "$fail_case" = "rootless" ]; then
+          printf 'true\n'
+        else
+          printf 'false\n'
+        fi
+        return 0
+        ;;
+      sh\ -c*)
+        case "$*" in
+          *"/dev/kvm"*)
+            [ "$fail_case" != "kvm" ]
+            return
+            ;;
+          *"/dev/net/tun"*)
+            [ "$fail_case" != "tun" ]
+            return
+            ;;
+          *cgroup.controllers*)
+            [ "$fail_case" != "cgroup" ]
+            return
+            ;;
+          *cgroup.freeze*)
+            [ "$fail_case" != "cgroup-control" ]
+            return
+            ;;
+          *agent-sandbox-root-write-test*)
+            [ "$fail_case" != "workspace" ]
+            return
+            ;;
+          *)
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+
+    return 0
+  }
+
+  podman() {
+    return 0
+  }
+
+  id() {
+    if [ "$fail_case" = "sudo-launcher" ] && [ "${1:-}" = "-u" ]; then
+      printf '0\n'
+      return 0
+    fi
+
+    command id "$@"
+  }
+
+  OS_NAME="Linux"
+  SANDBOX_PROFILE="firecracker-host"
+  AGENT_SANDBOX_PROFILE="firecracker-host"
+  AGENT_WORKSPACE_PATH="$workspace"
+  if [ "$fail_case" = "sudo-launcher" ]; then
+    SUDO_USER="agentuser"
+  else
+    unset SUDO_USER
+  fi
+
+  preflight_firecracker_host_profile
+  printf 'preflight-ok\n'
 )
 
 stdio_target_args_for() (
@@ -1019,6 +1174,20 @@ test_runtime_modes_preserve_podman_rootfs() (
   assert_contains "$output" "podman mode requires local Linux with /nix/store and no CONTAINER_HOST"
 )
 
+test_firecracker_profile_rejects_docker_runtime() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(runtime_mode_for docker "" firecracker-host 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected firecracker-host profile to reject docker"
+  assert_contains "$output" "AGENT_SANDBOX_PROFILE=firecracker-host supports only podman rootfs mode"
+)
+
 test_stream_image_helper_uses_docker_helper_attr() (
   set -euo pipefail
 
@@ -1065,7 +1234,7 @@ test_runtime_identity_mounts_sudo_overlay_when_enabled() (
   assert_contains "$output" "USER=agenttest"
   assert_contains "$output" "LOGNAME=agenttest"
   assert_contains "$output" "agenttest:x:"
-  assert_contains "$output" "ALL ALL=(ALL:ALL) NOPASSWD: ALL"
+  assert_contains "$output" "ALL ALL=(ALL:ALL) NOPASSWD:SETENV: ALL"
   assert_contains "$output" "sudo_mode=4755"
   assert_contains "$output" "sudoedit_mode=4755"
   assert_contains "$output" "podman_unshare=chown 1:1"
@@ -1116,6 +1285,21 @@ test_base_container_allows_sudo_when_enabled() (
   assert_not_contains "$output" "--security-opt=no-new-privileges"
 )
 
+test_base_container_uses_firecracker_host_profile() (
+  set -euo pipefail
+
+  local output
+  output="$(base_container_args_for 0 firecracker-host)"
+
+  assert_contains "$output" "--privileged"
+  assert_contains "$output" "--security-opt=label=disable"
+  assert_not_contains "$output" "--cap-drop=ALL"
+  assert_not_contains "$output" "--security-opt=no-new-privileges"
+  assert_not_contains "$output" "--memory=4g"
+  assert_not_contains "$output" "--cpus=2"
+  assert_not_contains "$output" "--pids-limit=512"
+)
+
 test_sudo_flag_rejects_invalid_values() (
   set -euo pipefail
 
@@ -1128,6 +1312,173 @@ test_sudo_flag_rejects_invalid_values() (
 
   [ "$status" -ne 0 ] || fail "expected invalid AGENT_ALLOW_SUDO to fail"
   assert_contains "$output" "AGENT_ALLOW_SUDO must be 0 or 1"
+)
+
+test_firecracker_profile_requires_sudo() (
+  set -euo pipefail
+
+  local output status
+
+  output="$(AGENT_SANDBOX_PROFILE=firecracker-host bash -c 'source "$1"; if sudo_enabled; then printf enabled; fi' bash "$REPO_ROOT/bin/lib/container_runtime.sh")"
+  assert_contains "$output" "enabled"
+
+  set +e
+  output="$(AGENT_SANDBOX_PROFILE=firecracker-host AGENT_ALLOW_SUDO=0 bash -c 'source "$1"; sudo_enabled' bash "$REPO_ROOT/bin/lib/container_runtime.sh" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected firecracker-host profile to reject disabled sudo"
+  assert_contains "$output" "firecracker-host requires sudo"
+)
+
+test_firecracker_runtime_identity_uses_rootful_sudo_overlay() (
+  set -euo pipefail
+
+  local output
+  output="$(runtime_identity_args_for 0 firecracker-host)"
+
+  assert_contains "$output" "/etc/sudo.conf:ro"
+  assert_contains "$output" "/etc/sudoers:ro"
+  assert_contains "$output" "/agent-sudo/bin/sudo:ro"
+  assert_contains "$output" "sudo_mode=4755"
+  assert_contains "$output" "sudo=-n chown 0:0"
+  assert_contains "$output" "sudo=-n chmod 4755"
+  assert_not_contains "$output" "podman_unshare=chown 1:1"
+)
+
+test_firecracker_runtime_identity_args_use_host_namespaces() (
+  set -euo pipefail
+
+  local output
+  output="$(runtime_identity_run_args_for firecracker-host)"
+
+  assert_contains "$output" "--userns=host"
+  assert_contains "$output" "--cgroupns=host"
+  assert_contains "$output" "--network=host"
+  assert_contains "$output" "--user"
+  assert_contains "$output" "$(id -u):$(id -g)"
+  assert_not_contains "$output" "--userns=keep-id"
+  assert_not_contains "$output" "slirp4netns"
+)
+
+test_firecracker_host_devices_and_cgroup_mount() (
+  set -euo pipefail
+
+  local output
+  output="$(firecracker_host_args_for)"
+
+  assert_contains "$output" "--device"
+  assert_contains "$output" "/dev/kvm"
+  assert_contains "$output" "/dev/net/tun"
+  assert_contains "$output" "/sys/fs/cgroup:/sys/fs/cgroup:rw"
+)
+
+test_firecracker_preflight_accepts_capable_host() (
+  set -euo pipefail
+
+  local output
+  output="$(firecracker_preflight_for)"
+
+  assert_contains "$output" "preflight-ok"
+)
+
+test_firecracker_preflight_rejects_rootless_podman() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for rootless 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootless podman preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: rootful podman is required"
+)
+
+test_firecracker_preflight_rejects_sudoed_launcher() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for sudo-launcher 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected sudoed launcher preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: do not run the launcher with sudo"
+  assert_contains "$output" "firecracker-host invokes sudo -n podman internally"
+)
+
+test_firecracker_preflight_rejects_missing_cgroup_v2() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for cgroup 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing cgroup v2 preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: cgroup v2 must be mounted at /sys/fs/cgroup"
+)
+
+test_firecracker_preflight_rejects_cgroup_control_write_failure() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for cgroup-control 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected cgroup control write preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: root must be able to write cgroup v2 control files"
+)
+
+test_firecracker_preflight_rejects_missing_kvm() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for kvm 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing kvm preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: /dev/kvm must be present and readable/writable by root"
+)
+
+test_firecracker_preflight_rejects_missing_tun() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for tun 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing tun preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: /dev/net/tun must be present and readable/writable by root"
+)
+
+test_firecracker_preflight_rejects_root_workspace_failure() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(firecracker_preflight_for workspace 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected workspace preflight to fail"
+  assert_contains "$output" "firecracker-host preflight failed: root must be able to write and chown files under the workspace"
 )
 
 test_need_run_allows_command_side_sandbox_sudo() (
@@ -1180,6 +1531,7 @@ test_need_run_refuses_materialized_sudo_shadow() (
   output="$(
     AGENT_NEED_CACHE_DIR="$need_cache" \
     AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    AGENT_ALLOW_SUDO=0 \
     PATH="/usr/bin:/bin" \
     bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sh -c 'sudo id' 2>&1
   )"
@@ -1380,12 +1732,13 @@ test_image_includes_openssh() (
   rootfs_file="$(cat "$REPO_ROOT/bin/lib/rootfs.sh")"
 
   assert_contains "$image_file" "pkgs.openssh"
+  assert_contains "$image_file" "pkgs.iproute2"
   assert_contains "$image_file" "sudoPackage = pkgs.sudo.overrideAttrs"
   assert_contains "$image_file" '"--without-pam"'
   assert_contains "$image_file" "sudoConfig"
   assert_contains "$image_file" "sudoRuntime"
   assert_contains "$image_file" 'agent-sudo-package'
-  assert_contains "$image_file" "ALL ALL=(ALL:ALL) NOPASSWD: ALL"
+  assert_contains "$image_file" "ALL ALL=(ALL:ALL) NOPASSWD:SETENV: ALL"
   assert_contains "$image_file" "sudoImagePerms"
   assert_contains "$image_file" 'regex = "agent-sudo/bin/sudo$"'
   assert_contains "$image_file" 'regex = "agent-sudo/bin/sudoedit$"'
@@ -1398,7 +1751,11 @@ test_image_includes_openssh() (
   assert_not_contains "$image_file" '"PATH=/agent-sudo/bin:'
   assert_contains "$image_file" '"$out/run/host-services"'
   assert_contains "$image_file" '"$out/run/agent-path-guard"'
+  assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
+  assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$rootfs_file" "run/agent-path-guard"
+  assert_contains "$rootfs_file" "sys/fs/cgroup"
+  assert_contains "$rootfs_file" "dev/net"
   assert_contains "$artifact_file" "prepare_rootfs_artifact"
   assert_contains "$artifact_file" "copyToDockerDaemon"
   assert_not_contains "$artifact_file" "copyToPodman"
@@ -1448,6 +1805,7 @@ main() {
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
   run_test "runtime path includes sudo when enabled" test_runtime_path_includes_sudo_when_enabled
   run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
+  run_test "firecracker profile rejects docker runtime" test_firecracker_profile_rejects_docker_runtime
   run_test "stream image helper uses docker helper attr" test_stream_image_helper_uses_docker_helper_attr
   run_test "runtime identity masks sudo by default" test_runtime_identity_masks_sudo_by_default
   run_test "runtime identity mounts sudo overlay when enabled" test_runtime_identity_mounts_sudo_overlay_when_enabled
@@ -1455,7 +1813,20 @@ main() {
   run_test "path guard excludes privileged sudo" test_path_guard_excludes_privileged_sudo
   run_test "base container disables sudo by default" test_base_container_disables_sudo_by_default
   run_test "base container allows sudo when enabled" test_base_container_allows_sudo_when_enabled
+  run_test "base container uses firecracker host profile" test_base_container_uses_firecracker_host_profile
   run_test "sudo flag rejects invalid values" test_sudo_flag_rejects_invalid_values
+  run_test "firecracker profile requires sudo" test_firecracker_profile_requires_sudo
+  run_test "firecracker runtime identity uses rootful sudo overlay" test_firecracker_runtime_identity_uses_rootful_sudo_overlay
+  run_test "firecracker runtime identity args use host namespaces" test_firecracker_runtime_identity_args_use_host_namespaces
+  run_test "firecracker host devices and cgroup mount" test_firecracker_host_devices_and_cgroup_mount
+  run_test "firecracker preflight accepts capable host" test_firecracker_preflight_accepts_capable_host
+  run_test "firecracker preflight rejects rootless podman" test_firecracker_preflight_rejects_rootless_podman
+  run_test "firecracker preflight rejects sudoed launcher" test_firecracker_preflight_rejects_sudoed_launcher
+  run_test "firecracker preflight rejects missing cgroup v2" test_firecracker_preflight_rejects_missing_cgroup_v2
+  run_test "firecracker preflight rejects cgroup control write failure" test_firecracker_preflight_rejects_cgroup_control_write_failure
+  run_test "firecracker preflight rejects missing kvm" test_firecracker_preflight_rejects_missing_kvm
+  run_test "firecracker preflight rejects missing tun" test_firecracker_preflight_rejects_missing_tun
+  run_test "firecracker preflight rejects root workspace failure" test_firecracker_preflight_rejects_root_workspace_failure
   run_test "need run allows command-side sandbox sudo" test_need_run_allows_command_side_sandbox_sudo
   run_test "need run refuses materialized sudo shadow" test_need_run_refuses_materialized_sudo_shadow
   run_test "podman session ignores stale reused pid" test_container_api_does_not_kill_stale_reused_pid

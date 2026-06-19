@@ -131,6 +131,9 @@ doctor_runtime_mode() {
     if command -v podman >/dev/null 2>&1; then
       runtime_mode="$runtime_mode ($(detect_podman_rootfs_mode))"
     fi
+    if [ "${SANDBOX_PROFILE:-default}" = "firecracker-host" ]; then
+      runtime_mode="$runtime_mode firecracker-host"
+    fi
     printf '%s\n' "$runtime_mode"
     return 0
   fi
@@ -186,6 +189,7 @@ print_doctor_json() {
   doctor_json_pair "sandbox_flake" "$SANDBOX_FLAKE"; printf '\n'
   printf '  },\n'
   printf '  "runtime": {\n'
+  doctor_json_pair "profile" "${SANDBOX_PROFILE:-default}"; printf ',\n'
   doctor_json_pair "runtime" "$RUNTIME"; printf ',\n'
   doctor_json_pair "mode" "$runtime_mode"; printf ',\n'
   doctor_json_pair "tools_enabled" "$tools_list"; printf ',\n'
@@ -240,6 +244,7 @@ print_doctor_text_summary() {
   doctor_line "project_root_source" "$PROJECT_ROOT_SOURCE"
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
   doctor_line "cache_dir" "$CACHE_DIR"
+  doctor_line "sandbox_profile" "${SANDBOX_PROFILE:-default}"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "codex_config" "$codex_config_state"
@@ -283,6 +288,7 @@ print_doctor_text_verbose() {
   doctor_line "sandbox_flake" "$SANDBOX_FLAKE"
 
   printf '\nRuntime\n'
+  doctor_line "sandbox_profile" "${SANDBOX_PROFILE:-default}"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "tools_enabled" "$tools_list"
@@ -330,11 +336,15 @@ print_doctor_suggestions() {
   fi
 
   if [ -n "${RUNTIME_ERROR:-}" ]; then
-    doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
+    if [ "${SANDBOX_PROFILE:-default}" = "firecracker-host" ]; then
+      doctor_note "Install and configure rootful podman for AGENT_SANDBOX_PROFILE=firecracker-host."
+    else
+      doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
+    fi
     printed="1"
   fi
 
-  if [ "${AGENT_CONTAINER_API:-}" = "auto" ] && [ "$CONTAINER_API_MODE" = "none" ]; then
+  if [ "${AGENT_CONTAINER_API:-}" = "auto" ] && [ "$CONTAINER_API_MODE" = "none" ] && [ "${SANDBOX_PROFILE:-default}" != "firecracker-host" ]; then
     doctor_note "Container API auto mode fell back to 'none'. Install or fix host podman if you want Testcontainers support."
     printed="1"
   fi
@@ -412,6 +422,7 @@ print_doctor_and_exit() {
 
   resolve_project_paths
   load_project_config
+  resolve_sandbox_profile
   resolve_runtime_for_doctor
   resolve_sandbox_flake
   resolve_lock_args

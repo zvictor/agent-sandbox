@@ -103,6 +103,32 @@ resolve_mount_dir() {
   )
 }
 
+current_sandbox_profile() {
+  printf '%s\n' "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}"
+}
+
+firecracker_host_profile() {
+  [ "$(current_sandbox_profile)" = "firecracker-host" ]
+}
+
+podman_runtime_cmd() {
+  if firecracker_host_profile; then
+    sudo -n podman "$@"
+    return
+  fi
+
+  podman "$@"
+}
+
+runtime_run_label() {
+  if [ "${RUNTIME:-}" = "podman" ] && firecracker_host_profile; then
+    printf '%s\n' "sudo -n podman"
+    return
+  fi
+
+  printf '%s\n' "${RUNTIME:-unknown}"
+}
+
 ensure_workspace_alias_mount_target() {
   local engine="$1"
   local alias_path="$2"
@@ -541,7 +567,7 @@ prepare_ssh_runtime_dir() {
 
 build_nix_config() {
   Z_SUFFIX=""
-  if [ "$OS_NAME" = "Linux" ]; then
+  if [ "$OS_NAME" = "Linux" ] && ! firecracker_host_profile; then
     Z_SUFFIX=",Z"
   fi
 
@@ -575,6 +601,22 @@ require-sigs = false"
 }
 
 sudo_enabled() {
+  if firecracker_host_profile; then
+    case "${AGENT_ALLOW_SUDO:-1}" in
+      ""|1)
+        return 0
+        ;;
+      0)
+        echo "[agent] ERROR: AGENT_SANDBOX_PROFILE=firecracker-host requires sudo; unset AGENT_ALLOW_SUDO or set it to 1" >&2
+        exit 1
+        ;;
+      *)
+        echo "[agent] ERROR: AGENT_ALLOW_SUDO must be 0 or 1" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
   case "${AGENT_ALLOW_SUDO:-0}" in
     ""|0)
       return 1
@@ -596,10 +638,20 @@ build_base_container_args() {
   ARGS=(
     --rm
     --name "$CONTAINER_NAME"
-    --cap-drop=ALL
   )
 
-  if sudo_enabled; then
+  if firecracker_host_profile; then
+    ARGS+=(
+      --privileged
+      --security-opt=label=disable
+    )
+  else
+    ARGS+=( --cap-drop=ALL )
+  fi
+
+  if firecracker_host_profile; then
+    :
+  elif sudo_enabled; then
     ARGS+=(
       --cap-add=SETUID
       --cap-add=SETGID
@@ -610,9 +662,17 @@ build_base_container_args() {
 
   ARGS+=(
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
-    --memory="${AGENT_MEMORY_LIMIT:-4g}"
-    --cpus="${AGENT_CPU_LIMIT:-2}"
-    --pids-limit="${AGENT_PIDS_LIMIT:-512}"
+  )
+
+  if ! firecracker_host_profile; then
+    ARGS+=(
+      --memory="${AGENT_MEMORY_LIMIT:-4g}"
+      --cpus="${AGENT_CPU_LIMIT:-2}"
+      --pids-limit="${AGENT_PIDS_LIMIT:-512}"
+    )
+  fi
+
+  ARGS+=(
     -w "$WORKSPACE_PATH"
     -v "$TOOL_CACHE_DIR:/cache:rw${Z_SUFFIX}"
     -e HOME=/cache
@@ -659,9 +719,17 @@ sanitize_runtime_account_name() {
 
 runtime_root_chown() {
   if [ "$RUNTIME" = "podman" ]; then
+    if firecracker_host_profile; then
+      if ! sudo -n chown 0:0 "$@"; then
+        echo "[agent] ERROR: failed to prepare root-owned runtime files for firecracker-host profile" >&2
+        exit 1
+      fi
+      return
+    fi
+
     # With --userns=keep-id, host uid 0 in `podman unshare` maps to the
     # caller's container uid, while uid 1 maps to container root.
-    if ! podman unshare chown 1:1 "$@"; then
+    if ! podman_runtime_cmd unshare chown 1:1 "$@"; then
       echo "[agent] ERROR: failed to prepare podman root-owned runtime files" >&2
       exit 1
     fi
@@ -678,7 +746,15 @@ runtime_root_chmod() {
   shift
 
   if [ "$RUNTIME" = "podman" ]; then
-    if ! podman unshare chmod "$mode" "$@"; then
+    if firecracker_host_profile; then
+      if ! sudo -n chmod "$mode" "$@"; then
+        echo "[agent] ERROR: failed to set runtime file modes for firecracker-host profile" >&2
+        exit 1
+      fi
+      return
+    fi
+
+    if ! podman_runtime_cmd unshare chmod "$mode" "$@"; then
       echo "[agent] ERROR: failed to set podman runtime file modes" >&2
       exit 1
     fi
@@ -742,7 +818,7 @@ prepare_runtime_identity_dir() {
     : > "$RUNTIME_IDENTITY_HOST_DIR/sudo.conf"
     cat > "$RUNTIME_IDENTITY_HOST_DIR/sudoers" <<'EOF_SUDOERS'
 Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
-ALL ALL=(ALL:ALL) NOPASSWD: ALL
+ALL ALL=(ALL:ALL) NOPASSWD:SETENV: ALL
 EOF_SUDOERS
 
     runtime_root_chown \
@@ -783,6 +859,16 @@ append_runtime_identity_mount_args() {
 
 append_runtime_identity_args() {
   if [ "$RUNTIME" = "podman" ]; then
+    if firecracker_host_profile; then
+      ARGS+=(
+        --userns=host
+        --cgroupns=host
+        --network=host
+        --user "$(id -u):$(id -g)"
+      )
+      return
+    fi
+
     if [ "$OS_NAME" = "Darwin" ]; then
       ARGS+=( --network=host )
     else
@@ -797,6 +883,16 @@ append_runtime_identity_args() {
   else
     ARGS+=( --user "$(id -u):$(id -g)" )
   fi
+}
+
+append_firecracker_host_args() {
+  firecracker_host_profile || return 0
+
+  ARGS+=(
+    --device /dev/kvm
+    --device /dev/net/tun
+    -v /sys/fs/cgroup:/sys/fs/cgroup:rw
+  )
 }
 
 append_host_socket_args() {
@@ -1054,7 +1150,7 @@ append_passthrough_env_args() {
 append_extra_device_args() {
   local device_specs="${AGENT_EXTRA_DEVICES:-}"
 
-  if [ "${AGENT_ALLOW_KVM:-0}" = "1" ]; then
+  if [ "${AGENT_ALLOW_KVM:-0}" = "1" ] && ! firecracker_host_profile; then
     if [ -n "$device_specs" ]; then
       device_specs="/dev/kvm
 $device_specs"
@@ -1129,6 +1225,11 @@ run_with_logical_argv0() {
 }
 
 run_container_runtime() {
+  if [ "$RUNTIME" = "podman" ] && firecracker_host_profile; then
+    run_with_logical_argv0 "$TOOL" sudo -n podman run "${ARGS[@]}"
+    return
+  fi
+
   run_with_logical_argv0 "$TOOL" "$RUNTIME" run "${ARGS[@]}"
 }
 
@@ -1142,6 +1243,7 @@ build_container_args() {
   append_nix_mount_args
   append_runtime_identity_mount_args
   append_runtime_identity_args
+  append_firecracker_host_args
   append_host_socket_args
   append_ssh_runtime_mount_args
   append_dev_env_args

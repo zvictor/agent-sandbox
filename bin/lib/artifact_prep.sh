@@ -62,6 +62,9 @@ resolve_runtime_mode() {
       echo "[agent] podman mode requires local Linux with /nix/store and no CONTAINER_HOST." >&2
       exit 1
     fi
+  elif [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ]; then
+    echo "[agent] AGENT_SANDBOX_PROFILE=firecracker-host supports only podman rootfs mode." >&2
+    exit 1
   else
     MODE="docker-oci"
   fi

@@ -137,7 +137,7 @@ let
     mkdir -p "$out/etc/sudoers.d"
     cat > "$out/etc/sudoers" <<'EOF'
 Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
-ALL ALL=(ALL:ALL) NOPASSWD: ALL
+ALL ALL=(ALL:ALL) NOPASSWD:SETENV: ALL
 EOF
     cp "$out/etc/sudoers" "$out/etc/sudoers.d/agent-sandbox"
     chmod 0440 "$out/etc/sudoers"
@@ -295,6 +295,7 @@ EOF
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/config"
+    mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"
     mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
   '';
 
@@ -320,6 +321,7 @@ EOF
       pkgs.jq
       pkgs.fx
       pkgs.bun
+      pkgs.iproute2
       pkgs.nix-index
     ]
     ++ helpers
@@ -380,7 +382,8 @@ rec {
       # symlink chains.
       for d in \
         cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var/run \
-        nix nix/store nix/var/nix nix/var/log/nix nix/var/db
+        nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
+        proc sys sys/fs sys/fs/cgroup dev dev/net
       do
         rm -rf "$out/$d"
         mkdir -p "$out/$d"

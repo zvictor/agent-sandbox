@@ -141,9 +141,41 @@ resolve_runtime() {
   fi
 }
 
+resolve_sandbox_profile() {
+  SANDBOX_PROFILE="${AGENT_SANDBOX_PROFILE:-default}"
+  case "$SANDBOX_PROFILE" in
+    ""|default)
+      SANDBOX_PROFILE="default"
+      ;;
+    firecracker-host)
+      ;;
+    *)
+      echo "[agent] invalid AGENT_SANDBOX_PROFILE='$SANDBOX_PROFILE' (expected: default or firecracker-host)" >&2
+      exit 1
+      ;;
+  esac
+  AGENT_SANDBOX_PROFILE="$SANDBOX_PROFILE"
+  export AGENT_SANDBOX_PROFILE
+}
+
 resolve_runtime_state() {
   RUNTIME_REQUESTED="${AGENT_RUNTIME:-${CODEX_RUNTIME:-}}"
   RUNTIME_ERROR=""
+
+  if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ]; then
+    if [ -n "$RUNTIME_REQUESTED" ] && [ "$RUNTIME_REQUESTED" != "podman" ]; then
+      RUNTIME="unavailable"
+      RUNTIME_ERROR="AGENT_SANDBOX_PROFILE=firecracker-host supports only AGENT_RUNTIME=podman"
+      return 1
+    fi
+    if command -v podman >/dev/null 2>&1; then
+      RUNTIME="podman"
+      return 0
+    fi
+    RUNTIME="unavailable"
+    RUNTIME_ERROR="AGENT_SANDBOX_PROFILE=firecracker-host requires podman"
+    return 1
+  fi
 
   if [ -n "$RUNTIME_REQUESTED" ]; then
     RUNTIME="$RUNTIME_REQUESTED"
@@ -168,6 +200,77 @@ resolve_runtime_state() {
   RUNTIME="unavailable"
   RUNTIME_ERROR="neither podman nor docker is available in PATH"
   return 1
+}
+
+firecracker_host_preflight_fail() {
+  echo "[agent] firecracker-host preflight failed: $*" >&2
+  exit 1
+}
+
+firecracker_host_workspace_path() {
+  local workspace_path="${AGENT_WORKSPACE_PATH:-$PWD}"
+
+  if [ ! -d "$workspace_path" ]; then
+    firecracker_host_preflight_fail "workspace path is not a directory: $workspace_path"
+  fi
+
+  (
+    cd "$workspace_path" &&
+    pwd -P
+  )
+}
+
+preflight_firecracker_host_profile() {
+  local podman_rootless=""
+  local workspace_path=""
+
+  [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ] || return 0
+
+  if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+    firecracker_host_preflight_fail "do not run the launcher with sudo; run it as the operator user, because firecracker-host invokes sudo -n podman internally"
+  fi
+
+  [ "$OS_NAME" = "Linux" ] || firecracker_host_preflight_fail "Linux is required"
+  command -v sudo >/dev/null 2>&1 || firecracker_host_preflight_fail "sudo is not installed"
+  command -v podman >/dev/null 2>&1 || firecracker_host_preflight_fail "podman is not installed"
+
+  if ! sudo -n true >/dev/null 2>&1; then
+    firecracker_host_preflight_fail "sudo -n must work without prompting"
+  fi
+
+  if ! sudo -n podman info >/dev/null 2>&1; then
+    firecracker_host_preflight_fail "sudo -n podman info must work"
+  fi
+
+  podman_rootless="$(sudo -n podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+  if [ "$podman_rootless" = "true" ]; then
+    firecracker_host_preflight_fail "rootful podman is required"
+  fi
+
+  if ! sudo -n sh -c 'test -c /dev/kvm && test -r /dev/kvm && test -w /dev/kvm'; then
+    firecracker_host_preflight_fail "/dev/kvm must be present and readable/writable by root"
+  fi
+
+  if ! sudo -n sh -c 'test -c /dev/net/tun && test -r /dev/net/tun && test -w /dev/net/tun'; then
+    firecracker_host_preflight_fail "/dev/net/tun must be present and readable/writable by root"
+  fi
+
+  if ! sudo -n sh -c 'test -f /sys/fs/cgroup/cgroup.controllers'; then
+    firecracker_host_preflight_fail "cgroup v2 must be mounted at /sys/fs/cgroup"
+  fi
+
+  if ! sudo -n sh -c 'dir="$(mktemp -d /sys/fs/cgroup/agent-sandbox-firecracker.XXXXXX)" && rmdir "$dir"'; then
+    firecracker_host_preflight_fail "root must be able to create cgroup v2 child directories"
+  fi
+
+  if ! sudo -n sh -c 'dir="$(mktemp -d /sys/fs/cgroup/agent-sandbox-firecracker.XXXXXX)" || exit 1; trap "rmdir \"$dir\"" EXIT; printf 0 > "$dir/cgroup.freeze"'; then
+    firecracker_host_preflight_fail "root must be able to write cgroup v2 control files"
+  fi
+
+  workspace_path="$(firecracker_host_workspace_path)"
+  if ! sudo -n sh -c 'file="$1/.agent-sandbox-root-write-test.$$"; touch "$file" && chown 0:0 "$file" && rm -f "$file"' sh "$workspace_path"; then
+    firecracker_host_preflight_fail "root must be able to write and chown files under the workspace"
+  fi
 }
 
 resolve_lock_args() {
@@ -381,6 +484,7 @@ resolve_direnv_nix_path() {
 log_debug_context() {
   if [ "${AGENT_DEBUG:-0}" = "1" ]; then
     echo "[agent] TOOL=$TOOL" >&2
+    echo "[agent] SANDBOX_PROFILE=${SANDBOX_PROFILE:-default}" >&2
     echo "[agent] RUNTIME=$RUNTIME" >&2
     echo "[agent] SANDBOX_FLAKE=$SANDBOX_FLAKE" >&2
     echo "[agent] PROJECT_ROOT=$PROJECT_ROOT" >&2
@@ -426,7 +530,9 @@ bootstrap_environment() {
   mkdir -p /var/tmp >/dev/null 2>&1 || true
 
   prepare_tool_resolution_context
+  resolve_sandbox_profile
   resolve_runtime
+  preflight_firecracker_host_profile
   resolve_sandbox_flake
   resolve_lock_args
   prepare_project_contract_input
