@@ -32,6 +32,7 @@ Existing environment variables always win over file values.
 
 | Variable | Default | Allowed values | Effect |
 | --- | --- | --- | --- |
+| `AGENT_SANDBOX_PROFILE` | `default` | `default`, `firecracker-host` | Selects the sandbox capability profile |
 | `AGENT_RUNTIME` | auto-detect | `podman`, `docker` | Selects the outer runtime |
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
@@ -71,6 +72,43 @@ Existing environment variables always win over file values.
 | `AGENT_NIX_EXPERIMENTAL_FEATURES` | `nix-command flakes` | Extra Nix experimental features for launcher commands |
 | `AGENT_HELPER_TMPDIR` | `$AGENT_CACHE_DIR/tmp` | Temp directory for helper runs |
 | `AGENT_DEBUG` | `0` | Print resolved paths and execution details |
+
+### Firecracker Host Profile
+
+Use `AGENT_SANDBOX_PROFILE=firecracker-host` when the agent must run host-level
+Firecracker smoke tests from inside the sandbox.
+
+This profile supports one backend: Linux rootful Podman through
+`sudo -n podman`. It rejects Docker, remote Podman, rootless Podman, non-Linux
+hosts, and explicit container API modes. `AGENT_CONTAINER_API=auto` resolves to
+`none` in this profile.
+
+The launcher preflights the host before building/running the sandbox:
+- the launcher is not itself running through `sudo` from a non-root operator
+- `sudo -n true`
+- `sudo -n podman info`
+- rootful Podman
+- `/dev/kvm`
+- `/dev/net/tun`
+- cgroup v2 at `/sys/fs/cgroup`
+- root can create cgroup v2 child directories
+- root can write cgroup v2 control files
+- root can write and chown files under the selected workspace
+
+The launched container uses privileged host-control semantics:
+- `--privileged`
+- `--userns=host`
+- `--cgroupns=host`
+- `--network=host`
+- `/dev/kvm`
+- `/dev/net/tun`
+- writable `/sys/fs/cgroup`
+
+The agent process still runs as the host UID/GID for normal workspace writes.
+In-container `sudo` is required and is enabled by this profile.
+Run the launcher as the operator user; the profile invokes `sudo -n podman`
+internally. A top-level `sudo ./scripts/codex` launch is unsupported because
+it changes host auth/config and cache ownership semantics.
 
 ## Tool Config Roots And Auth
 

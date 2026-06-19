@@ -19,6 +19,14 @@ Interactive runs execute inside a Podman rootfs container or Docker-loaded OCI i
 
 Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities. Enabling sudo does not grant host root, but it does widen the in-container boundary and is therefore explicit.
 
+`AGENT_SANDBOX_PROFILE=firecracker-host` is a separate host-control profile. It
+uses Linux rootful Podman through `sudo -n podman`, runs the container
+privileged with host user, cgroup, and network namespaces, mounts `/dev/kvm`,
+`/dev/net/tun`, and writable `/sys/fs/cgroup`, and enables in-container sudo.
+This profile exists for Firecracker host smoke workflows and should be treated
+as materially closer to running a privileged host tool than to the default
+sandbox.
+
 ### 2. Filesystem scope is explicit, not ambient
 
 The runtime does not mount the entire host home directory. Instead, it mounts:
@@ -154,6 +162,7 @@ For the current implementation, the runtime is best described like this:
 | Protection from hostile code with access to raw host sockets | Weak |
 | Protection from hostile code with `podman-session` access | Moderate |
 | Protection from hostile code with narrow host Nix helper access | Moderate |
+| Protection from hostile code with `firecracker-host` profile | Weak |
 | Resource exhaustion protection | Moderate |
 
 ## Comparison With Each Agent

@@ -80,6 +80,21 @@ Practical consequences:
 - Docker is the fallback path when Podman is not available.
 - if the selected runtime does not satisfy its requirements, the launcher fails fast
 
+For Firecracker host smoke tests, use the explicit host-control profile:
+
+```sh
+AGENT_SANDBOX_PROFILE=firecracker-host ./scripts/codex
+```
+
+That profile supports only Linux rootful Podman through `sudo -n podman`.
+It preflights KVM, `/dev/net/tun`, writable cgroup v2, root workspace
+write/chown, and non-interactive sudo before launch. The container runs
+privileged with host user, cgroup, and network namespaces while the agent
+process stays on the host UID/GID; privileged Firecracker operations go
+through in-container `sudo`. Run the launcher itself as the operator user;
+`sudo ./scripts/codex` is rejected because it changes host auth/config and
+cache ownership semantics.
+
 For host-side process observers, the runtime is launched under a supervisor
 whose `argv[0]` is the selected logical tool name. Observers that inspect the
 foreground job can see `codex`, `claude`, `opencode`, and similar names even
