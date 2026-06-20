@@ -918,6 +918,10 @@ test_bun_latest_lookup_uses_tool_cache() (
   local image_file
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
 
+  assert_contains "$image_file" "requested_version=\"''\${AGENT_CODEX_VERSION:-}\""
+  assert_contains "$image_file" 'if [ "$requested_version" = "latest" ]; then'
+  assert_contains "$image_file" 'Installing ${pkg}@$requested_version...'
+  assert_contains "$image_file" '${pkgs.bun}/bin/bun add --trust "${pkg}@$requested_version"'
   assert_contains "$image_file" 'latest_version="$((cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun info ${pkg} version) 2>/dev/null | head -n1 || true)"'
 )
 

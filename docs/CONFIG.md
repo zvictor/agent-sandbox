@@ -37,6 +37,7 @@ Existing environment variables always win over file values.
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
 | `AGENT_NEED_HELPER` | `1` | `0`, `1` | Enables or disables the narrow host-backed Nix helper |
+| `AGENT_CODEX_VERSION` | unset | exact npm version, `latest` | Pins the sandboxed `@openai/codex` package; unset or `latest` keeps auto-update behavior |
 | `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex config root |
 | `CLAUDE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Claude config root |
 | `OPENCODE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects OpenCode config root |
@@ -149,6 +150,13 @@ CODEX_CONFIG=/tmp/other-codex
 
 CODEX_AUTH=work
 CODEX_AUTH=/path/to/auth.json
+```
+
+Codex package version:
+
+```sh
+AGENT_CODEX_VERSION=0.141.0 ./scripts/codex resume <session-id>
+AGENT_CODEX_VERSION=latest ./scripts/codex
 ```
 
 ## Container API Access

@@ -461,6 +461,16 @@ This means:
 - subsequent runs reuse the cached tool installation
 - the image stays smaller than baking all agent npm packages directly into the root filesystem
 
+By default, Codex tracks the latest `@openai/codex` package. To start a
+session with a specific Codex CLI package version, set `AGENT_CODEX_VERSION`:
+
+```sh
+AGENT_CODEX_VERSION=0.141.0 ./scripts/codex resume <session-id>
+```
+
+Unset `AGENT_CODEX_VERSION`, or set it to `latest`, to use the normal
+auto-update behavior.
+
 ## Performance Model
 
 The launcher is optimized around two caches:
@@ -627,6 +637,7 @@ AGENT_EXTRA_DEVICES=/dev/kvm ./scripts/codex
 ### Tool config overrides
 
 - `CODEX_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
+- `AGENT_CODEX_VERSION`: exact `@openai/codex` package version for the sandboxed Codex launcher; unset or `latest` keeps auto-update behavior
 - `OPENCODE_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
 - `CLAUDE_CONFIG`: `host`, `project`, `fresh`, or an explicit host directory path
 - `CODEX_AUTH`: named managed slot like `work` or an explicit credential file path

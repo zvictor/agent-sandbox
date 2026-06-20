@@ -229,8 +229,27 @@ EOF
 
       pkg_json="$CACHE_DIR/node_modules/${pkg}/package.json"
       bin_path="$CACHE_DIR/node_modules/.bin/${bin}"
+      requested_version=""
+      if [ "${name}" = "codex" ]; then
+        requested_version="''${AGENT_CODEX_VERSION:-}"
+      fi
 
-      if [ "${latestFlag}" = "1" ]; then
+      if [ "$requested_version" = "latest" ]; then
+        requested_version=""
+      fi
+
+      if [ -n "$requested_version" ]; then
+        current_version=""
+        if [ -f "$pkg_json" ]; then
+          current_version=$(${pkgs.bun}/bin/bun --print "require('$pkg_json').version" 2>/dev/null || true)
+          echo "${pkg} is cached as version ''${current_version:-unknown}" >&2
+        fi
+
+        if [ "$current_version" != "$requested_version" ] || [ ! -e "$bin_path" ]; then
+          echo "Installing ${pkg}@$requested_version..." >&2
+          (cd "$CACHE_DIR" && ${pkgs.bun}/bin/bun add --trust "${pkg}@$requested_version")
+        fi
+      elif [ "${latestFlag}" = "1" ]; then
         current_version=""
         if [ -f "$pkg_json" ]; then
           current_version=$(${pkgs.bun}/bin/bun --print "require('$pkg_json').version" 2>/dev/null || true)
