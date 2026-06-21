@@ -17,6 +17,7 @@ usage:
   agent <tool> [args...]
   agent run <tool> [args...]
   agent sessions codex [--all] [--json]
+  agent viewer [--host 127.0.0.1] [--port 3727] [--read-write]
   agent login codex <name> [--no-use] [--config host|project|fresh|<path>] [-- <codex login args...>]
   agent init [--force] [--stdout]
   agent doctor [--verbose] [--json]
@@ -34,6 +35,7 @@ examples:
   agent sessions codex
   agent login codex work
   agent login codex work --config project
+  agent viewer
   agent run codex
   agent codex
 EOF

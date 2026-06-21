@@ -48,6 +48,7 @@ AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- doctor
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- login codex work --config project
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- sessions codex
+AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#viewer
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#agent -- run codex
 AGENT_PROJECT_ROOT="$PWD" nix run github:zvictor/agent-sandbox#codex
 ```
@@ -60,6 +61,7 @@ From a local checkout:
 ./scripts/agent login codex work
 ./scripts/agent login codex work --config project
 ./scripts/agent sessions codex
+./scripts/viewer
 ./scripts/agent run codex
 ./scripts/codex
 ```
@@ -229,6 +231,7 @@ For SSH operations under Codex's native sandbox, the launcher exposes the sandbo
 
 - Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.
 - Fastest Codex workflow: run `./scripts/codex` after `./scripts/agent init`.
+- Session viewer: run `./scripts/viewer` or `agent viewer` to start Claude Code History Viewer server mode on `127.0.0.1:3727`; the launcher prints the authenticated URL.
 - Repo-local state: set `CODEX_CONFIG=project`, `CLAUDE_CONFIG=project`, or `OPENCODE_CONFIG=project`.
 - Ephemeral run: set `<TOOL>_CONFIG=fresh`.
 - Project-local login: `./scripts/agent login codex work --config project`.

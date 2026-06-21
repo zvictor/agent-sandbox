@@ -54,6 +54,7 @@
             unstablePkgs = upkgs;
             nix2containerPkgs = nix2container.packages.${system};
           };
+          cchvServer = pkgs.callPackage ./nix/cchv-server.nix { };
 
           sandboxSource = pkgs.lib.fileset.toSource {
             root = ./.;
@@ -83,7 +84,8 @@
                 "$out/scripts/opencode" \
                 "$out/scripts/codemachine" \
                 "$out/scripts/omp" \
-                "$out/scripts/commandcode"
+                "$out/scripts/commandcode" \
+                "$out/scripts/viewer"
               runHook postInstall
             '';
           };
@@ -101,6 +103,19 @@
             pkgs.podman
           ];
 
+          viewerRuntimeInputs = [
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.findutils
+            pkgs.gawk
+            pkgs.gnused
+            pkgs.jq
+            pkgs.nix
+            pkgs.git
+            cchvServer
+            pkgs.bubblewrap
+          ];
+
           mkTool =
             toolName:
             pkgs.writeShellApplication {
@@ -116,10 +131,19 @@
                     exec "${sandboxRoot}/scripts/${toolName}" "$@"
                   '';
             };
+          viewerTool = pkgs.writeShellApplication {
+            name = "viewer";
+            runtimeInputs = viewerRuntimeInputs;
+            text = ''
+              exec "${sandboxRoot}/scripts/viewer" "$@"
+            '';
+          };
         in
         {
           streamImage = images.streamImage;
           rootfs = images.rootfs;
+          inherit cchvServer;
+          cchv-server = cchvServer;
 
           agent-cli = mkTool "agent";
           agent = mkTool "agent";
@@ -129,6 +153,7 @@
           codemachine = mkTool "codemachine";
           omp = mkTool "omp";
           commandcode = mkTool "commandcode";
+          viewer = viewerTool;
           default = mkTool "agent";
         }
       );
@@ -151,6 +176,7 @@
           codemachine = mkApp "${p.codemachine}/bin/codemachine";
           omp = mkApp "${p.omp}/bin/omp";
           commandcode = mkApp "${p.commandcode}/bin/commandcode";
+          viewer = mkApp "${p.viewer}/bin/viewer";
         }
       );
     };

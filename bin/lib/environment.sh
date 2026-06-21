@@ -13,7 +13,7 @@ trim_whitespace() {
 
 is_project_config_key_allowed() {
   case "$1" in
-    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
+    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|CCHV_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
       return 0
       ;;
     *)

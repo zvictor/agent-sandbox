@@ -82,6 +82,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/init.sh"
 . "$AGENT_BIN_DIR/lib/login.sh"
 . "$AGENT_BIN_DIR/lib/sessions.sh"
+. "$AGENT_BIN_DIR/lib/viewer.sh"
 
 TOOL=""
 REMAINING_ARGS=()
@@ -105,6 +106,11 @@ if [ "$(basename "$0")" = "agent" ]; then
       ;;
     sessions)
       AGENT_COMMAND="sessions"
+      shift
+      REMAINING_ARGS=("$@")
+      ;;
+    viewer)
+      AGENT_COMMAND="viewer"
       shift
       REMAINING_ARGS=("$@")
       ;;
@@ -137,6 +143,11 @@ fi
 if [ "$AGENT_COMMAND" = "sessions" ]; then
   resolve_sessions_args "${REMAINING_ARGS[@]}"
   print_sessions_and_exit
+fi
+
+if [ "$AGENT_COMMAND" = "viewer" ]; then
+  resolve_viewer_args "${REMAINING_ARGS[@]}"
+  run_viewer_and_exit
 fi
 
 if [ "$AGENT_COMMAND" = "login" ]; then
