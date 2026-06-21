@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "opensrc": {
+      "source": "vercel-labs/opensrc",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/opensrc/SKILL.md",
+      "computedHash": "20d4395d64cae1e0de62053e1084c0ef58fbf573326a38fbd04f4bb677f0d729"
+    }
+  }
+}
