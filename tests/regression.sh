@@ -55,23 +55,27 @@ pin_shell_fetchtarball_for() (
   set -euo pipefail
 
   local url="$1"
-  local cached_hash="$2"
+  local locked_hash="$2"
   local fresh_hash="$3"
-  local tmp_dir target_dir bin_dir cache_key cache_file output calls
+  local tmp_dir target_dir bin_dir cache_dir project_root project_key url_key lock_file output calls
 
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
   target_dir="$tmp_dir/project"
   bin_dir="$tmp_dir/bin"
-  mkdir -p "$target_dir" "$bin_dir" "$tmp_dir/home/.cache/agent-sandbox"
+  cache_dir="$tmp_dir/cache"
+  project_root="$tmp_dir/source-project"
+  mkdir -p "$target_dir" "$bin_dir" "$cache_dir" "$project_root"
 
   printf '{ pkgs ? import (fetchTarball "%s") {} }: pkgs.mkShell { packages = []; }\n' "$url" > "$target_dir/shell.nix"
 
-  cache_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
-  cache_file="$tmp_dir/home/.cache/agent-sandbox/pinned-nixpkgs-${cache_key}.json"
-  if [ -n "$cached_hash" ]; then
-    printf '{"url":"%s","sha256":"%s"}\n' "$url" "$cached_hash" > "$cache_file"
+  project_key="$(printf '%s' "$project_root" | sha256sum | awk '{print $1}')"
+  url_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  lock_file="$cache_dir/project-contracts/$project_key/pinned-nixpkgs-$url_key.json"
+  if [ -n "$locked_hash" ]; then
+    mkdir -p "$(dirname "$lock_file")"
+    printf '{"url":"%s","sha256":"%s"}\n' "$url" "$locked_hash" > "$lock_file"
   fi
 
   cat > "$bin_dir/nix-prefetch-url" <<EOF
@@ -83,10 +87,11 @@ EOF
   chmod +x "$bin_dir/nix-prefetch-url"
 
   source "$REPO_ROOT/bin/lib/project_contract.sh"
-  output="$(HOME="$tmp_dir/home" PATH="$bin_dir:/usr/bin:/bin" pin_shell_fetchtarball "$target_dir" 2>&1)"
+  output="$(CACHE_DIR="$cache_dir" PROJECT_ROOT="$project_root" PATH="$bin_dir:/usr/bin:/bin" pin_shell_fetchtarball "$target_dir" 2>&1)"
 
   if [ -f "$tmp_dir/prefetch.log" ]; then
     calls="$(wc -l < "$tmp_dir/prefetch.log")"
+    printf 'prefetch=%s\n' "$(cat "$tmp_dir/prefetch.log")"
   else
     calls="0"
   fi
@@ -94,8 +99,9 @@ EOF
   printf 'output=%s\n' "$output"
   printf 'pinned=%s\n' "$(cat "$target_dir/.agent-sandbox-pinned-nixpkgs.json")"
   printf 'calls=%s\n' "$calls"
-  if [ -f "$cache_file" ]; then
-    printf 'cache=%s\n' "$(cat "$cache_file")"
+  printf 'lock_path=%s\n' "$lock_file"
+  if [ -f "$lock_file" ]; then
+    printf 'lock=%s\n' "$(cat "$lock_file")"
   fi
 )
 
@@ -349,8 +355,12 @@ stream_image_helper_invocation_for() (
 path_guard_entries_for() (
   set -euo pipefail
 
+  local profile="${1:-default}"
+
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
   HELPER_TMPDIR="$(mktemp -d)"
   trap 'rm -rf "$HELPER_TMPDIR" "$PATH_GUARD_HOST_DIR"' EXIT
 
@@ -373,6 +383,36 @@ base_container_args_for() (
     export AGENT_ALLOW_SUDO=1
   else
     unset AGENT_ALLOW_SUDO
+  fi
+
+  TOOL="codex"
+  WORKSPACE_PATH="/workspace"
+  WORKSPACE_RUNTIME_PATH="/cache/need/bin:/bin:/usr/bin:/usr/local/bin"
+  TOOL_CACHE_DIR="/cache/tools/codex"
+  NEED_TOOLS_PATH="/cache/need/projects/project/bin"
+  NIX_CONFIG="sandbox = false"
+  Z_SUFFIX=""
+  ARGS=()
+
+  build_base_container_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
+remote_base_container_args_for() (
+  set -euo pipefail
+
+  local profile="${1:-default}"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
+  AGENT_REMOTE_CONTAINER_MODE=1
+  AGENT_REMOTE_POD_NAME="agent-remote-test"
+  AGENT_REMOTE_RUNTIME_CONTAINER="agent-remote-test-runtime"
+  if [ "$profile" = "firecracker-host" ]; then
+    AGENT_REMOTE_POD_DISABLED=1
   fi
 
   TOOL="codex"
@@ -620,6 +660,25 @@ stdio_target_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
+remote_target_args_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  AGENT_REMOTE_CONTAINER_MODE=1
+  AGENT_REMOTE_NAME="test"
+  MODE="podman-rootfs"
+  TOOL="codex"
+  WORKSPACE_PATH="/workspace"
+  ROOTFS_IMAGE_ARG="/tmp/rootfs:O"
+  IMAGE_ID="sha256:unused"
+  ARGS=()
+
+  append_stdio_and_target_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
 container_api_stale_pid_cleanup_for() (
   set -euo pipefail
 
@@ -834,29 +893,83 @@ test_host_home_fallbacks_present() (
   assert_contains "$environment_file" 'project_root_tail="${PROJECT_ROOT#/Users/}"'
 )
 
-test_stable_fetchtarball_uses_cached_pin() (
+test_stable_fetchtarball_uses_lock() (
   set -euo pipefail
 
   local output
   output="$(pin_shell_fetchtarball_for "https://example.com/nixpkgs-abc123.tar.gz" "cachedhash" "freshhash")"
 
   assert_contains "$output" "pinned={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
-  assert_contains "$output" "cache={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
+  assert_contains "$output" "lock={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
   assert_contains "$output" "calls=0"
-  assert_contains "$output" "(cached)"
+  assert_contains "$output" "(locked; remove "
+  assert_contains "$output" " to refresh)"
 )
 
-test_mutable_channel_fetchtarball_refreshes_stale_pin() (
+test_mutable_channel_fetchtarball_uses_lock() (
   set -euo pipefail
 
   local output
   output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "stalehash" "freshhash")"
 
+  assert_contains "$output" "pinned={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
+  assert_contains "$output" "lock={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
+  assert_contains "$output" "calls=0"
+  assert_contains "$output" "(locked; remove "
+  assert_not_contains "$output" "freshhash"
+)
+
+test_missing_fetchtarball_lock_is_created() (
+  set -euo pipefail
+
+  local output
+  output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "" "freshhash")"
+
   assert_contains "$output" "pinned={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"freshhash\"}"
-  assert_contains "$output" "cache={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
+  assert_contains "$output" "lock={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"freshhash\"}"
   assert_contains "$output" "calls=1"
-  assert_contains "$output" "refreshed mutable URL"
-  assert_not_contains "$output" "(cached)"
+  assert_contains "$output" "prefetch=called --option tarball-ttl 0 --unpack https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz"
+  assert_contains "$output" "(created lock "
+)
+
+test_shell_nix_nix_path_default_receives_explicit_pkgs() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  printf '%s\n' \
+    '{ pkgs ? import <nixpkgs> {} }:' \
+    'pkgs.mkShell { packages = [ pkgs.hello ]; }' \
+    > "$tmp_dir/shell.nix"
+
+  output="$(
+    env -u NIX_CONFIG \
+      NIX_PATH= \
+      AGENT_TEST_PROJECT="$tmp_dir" \
+      AGENT_TEST_REPO_ROOT="$REPO_ROOT" \
+      nix --extra-experimental-features 'nix-command flakes' eval --impure --json --expr '
+        let
+          projectPkgs = builtins.path {
+            path = builtins.getEnv "AGENT_TEST_PROJECT";
+            name = "agent-shell-contract-test";
+          };
+          detector = builtins.toPath ((builtins.getEnv "AGENT_TEST_REPO_ROOT") + "/nix/detect-packages.nix");
+        in
+        import detector {
+          pkgs = {
+            system = "test-system";
+            hello = "hello";
+            mkShell = attrs: attrs;
+          };
+          unstable = { };
+          inherit projectPkgs;
+        }
+      '
+  )"
+
+  [ "$output" = '["hello"]' ] || fail "expected explicit pkgs injection, got: $output"
 )
 
 test_symlinked_shell_stages_resolved_nix_contract() (
@@ -871,18 +984,14 @@ test_symlinked_shell_stages_resolved_nix_contract() (
   assert_contains "$output" "template=font template"
 )
 
-test_git_wrapper_policy() (
+test_image_uses_standard_git() (
   set -euo pipefail
 
   local image_file
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
 
-  assert_contains "$image_file" 'SAFE_COMMANDS="clone|status|diff|log|show|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"'
-  assert_not_contains "$image_file" 'clone|fetch'
-  assert_not_contains "$image_file" '|branch|'
-  assert_not_contains "$image_file" '|config|'
-  assert_not_contains "$image_file" '|remote|'
-  assert_not_contains "$image_file" '|tag|'
+  assert_contains "$image_file" '      pkgs.git'
+  assert_not_contains "$image_file" 'writeShellScriptBin "git"'
 )
 
 test_device_passthrough_support() (
@@ -1001,7 +1110,6 @@ test_config_selectors_are_not_passthrough_env() (
       OPENCODE_CONFIG=fresh \
       CLAUDE_AUTH=other \
       CODEX_FOO=bar \
-      GIT_ALLOW=1 \
       REPO_ROOT="$REPO_ROOT" \
       bash -lc '
         split_csv_or_lines() {
@@ -1021,7 +1129,6 @@ test_config_selectors_are_not_passthrough_env() (
   assert_not_contains "$output" "CLAUDE_AUTH=other"
   assert_not_contains "$output" "SSH_AUTH_SOCK="
   assert_contains "$output" "CODEX_FOO=bar"
-  assert_contains "$output" "GIT_ALLOW=1"
 )
 
 test_ssh_agent_mount_support() (
@@ -1034,6 +1141,380 @@ test_ssh_agent_mount_support() (
 
   assert_contains "$output" "$socket_path:/run/host-services/ssh-auth.sock:rw"
   assert_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
+)
+
+test_remote_mode_suppresses_ssh_agent_by_default() (
+  set -euo pipefail
+
+  local socket_path output
+  socket_path="/tmp/test-ssh-agent.sock"
+
+  output="$(
+    AGENT_REMOTE_CONTAINER_MODE=1 ssh_agent_args_for "$socket_path"
+  )"
+
+  assert_not_contains "$output" "$socket_path:/run/host-services/ssh-auth.sock:rw"
+  assert_not_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
+
+  output="$(
+    AGENT_REMOTE_CONTAINER_MODE=1 AGENT_REMOTE_FORWARD_SSH_AGENT=1 ssh_agent_args_for "$socket_path"
+  )"
+
+  assert_contains "$output" "$socket_path:/run/host-services/ssh-auth.sock:rw"
+  assert_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
+)
+
+test_remote_secrets_are_not_passthrough_env() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    env \
+      AGENT_REMOTE_TS_AUTHKEY=tskey-secret \
+      AGENT_REMOTE_TAILSCALE_AUTHKEY=tskey-secret-2 \
+      TS_AUTHKEY=tskey-secret-3 \
+      AGENT_REMOTE_TS_CLIENT_SECRET=ts-secret \
+      TS_CLIENT_SECRET=ts-secret-2 \
+      AGENT_REMOTE_NAME=remote-name \
+      REPO_ROOT="$REPO_ROOT" \
+      bash -lc '
+        split_csv_or_lines() {
+          local value="$1"
+          printf "%s\n" "$value" | tr "," "\n" | sed "/^[[:space:]]*$/d"
+        }
+        source "$REPO_ROOT/bin/lib/container_runtime.sh"
+        AGENT_REMOTE_CONTAINER_MODE=1
+        ARGS=()
+        append_passthrough_env_args
+        printf "%s\n" "${ARGS[@]}"
+      '
+  )"
+
+  assert_not_contains "$output" "AGENT_REMOTE_TS_AUTHKEY=tskey-secret"
+  assert_not_contains "$output" "AGENT_REMOTE_TAILSCALE_AUTHKEY=tskey-secret-2"
+  assert_not_contains "$output" "TS_AUTHKEY=tskey-secret-3"
+  assert_not_contains "$output" "AGENT_REMOTE_TS_CLIENT_SECRET=ts-secret"
+  assert_not_contains "$output" "TS_CLIENT_SECRET=ts-secret-2"
+  assert_not_contains "$output" "AGENT_REMOTE_NAME=remote-name"
+)
+
+test_remote_host_env_opt_in_restores_agent_passthrough() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    env \
+      AGENT_REMOTE_NAME=remote-name \
+      REPO_ROOT="$REPO_ROOT" \
+      bash -lc '
+        split_csv_or_lines() {
+          local value="$1"
+          printf "%s\n" "$value" | tr "," "\n" | sed "/^[[:space:]]*$/d"
+        }
+        source "$REPO_ROOT/bin/lib/container_runtime.sh"
+        AGENT_REMOTE_CONTAINER_MODE=1
+        AGENT_REMOTE_ALLOW_HOST_ENV=1
+        ARGS=()
+        append_passthrough_env_args
+        printf "%s\n" "${ARGS[@]}"
+      '
+  )"
+
+  assert_contains "$output" "AGENT_REMOTE_NAME=remote-name"
+)
+
+remote_reject_output_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/remote.sh"
+  remote_reject_implicit_host_bridges
+)
+
+test_remote_rejects_broad_bridges_by_default() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(AGENT_CONTAINER_API=none AGENT_NEED_HELPER=0 AGENT_EXTRA_MOUNTS=/host:/guest remote_reject_output_for 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected AGENT_EXTRA_MOUNTS to be rejected"
+  assert_contains "$output" "remote mode does not inherit AGENT_EXTRA_MOUNTS by default"
+
+  set +e
+  output="$(AGENT_CONTAINER_API=none AGENT_NEED_HELPER=0 AGENT_EXTRA_DEVICES=/dev/kvm remote_reject_output_for 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected AGENT_EXTRA_DEVICES to be rejected"
+  assert_contains "$output" "remote mode does not inherit extra devices by default"
+
+  set +e
+  output="$(AGENT_CONTAINER_API=none AGENT_NEED_HELPER=0 AGENT_EXTRA_ENV=FOO=bar remote_reject_output_for 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected AGENT_EXTRA_ENV to be rejected"
+  assert_contains "$output" "remote mode does not inherit AGENT_EXTRA_ENV by default"
+)
+
+test_remote_forces_safe_helper_defaults() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    AGENT_CONTAINER_API=auto AGENT_NEED_HELPER=1 bash -c '
+      source "$1"
+      remote_reject_implicit_host_bridges
+      printf "container_api=%s\n" "$AGENT_CONTAINER_API"
+      printf "need_helper=%s\n" "$AGENT_NEED_HELPER"
+    ' bash "$REPO_ROOT/bin/lib/remote.sh" 2>&1
+  )"
+
+  assert_contains "$output" "remote mode forcing AGENT_CONTAINER_API=none"
+  assert_contains "$output" "remote mode forcing AGENT_NEED_HELPER=0"
+  assert_contains "$output" "container_api=none"
+  assert_contains "$output" "need_helper=0"
+)
+
+test_remote_defaults_codex_config_to_project() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    bash -c '
+      source "$1"
+      unset CODEX_CONFIG
+      remote_apply_defaults
+      printf "default=%s\n" "$CODEX_CONFIG"
+      CODEX_CONFIG=host
+      remote_apply_defaults
+      printf "explicit=%s\n" "$CODEX_CONFIG"
+    ' bash "$REPO_ROOT/bin/lib/remote.sh"
+  )"
+
+  assert_contains "$output" "default=project"
+  assert_contains "$output" "explicit=host"
+)
+
+test_remote_light_bootstrap_skips_firecracker_confirmation() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  mkdir -p "$tmp_dir/workspace"
+
+  output="$(
+    AGENT_WORKSPACE_PATH="$tmp_dir/workspace" bash -c '
+      source "$1"
+      hash_short() { printf "1234567890abcdef\n"; }
+      prepare_tool_resolution_context() { PROJECT_ROOT="$2/workspace"; }
+      resolve_sandbox_profile() {
+        SANDBOX_PROFILE=firecracker-host
+        AGENT_SANDBOX_PROFILE=firecracker-host
+      }
+      resolve_runtime() { RUNTIME=podman; }
+      prepare_cache_dirs() { CACHE_DIR="$2/cache"; mkdir -p "$CACHE_DIR"; }
+      bootstrap_environment() { :; }
+      remote_firecracker_confirmation() { printf "confirmed\n"; }
+
+      remote_bootstrap_light
+      printf "light_workspace=%s\n" "$WORKSPACE_PATH"
+      remote_bootstrap_full
+      printf "full_without_confirm_done=1\n"
+      remote_bootstrap_full confirm-firecracker
+    ' bash "$REPO_ROOT/bin/lib/remote.sh" "$tmp_dir"
+  )"
+
+  assert_contains "$output" "light_workspace=$tmp_dir/workspace"
+  assert_contains "$output" "full_without_confirm_done=1"
+  assert_contains "$output" "confirmed"
+)
+
+test_remote_requires_tailscale_auth_before_starting() (
+  set -euo pipefail
+
+  local tmp_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  set +e
+  output="$(
+    REMOTE_TS_CONTAINER=agent-remote-test-ts \
+    REMOTE_TS_STATE_DIR="$tmp_dir/tailscale" \
+    bash -c '
+      source "$1"
+      podman_runtime_cmd() {
+        return 1
+      }
+      remote_require_tailscale_auth_available
+    ' bash "$REPO_ROOT/bin/lib/remote.sh" 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing Tailscale auth to fail"
+  assert_contains "$output" "first remote start needs Tailscale auth"
+)
+
+test_remote_up_preflights_auth_before_artifacts() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(
+    bash -c '
+      source "$1"
+      remote_bootstrap_full() { :; }
+      remote_require_podman_default_profile() { :; }
+      remote_reject_implicit_host_bridges() { :; }
+      remote_require_tailscale_auth_available() {
+        echo "auth-preflight"
+        exit 7
+      }
+      remote_prepare_authorized_keys() { echo "authorized-keys"; }
+      prepare_runtime_artifacts() { echo "artifacts"; }
+      prepare_container_api() { :; }
+      prepare_need_helper() { :; }
+      log_debug_context() { :; }
+      remote_create_pod() { :; }
+      remote_start_runtime_container() { :; }
+      remote_start_tailscale_sidecar() { :; }
+      remote_configure_tailscale_serve() { :; }
+      remote_print_status() { :; }
+      remote_run_up
+    ' bash "$REPO_ROOT/bin/lib/remote.sh"
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -eq 7 ] || fail "expected auth preflight to stop remote up"
+  assert_contains "$output" "auth-preflight"
+  assert_not_contains "$output" "authorized-keys"
+  assert_not_contains "$output" "artifacts"
+)
+
+test_remote_pod_has_no_published_ports() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  output="$(
+    CMD_LOG="$tmp_dir/cmd.log" bash -c '
+      source "$1"
+      REMOTE_POD_NAME=agent-remote-test
+      firecracker_host_profile() { return 1; }
+      remote_pod_exists() { return 1; }
+      podman_runtime_cmd() { printf "%s\n" "$*" >> "$CMD_LOG"; }
+      remote_create_pod
+      cat "$CMD_LOG"
+    ' bash "$REPO_ROOT/bin/lib/remote.sh"
+  )"
+
+  assert_contains "$output" "pod create --name agent-remote-test --network=slirp4netns:allow_host_loopback=true"
+  assert_not_contains "$output" "--network=host"
+  assert_not_contains "$output" "-p "
+  assert_not_contains "$output" "--publish"
+)
+
+test_remote_tailscale_sidecar_uses_userspace_pod_network() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  mkdir -p "$tmp_dir/ts"
+
+  output="$(
+    CMD_LOG="$tmp_dir/cmd.log" bash -c '
+      source "$1"
+      REMOTE_POD_NAME=agent-remote-test
+      REMOTE_TS_CONTAINER=agent-remote-test-ts
+      REMOTE_TS_STATE_DIR="$2/ts"
+      REMOTE_HOSTNAME=codex-test
+      AGENT_REMOTE_TS_AUTHKEY=tskey-test
+      firecracker_host_profile() { return 1; }
+      remote_container_running() { return 1; }
+      podman_runtime_cmd() { printf "%s\n" "$*" >> "$CMD_LOG"; }
+      remote_start_tailscale_sidecar
+      cat "$CMD_LOG"
+    ' bash "$REPO_ROOT/bin/lib/remote.sh" "$tmp_dir"
+  )"
+
+  assert_contains "$output" "run -d --pod agent-remote-test --name agent-remote-test-ts --replace"
+  assert_contains "$output" "TS_HOSTNAME=codex-test"
+  assert_contains "$output" "TS_USERSPACE=true"
+  assert_contains "$output" "TS_AUTH_ONCE=true"
+  assert_contains "$output" "TS_EXTRA_ARGS=--advertise-tags=tag:codex-agent"
+  assert_not_contains "$output" "--network=host"
+  assert_not_contains "$output" "--privileged"
+  assert_not_contains "$output" "--cap-add"
+  assert_not_contains "$output" "--device"
+  assert_not_contains "$output" "-p "
+  assert_not_contains "$output" "--publish"
+)
+
+test_remote_sessions_text_distinguishes_live_and_transcripts() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    source "$REPO_ROOT/bin/lib/remote.sh"
+    doctor_line() {
+      printf "%s=%s\n" "$1" "$2"
+    }
+    REMOTE_NAME=test
+    WORKSPACE_PATH=/workspace
+    remote_sessions_text $'codex\t1\t1' $'2026-01-01T00:00:00Z\tabc123\t/workspace\tmain\t0.1.0\t/tmp/session.jsonl'
+  )"
+
+  assert_contains "$output" "Live tmux sessions"
+  assert_contains "$output" "codex"
+  assert_contains "$output" "Resumable Codex transcripts"
+  assert_contains "$output" "abc123"
+)
+
+test_remote_codex_noninteractive_starts_without_attach() (
+  set -euo pipefail
+
+  local tmp_dir output calls
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  cat > "$tmp_dir/tmux" <<'EOF_TMUX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$TMUX_CALL_LOG"
+case "$1" in
+  has-session)
+    exit 1
+    ;;
+  new-session)
+    exit 0
+    ;;
+  attach-session)
+    echo "attach should not run without a tty" >&2
+    exit 99
+    ;;
+esac
+EOF_TMUX
+  chmod +x "$tmp_dir/tmux"
+
+  output="$(
+    TMUX_CALL_LOG="$tmp_dir/calls" \
+      PATH="$tmp_dir:$PATH" \
+      AGENT_WORKSPACE_PATH="$REPO_ROOT" \
+      sh "$REPO_ROOT/scripts/image/remote-codex.sh" </dev/null
+  )"
+  calls="$(cat "$tmp_dir/calls")"
+
+  assert_contains "$output" "agent-remote: started Codex session 'codex'"
+  assert_contains "$calls" "has-session -t codex"
+  assert_contains "$calls" "new-session -d -s codex"
+  assert_not_contains "$calls" "attach-session"
 )
 
 test_ssh_runtime_generation() (
@@ -1255,6 +1736,56 @@ test_stdio_target_uses_podman_rootfs() (
   assert_not_contains "$output" "sha256:unused"
 )
 
+test_remote_base_container_uses_stable_pod() (
+  set -euo pipefail
+
+  local output
+  output="$(remote_base_container_args_for)"
+
+  assert_contains "$output" "--name"
+  assert_contains "$output" "agent-remote-test-runtime"
+  assert_contains "$output" "--replace"
+  assert_contains "$output" "-d"
+  assert_contains "$output" "--pod"
+  assert_contains "$output" "agent-remote-test"
+  assert_not_contains "$output" "--rm"
+)
+
+test_remote_firecracker_base_container_skips_pod() (
+  set -euo pipefail
+
+  local output
+  output="$(remote_base_container_args_for firecracker-host)"
+
+  assert_contains "$output" "--name"
+  assert_contains "$output" "agent-remote-test-runtime"
+  assert_contains "$output" "--replace"
+  assert_contains "$output" "-d"
+  assert_contains "$output" "--privileged"
+  assert_contains "$output" "--cap-add=NET_ADMIN"
+  assert_contains "$output" "--security-opt=label=disable"
+  assert_not_contains "$output" "--pod"
+  assert_not_contains "$output" "--rm"
+)
+
+test_remote_target_uses_entrypoint() (
+  set -euo pipefail
+
+  local output
+  output="$(remote_target_args_for)"
+
+  assert_contains "$output" "AGENT_REMOTE_STATE_DIR=/run/agent-remote"
+  assert_contains "$output" "AGENT_WORKSPACE_PATH=/workspace"
+  assert_contains "$output" "--entrypoint"
+  assert_contains "$output" "/bin/agent-remote-entrypoint"
+  assert_contains "$output" "--rootfs"
+  assert_contains "$output" "/tmp/rootfs:O"
+  assert_not_contains "$output" "-i"
+  assert_not_contains "$output" "-t"
+  assert_not_contains "$output" "/bin/codex"
+  assert_not_contains "$output" "sha256:unused"
+)
+
 test_path_guard_excludes_privileged_sudo() (
   set -euo pipefail
 
@@ -1263,6 +1794,18 @@ test_path_guard_excludes_privileged_sudo() (
 
   assert_not_contains "$output" "sudo ->"
   assert_not_contains "$output" "sudoedit ->"
+)
+
+test_firecracker_path_guard_wraps_podman() (
+  set -euo pipefail
+
+  local output
+
+  output="$(path_guard_entries_for)"
+  assert_not_contains "$output" "podman ->"
+
+  output="$(path_guard_entries_for firecracker-host)"
+  assert_contains "$output" "podman -> /bin/agent-firecracker-podman"
 )
 
 test_base_container_disables_sudo_by_default() (
@@ -1296,6 +1839,7 @@ test_base_container_uses_firecracker_host_profile() (
   output="$(base_container_args_for 0 firecracker-host)"
 
   assert_contains "$output" "--privileged"
+  assert_contains "$output" "--cap-add=NET_ADMIN"
   assert_contains "$output" "--security-opt=label=disable"
   assert_not_contains "$output" "--cap-drop=ALL"
   assert_not_contains "$output" "--security-opt=no-new-privileges"
@@ -1627,7 +2171,45 @@ codex_mount_args_for() (
 ' "${ARGS[@]}"
 )
 
-test_codex_workspace_config_alias_mount() (
+codex_project_mount_args_for() (
+  set -euo pipefail
+
+  local workspace_path="$1"
+  local cache_dir="$2"
+  local host_home="${3:-$workspace_path}"
+
+  split_csv_or_lines() {
+    local value="$1"
+    printf '%s
+' "$value" | tr ',' '
+' | sed '/^[[:space:]]*$/d'
+  }
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  HELPER_TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$HELPER_TMPDIR"' EXIT
+
+  HOST_HOME="$host_home"
+  PROJECT_ROOT="$workspace_path"
+  WORKSPACE_PATH="$workspace_path"
+  CACHE_DIR="$cache_dir"
+  CODEX_CONFIG=project
+  CODEX_AUTH_BASE="$cache_dir/auth"
+  unset CODEX_AUTH
+  Z_SUFFIX=""
+  ARGS=()
+
+  resolve_tool_config_roots
+  printf 'config_root=%s
+' "$CODEX_HOST_CONFIG"
+  mount_standard_engine codex
+
+  printf '%s
+' "${ARGS[@]}"
+)
+
+test_codex_config_mount_omits_workspace_alias() (
   set -euo pipefail
 
   local tmp_dir workspace config_root output
@@ -1641,12 +2223,178 @@ test_codex_workspace_config_alias_mount() (
   output="$(codex_mount_args_for "$workspace" "$config_root")"
 
   assert_contains "$output" "$config_root:/cache/.codex:rw"
-  assert_contains "$output" "$config_root:$workspace/.codex:rw"
-  [ -d "$workspace/.codex" ] || fail "expected codex workspace alias target to be created"
+  assert_not_contains "$output" "/cache/.codex/config.toml:ro"
+  assert_not_contains "$output" "$config_root:$workspace/.codex:rw"
+  assert_contains "$(cat "$config_root/config.toml")" 'mcp_oauth_credentials_store = "file"'
+  [ -w "$config_root/config.toml" ] || fail "expected generated Codex config to be writable"
+  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$workspace" >> "$config_root/config.toml"
+  assert_contains "$(cat "$config_root/config.toml")" 'trust_level = "trusted"'
+  [ ! -e "$workspace/.codex" ] || fail "expected codex workspace alias target to be absent"
 )
 
 
-test_codex_workspace_config_alias_mount_skips_duplicate_path() (
+test_codex_project_config_mount_uses_stable_runtime_home() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir output config_root
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  cache_dir="$tmp_dir/cache"
+  mkdir -p "$workspace" "$cache_dir"
+
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir")"
+  config_root="$(printf '%s
+' "$output" | awk -F= '/^config_root=/{print $2; exit}')"
+
+  assert_contains "$output" "config_root=$workspace/.codex"
+  assert_contains "$output" "CODEX_HOME=/cache/.codex"
+  assert_contains "$output" "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$workspace/.codex"
+  assert_contains "$output" "$workspace/.codex:/cache/.codex:rw"
+  assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
+  [ -d "$config_root/sessions" ] || mkdir -p "$config_root/sessions"
+  [ -d "$config_root" ] || fail "expected project-local Codex home to be created"
+  [ -f "$config_root/config.toml" ] || fail "expected writable Codex runtime config mountpoint"
+  [ -f "$workspace/.agent-sandbox/codex/managed_config.toml" ] || fail "expected project managed config to be created"
+)
+
+test_codex_rollout_path_migration_rewrites_state_db() (
+  set -euo pipefail
+
+  local tmp_dir source_home codex_home state_db output rows
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  source_home="$tmp_dir/source %_ home"
+  codex_home="$tmp_dir/canonical home"
+  state_db="$codex_home/state_5.sqlite"
+  mkdir -p "$source_home" "$codex_home"
+
+  CODEX_TEST_DB="$state_db" \
+    CODEX_TEST_SOURCE_HOME="$source_home" \
+    bun --eval '
+      import { Database } from "bun:sqlite";
+      const db = new Database(process.env.CODEX_TEST_DB);
+      db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)");
+      const insert = db.query("INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)");
+      insert.run("active", `${process.env.CODEX_TEST_SOURCE_HOME}/sessions/2026/08/21/active.jsonl`);
+      insert.run("archived", `${process.env.CODEX_TEST_SOURCE_HOME}/archived_sessions/archived.jsonl`);
+      insert.run("external", "/other/codex/sessions/external.jsonl");
+      db.close(true);
+    '
+
+  output="$(
+    AGENT_CODEX_ROLLOUT_SOURCE_HOME="$source_home" \
+      CODEX_HOME="$codex_home" \
+      bun "$REPO_ROOT/scripts/image/codex-state-migrate.ts" 2>&1
+  )"
+  assert_contains "$output" "migrated 2 Codex rollout paths from $source_home to $codex_home"
+
+  rows="$(
+    CODEX_TEST_DB="$state_db" bun --eval '
+      import { Database } from "bun:sqlite";
+      const db = new Database(process.env.CODEX_TEST_DB, { readonly: true });
+      console.log(JSON.stringify(db.query("SELECT id, rollout_path FROM threads ORDER BY id").all()));
+      db.close(true);
+    '
+  )"
+  assert_contains "$rows" "$codex_home/sessions/2026/08/21/active.jsonl"
+  assert_contains "$rows" "$codex_home/archived_sessions/archived.jsonl"
+  assert_contains "$rows" '"/other/codex/sessions/external.jsonl"'
+  assert_not_contains "$rows" "$source_home/sessions"
+
+  output="$(
+    AGENT_CODEX_ROLLOUT_SOURCE_HOME="$source_home" \
+      CODEX_HOME="$codex_home" \
+      bun "$REPO_ROOT/scripts/image/codex-state-migrate.ts" 2>&1
+  )"
+  [ -z "$output" ] || fail "expected an idempotent Codex rollout path migration"
+)
+
+test_codex_project_managed_config_is_seeded_from_host() (
+  set -euo pipefail
+
+  local tmp_dir workspace host_home cache_dir output managed_config runtime_config
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  host_home="$tmp_dir/host"
+  cache_dir="$tmp_dir/cache"
+  mkdir -p "$workspace" "$host_home/.codex" "$cache_dir"
+  printf 'model = "host-model"\n' > "$host_home/.codex/config.toml"
+
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$host_home")"
+  managed_config="$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")"
+  runtime_config="$(cat "$workspace/.codex/config.toml")"
+
+  assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
+  assert_contains "$managed_config" 'mcp_oauth_credentials_store = "file"'
+  assert_contains "$managed_config" 'model = "host-model"'
+  assert_contains "$runtime_config" 'mcp_oauth_credentials_store = "file"'
+  assert_not_contains "$runtime_config" 'model = "host-model"'
+)
+
+test_codex_project_state_migrates_cache_sessions_without_clobbering() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir scope_key legacy_root output marker
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  cache_dir="$tmp_dir/cache"
+  scope_key="$(printf '%s' "$workspace" | sha256sum | awk '{print substr($1,1,16)}')"
+  legacy_root="$cache_dir/project-config/codex/$scope_key"
+  marker="$workspace/.agent-sandbox/codex/cache-state-migration-v1"
+  mkdir -p "$workspace/.codex/sessions/2026/01/01" "$legacy_root/sessions/2026/01/01" "$legacy_root/archived_sessions"
+  printf 'project-copy\n' > "$workspace/.codex/sessions/2026/01/01/existing.jsonl"
+  printf 'cache-copy\n' > "$legacy_root/sessions/2026/01/01/existing.jsonl"
+  printf 'new-session\n' > "$legacy_root/sessions/2026/01/01/new.jsonl"
+  printf 'archived\n' > "$legacy_root/archived_sessions/archived.jsonl"
+  printf 'history\n' > "$legacy_root/history.jsonl"
+  printf 'sqlite\n' > "$legacy_root/state_5.sqlite"
+  printf 'model = "cache-model"\n' > "$legacy_root/config.toml"
+
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" 2>&1)"
+
+  assert_contains "$output" "migrated 4 Codex state files into $workspace/.codex"
+  assert_contains "$(cat "$workspace/.codex/sessions/2026/01/01/existing.jsonl")" 'project-copy'
+  assert_contains "$(cat "$workspace/.codex/sessions/2026/01/01/new.jsonl")" 'new-session'
+  assert_contains "$(cat "$workspace/.codex/archived_sessions/archived.jsonl")" 'archived'
+  assert_contains "$(cat "$workspace/.codex/history.jsonl")" 'history'
+  assert_contains "$(cat "$workspace/.codex/state_5.sqlite")" 'sqlite'
+  assert_contains "$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")" 'model = "cache-model"'
+  assert_contains "$(cat "$marker")" "$legacy_root"
+  [ -f "$legacy_root/sessions/2026/01/01/new.jsonl" ] || fail "expected legacy cache state to remain available for recovery"
+
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" 2>&1)"
+  assert_not_contains "$output" "migrated "
+)
+
+test_codex_project_home_rejects_symlink() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  cache_dir="$tmp_dir/cache"
+  mkdir -p "$workspace" "$cache_dir" "$tmp_dir/shared-codex"
+  ln -s "$tmp_dir/shared-codex" "$workspace/.codex"
+
+  set +e
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected symlinked project Codex home to fail"
+  assert_contains "$output" "project Codex home must be a real directory, not a symlink: $workspace/.codex"
+)
+
+test_codex_config_mount_handles_explicit_workspace_config_root() (
   set -euo pipefail
 
   local tmp_dir workspace output
@@ -1662,7 +2410,7 @@ test_codex_workspace_config_alias_mount_skips_duplicate_path() (
   assert_not_contains "$output" "$workspace/.codex:$workspace/.codex:rw"
 )
 
-test_codex_workspace_config_alias_mount_resolves_symlink_target() (
+test_codex_config_mount_ignores_workspace_symlink_alias() (
   set -euo pipefail
 
   local tmp_dir workspace config_root shared_config output
@@ -1678,7 +2426,7 @@ test_codex_workspace_config_alias_mount_resolves_symlink_target() (
   output="$(codex_mount_args_for "$workspace" "$config_root")"
 
   assert_contains "$output" "$config_root:/cache/.codex:rw"
-  assert_contains "$output" "$config_root:$shared_config:rw"
+  assert_not_contains "$output" "$config_root:$shared_config:rw"
   assert_not_contains "$output" "$config_root:$workspace/.codex:rw"
 )
 
@@ -1701,6 +2449,49 @@ test_codex_config_dir_requires_write_access() (
 
   [ "$status" -ne 0 ] || fail "expected unreadable config dir to fail"
   assert_contains "$output" "config directory for codex must be readable, writable, and searchable: $config_root"
+)
+
+test_codex_config_file_requires_write_access() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root config_file output status
+  tmp_dir="$(mktemp -d)"
+  trap 'chmod u+rw "$config_file" 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  config_file="$config_root/config.toml"
+  mkdir -p "$workspace" "$config_root"
+  : > "$config_file"
+  chmod a-w "$config_file"
+
+  set +e
+  output="$(codex_mount_args_for "$workspace" "$config_root" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected read-only Codex config file to fail"
+  assert_contains "$output" "config file for codex must be readable and writable: $config_file"
+)
+
+test_codex_api_key_config_remains_writable() (
+  set -euo pipefail
+
+  local tmp_dir workspace config_root output config
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  config_root="$tmp_dir/codex-home"
+  mkdir -p "$workspace" "$config_root"
+
+  output="$(OPENAI_API_KEY=test-key OPENAI_BASE_URL=https://example.invalid/v1 codex_mount_args_for "$workspace" "$config_root")"
+  config="$(cat "$config_root/config.toml")"
+
+  assert_not_contains "$output" "/cache/.codex/config.toml:ro"
+  assert_contains "$config" 'mcp_oauth_credentials_store = "file"'
+  assert_contains "$config" 'openai_base_url = "https://example.invalid/v1"'
+  [ -w "$config_root/config.toml" ] || fail "expected API-key Codex config to remain writable"
 )
 
 test_codex_auth_file_requires_read_access() (
@@ -1736,6 +2527,24 @@ test_image_includes_openssh() (
   rootfs_file="$(cat "$REPO_ROOT/bin/lib/rootfs.sh")"
 
   assert_contains "$image_file" "pkgs.openssh"
+  assert_contains "$image_file" "pkgs.tmux"
+  assert_contains "$image_file" "remoteScripts"
+  assert_contains "$image_file" "agent-remote-entrypoint"
+  assert_contains "$image_file" "agent-remote-dispatch"
+  assert_contains "$image_file" "agent-remote-shell"
+  assert_contains "$image_file" "agent-remote-codex"
+  assert_contains "$image_file" "firecrackerPodmanWrapper"
+  assert_contains "$image_file" "agent-firecracker-podman"
+  assert_contains "$image_file" 'podman_state=/cache/agent-firecracker-podman'
+  assert_contains "$image_file" 'env TMPDIR="$podman_tmpdir"'
+  assert_contains "$image_file" '--storage-driver vfs'
+  assert_contains "$image_file" '--root "$podman_root"'
+  assert_contains "$image_file" '--runroot "$podman_runroot"'
+  assert_contains "$image_file" '--network-config-dir "$podman_network_config"'
+  assert_contains "$image_file" 'chmod 1777 "$podman_tmpdir"'
+  assert_contains "$image_file" "containersPolicy"
+  assert_contains "$image_file" 'etc/containers/policy.json'
+  assert_contains "$image_file" 'chmod 1777 "$out/tmp" "$out/var/tmp"'
   assert_contains "$image_file" "pkgs.iproute2"
   assert_contains "$image_file" "sudoPackage = pkgs.sudo.overrideAttrs"
   assert_contains "$image_file" '"--without-pam"'
@@ -1757,7 +2566,10 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/run/agent-path-guard"'
   assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
+  assert_contains "$image_file" "var/tmp"
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=5"
   assert_contains "$rootfs_file" "run/agent-path-guard"
+  assert_contains "$rootfs_file" "var/tmp"
   assert_contains "$rootfs_file" "sys/fs/cgroup"
   assert_contains "$rootfs_file" "dev/net"
   assert_contains "$artifact_file" "prepare_rootfs_artifact"
@@ -1792,10 +2604,12 @@ main() {
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0
   run_test "host home fallbacks present" test_host_home_fallbacks_present
-  run_test "stable fetchTarball uses cached pin" test_stable_fetchtarball_uses_cached_pin
-  run_test "mutable channel fetchTarball refreshes stale pin" test_mutable_channel_fetchtarball_refreshes_stale_pin
+  run_test "stable fetchTarball uses lock" test_stable_fetchtarball_uses_lock
+  run_test "mutable channel fetchTarball uses lock" test_mutable_channel_fetchtarball_uses_lock
+  run_test "missing fetchTarball lock is created" test_missing_fetchtarball_lock_is_created
+  run_test "shell.nix NIX_PATH default receives explicit pkgs" test_shell_nix_nix_path_default_receives_explicit_pkgs
   run_test "symlinked shell stages resolved nix contract" test_symlinked_shell_stages_resolved_nix_contract
-  run_test "git wrapper policy" test_git_wrapper_policy
+  run_test "image uses standard git" test_image_uses_standard_git
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script
   run_test "bun latest lookup uses tool cache" test_bun_latest_lookup_uses_tool_cache
@@ -1804,6 +2618,19 @@ main() {
   run_test "workspace mounts for linked worktree override" test_workspace_mounts_for_linked_worktree_workspace_override
   run_test "config selectors are not passthrough env" test_config_selectors_are_not_passthrough_env
   run_test "ssh agent mount support" test_ssh_agent_mount_support
+  run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
+  run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
+  run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough
+  run_test "remote rejects broad bridges by default" test_remote_rejects_broad_bridges_by_default
+  run_test "remote forces safe helper defaults" test_remote_forces_safe_helper_defaults
+  run_test "remote defaults codex config to project" test_remote_defaults_codex_config_to_project
+  run_test "remote light bootstrap skips firecracker confirmation" test_remote_light_bootstrap_skips_firecracker_confirmation
+  run_test "remote requires tailscale auth before starting" test_remote_requires_tailscale_auth_before_starting
+  run_test "remote up preflights auth before artifacts" test_remote_up_preflights_auth_before_artifacts
+  run_test "remote pod has no published ports" test_remote_pod_has_no_published_ports
+  run_test "remote tailscale sidecar uses userspace pod network" test_remote_tailscale_sidecar_uses_userspace_pod_network
+  run_test "remote sessions text distinguishes live and transcripts" test_remote_sessions_text_distinguishes_live_and_transcripts
+  run_test "remote codex noninteractive starts without attach" test_remote_codex_noninteractive_starts_without_attach
   run_test "ssh runtime generation" test_ssh_runtime_generation
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
@@ -1814,7 +2641,11 @@ main() {
   run_test "runtime identity masks sudo by default" test_runtime_identity_masks_sudo_by_default
   run_test "runtime identity mounts sudo overlay when enabled" test_runtime_identity_mounts_sudo_overlay_when_enabled
   run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
+  run_test "remote base container uses stable pod" test_remote_base_container_uses_stable_pod
+  run_test "remote firecracker base container skips pod" test_remote_firecracker_base_container_skips_pod
+  run_test "remote target uses entrypoint" test_remote_target_uses_entrypoint
   run_test "path guard excludes privileged sudo" test_path_guard_excludes_privileged_sudo
+  run_test "firecracker path guard wraps podman" test_firecracker_path_guard_wraps_podman
   run_test "base container disables sudo by default" test_base_container_disables_sudo_by_default
   run_test "base container allows sudo when enabled" test_base_container_allows_sudo_when_enabled
   run_test "base container uses firecracker host profile" test_base_container_uses_firecracker_host_profile
@@ -1835,10 +2666,17 @@ main() {
   run_test "need run refuses materialized sudo shadow" test_need_run_refuses_materialized_sudo_shadow
   run_test "podman session ignores stale reused pid" test_container_api_does_not_kill_stale_reused_pid
   run_test "need clear commands" test_need_clear_commands
-  run_test "codex workspace config alias mount" test_codex_workspace_config_alias_mount
-  run_test "codex workspace config alias mount skips duplicate path" test_codex_workspace_config_alias_mount_skips_duplicate_path
-  run_test "codex workspace config alias mount resolves symlink target" test_codex_workspace_config_alias_mount_resolves_symlink_target
+  run_test "codex config mount omits workspace alias" test_codex_config_mount_omits_workspace_alias
+  run_test "codex project config mount uses stable runtime home" test_codex_project_config_mount_uses_stable_runtime_home
+  run_test "codex rollout path migration rewrites state db" test_codex_rollout_path_migration_rewrites_state_db
+  run_test "codex project managed config is seeded from host" test_codex_project_managed_config_is_seeded_from_host
+  run_test "codex project state migrates cache sessions without clobbering" test_codex_project_state_migrates_cache_sessions_without_clobbering
+  run_test "codex project home rejects symlink" test_codex_project_home_rejects_symlink
+  run_test "codex config mount handles explicit workspace config root" test_codex_config_mount_handles_explicit_workspace_config_root
+  run_test "codex config mount ignores workspace symlink alias" test_codex_config_mount_ignores_workspace_symlink_alias
   run_test "codex config dir requires write access" test_codex_config_dir_requires_write_access
+  run_test "codex config file requires write access" test_codex_config_file_requires_write_access
+  run_test "codex API key config remains writable" test_codex_api_key_config_remains_writable
   run_test "codex auth file requires read access" test_codex_auth_file_requires_read_access
   run_test "image includes openssh" test_image_includes_openssh
   run_test "need defaults to unstable nixpkgs" test_need_defaults_to_unstable_nixpkgs
