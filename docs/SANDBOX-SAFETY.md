@@ -85,9 +85,16 @@ That is materially tighter than mounting the developer's real Podman or Docker s
 
 ### 6. Host-side Nix tool expansion is now narrowed
 
-On-demand tool expansion no longer has to imply raw host Nix daemon access. The launcher can now start a narrow host-side helper worker that only materializes constrained installables and returns resulting store paths to the sandbox through a mounted request/response bridge.
+On-demand tool expansion does not imply raw host Nix daemon access. The launcher
+starts a narrow host-side helper that materializes constrained installables into
+host-owned, sandbox-scoped GC roots. It publishes a closure receipt through a
+separate read-only mount before returning a path through the writable request
+bridge.
 
-This is not as strong as a fully offline private store, but it is substantially tighter than giving the agent the full daemon socket while preserving host-store performance.
+The sandbox receives neither the root directory nor a retention operation.
+Helper or coordinator exit does not release admitted paths; foreground teardown
+does, while remote retention ends at `agent remote down`. Materialization fails
+if permanent rooting or receipt publication fails.
 
 ## What Our Sandbox Does Not Enforce
 

@@ -283,6 +283,12 @@ When `AGENT_REMOTE_ALLOW_CONTAINER_API` is not set, remote mode forces
 remote mode forces `AGENT_NEED_HELPER=0`. Explicit raw sockets, extra mounts,
 extra devices, and broad environment overrides still fail until opted in.
 
+Remote runtime artifacts and any explicitly enabled `need` outputs are retained
+by a host-owned lease under the remote state directory. The container receives
+only `/run/agent-runtime-receipts` read-only and the narrow helper bridge when
+enabled. `agent remote down` removes the lease after stopping the containers;
+ordinary launcher exit does not release it.
+
 Use explicit opt-ins only when the wider boundary is intentional:
 
 ```sh

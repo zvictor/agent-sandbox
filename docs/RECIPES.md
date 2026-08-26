@@ -96,6 +96,12 @@ need inject pnpm
 need inject jq
 ```
 
+Injected entries are launchers that revalidate the current runtime lease. The
+host retains admitted outputs until the outer sandbox is torn down, even if the
+helper or an inner coordinator exits. Inspect the host-issued read-only receipts
+under `/run/agent-runtime-receipts` when a workflow needs to verify the exact
+store paths and closure identities.
+
 Refresh the command index explicitly:
 
 ```sh

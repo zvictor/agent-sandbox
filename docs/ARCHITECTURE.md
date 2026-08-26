@@ -109,9 +109,21 @@ The launcher builds one runtime artifact for the selected backend:
 - `streamImage`: OCI image loaded into Docker via `copyToDockerDaemon`
 
 Cache strategy:
-- Nix outputs are persisted as GC roots under `AGENT_CACHE_DIR/gcroots`
+- cached Nix artifacts are registered at their final GC-root paths under `AGENT_CACHE_DIR/gcroots`
 - Docker runtime image IDs are cached under `AGENT_CACHE_DIR/images`
 - Podman mirror state can be cached under `AGENT_CACHE_DIR/rootfs-cache`
+
+Every sandbox also receives a host-owned runtime lease. The launcher roots the
+selected runtime artifact under the lease before starting the container and
+removes the lease after foreground sandbox teardown. Remote leases remain under
+the remote state directory until `agent remote down`. Roots are never mounted
+into the sandbox.
+
+The launcher publishes bounded JSON receipts at
+`/run/agent-runtime-receipts` through a read-only mount. A receipt identifies
+the lease, its top-level output paths, and every path in the retained Nix
+closure with its NAR hash, size, and references. Foreground launch also prunes
+leases whose owning launcher process no longer exists.
 
 Podman path:
 - requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`
@@ -142,11 +154,15 @@ There is no live bridge back to host direnv.
 
 When `AGENT_NEED_HELPER=1`, the launcher starts a narrow host-side worker that:
 - accepts only constrained installables
-- materializes them in the host store
-- returns resulting paths through a mounted request/response bridge
-- keeps `need inject` symlinks in a project-scoped bin directory by default
+- materializes them directly into permanent roots owned by the current runtime lease
+- publishes a read-only closure receipt before returning resulting paths
+- returns paths through a separate writable request/response bridge
+- keeps `need inject` lease-checking launchers in a project-scoped bin directory by default
 
-This is the main way the sandbox supports missing tools without exposing the raw Nix daemon socket.
+The helper inactivity timeout affects request availability, not retention. Once
+admitted, an output remains rooted after the helper or coordinator exits and is
+released only with the outer sandbox lease. The helper never causes the raw Nix
+daemon socket or writable GC-root state to be mounted into the sandbox.
 
 ### Podman Session API
 
@@ -167,6 +183,7 @@ The final container typically receives:
 - when the workspace is inside a git repository, the git top-level plus any separate git metadata directories (`--git-common-dir` and `--absolute-git-dir`) needed to make linked worktrees resolve correctly
 - `/cache` for tool installs and helper state
 - `/nix/store` read-only when present
+- `/run/agent-runtime-receipts` read-only; the host-only lease roots are not mounted
 - selected tool config directories
 - optional helper bridges
 - optional container API sockets

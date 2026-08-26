@@ -470,7 +470,7 @@ auto-update behavior.
 ## Performance Model
 
 The launcher is optimized around two caches:
-- Nix build outputs are stored as GC roots under `AGENT_CACHE_DIR/gcroots`
+- reusable Nix artifacts are rooted under `AGENT_CACHE_DIR/gcroots`, while each running sandbox also owns a separate lifetime lease
 - installed Bun tool packages live under `AGENT_CACHE_DIR/tools/<tool>`
 
 Warm-path behavior is typically:
@@ -500,7 +500,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_PROJECT_NIX_DIR`: package contract directory; defaults to `$AGENT_PROJECT_ROOT/nix`
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake source
 - `AGENT_RUNTIME`: `podman` or `docker`; defaults to auto-detect
-- `AGENT_CACHE_DIR`: cache directory for GC roots, tool installs, and helper temp files
+- `AGENT_CACHE_DIR`: cache directory for GC roots, runtime leases, tool installs, and helper bridge files
 - `AGENT_HOST_HOME`: host home used for discovering `~/.codex`, `~/.claude`, `~/.omp`, `.gitconfig`, and similar paths
 
 ### Build, Cache, and Logs
@@ -579,7 +579,7 @@ Those paths use the host-backed Nix helper when possible, so the agent can keep 
 - `AGENT_NEED_TIMEOUT`: request timeout in seconds for `need`; default `600`
 - `AGENT_NEED_BOOTSTRAP_INDEX=1|0`: automatically start a background `need update-index` on first shell startup when the local command index is missing; default `1`
 
-When enabled, the launcher starts a small host-side helper worker in the background and mounts a request/response bridge into the sandbox. Inside the sandbox, use:
+When enabled, the launcher starts a small host-side helper worker in the background and mounts a request/response bridge into the sandbox. The raw Nix daemon socket remains unavailable unless `AGENT_ALLOW_NIX_DAEMON_SOCKET=1` is explicitly set. Inside the sandbox, use:
 
 ```sh
 need update-index
@@ -590,9 +590,11 @@ need clear
 need clear --all
 ```
 
-The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs, using the host Nix store, without exposing the raw daemon socket to the running agent. Bare `need <command>` lookups use `nixos-unstable` by default; use `nixpkgs#...` when you explicitly want the stable channel.
+The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs. Every output is rooted by a host-owned runtime lease before it is returned. The root directory is not mounted into the sandbox. Instead, the sandbox receives `/run/agent-runtime-receipts` as a read-only mount containing the lease identity, output paths, and complete closure identities. Bare `need <command>` lookups use `nixos-unstable` by default; use `nixpkgs#...` when you explicitly want the stable channel.
 
-`need inject` writes ambient command symlinks to a project-scoped bin directory by default, so an injected tool in one checkout does not shadow another project's shell. `need clear` removes the current project's injected symlinks, `need clear --legacy` removes the old shared injected bin directory, and `need clear --all` removes the whole `need` cache for the current tool cache.
+The lease outlives the helper's inactivity timeout and inner coordinator restarts. Foreground leases are removed when the outer sandbox exits; stale leases from killed launchers are pruned on the next launch. Remote leases remain until `agent remote down`.
+
+`need inject` writes lease-checking command launchers to a project-scoped bin directory by default, so an injected tool in one checkout does not shadow another project's shell or bypass admission in a later sandbox. `need clear` removes the current project's injected launchers, `need clear --legacy` removes the old shared injected bin directory, and `need clear --all` removes the whole `need` cache for the current tool cache. These cache operations do not expose or mutate host lease roots.
 
 If the nix command index is missing, the sandbox now starts downloading it in the background when the agent boots. That bootstrap is non-blocking, so the first interaction still runs immediately; `need update-index` remains available as the explicit refresh command.
 

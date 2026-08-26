@@ -246,7 +246,7 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 | `AGENT_NEED_BOOTSTRAP_INDEX` | `1` | Starts background `need update-index` when needed |
 | `AGENT_NEED_INDEX_URL` | nix-index release URL | Override the downloaded nix-index database |
 | `AGENT_NEED_CACHE_DIR` | `$XDG_CACHE_HOME/need` | Cache root for helper materializations |
-| `AGENT_NEED_TOOLS_DIR` | project-scoped bin dir under `$XDG_CACHE_HOME/need` | Symlink target dir for `need inject` |
+| `AGENT_NEED_TOOLS_DIR` | project-scoped bin dir under `$XDG_CACHE_HOME/need` | Launcher directory for `need inject` |
 | `AGENT_NEED_INDEX_DIR` | nix-index cache dir | Location of the local command index |
 
 Common commands:
@@ -264,6 +264,18 @@ need clear --all
 Bare `need <command>` lookups use `nixos-unstable` by default. Use `nixpkgs#...` when you explicitly want the stable channel, and keep using any other explicit ref exactly as passed.
 
 `need inject` is project-scoped by default. `need clear` removes only the current injected-bin scope, `need clear --legacy` removes the old shared injected-bin directory, and `need clear --all` removes all `need` cache state under `AGENT_NEED_CACHE_DIR`.
+
+Each launch has a host-owned runtime lease. Its roots remain outside the
+container; `/run/agent-runtime-receipts` is mounted read-only and contains the
+lease manifest plus closure receipts. `AGENT_RUNTIME_LEASE_ID`,
+`AGENT_RUNTIME_RECEIPTS_DIR`, and `AGENT_NEED_HELPER_DIR` are runtime-owned and
+cannot be overridden through `AGENT_EXTRA_ENV` or host passthrough.
+
+Materialization succeeds only after Nix has created a permanent root at its
+final pathname and the helper has published a receipt. Cache entries from a
+different lease are rejected. `AGENT_NEED_HELPER_TTL` controls only how long
+the request worker waits while idle; it does not limit an admitted output's
+retention.
 
 The sandbox also prefers compatibility shims over sandbox-specific instructions when possible:
 - `nix shell <installable> --command ...`
