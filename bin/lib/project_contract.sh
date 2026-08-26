@@ -44,20 +44,6 @@ resolve_project_contract_nix_dir() {
   fi
 }
 
-is_mutable_fetchtarball_url() {
-  case "$1" in
-    http://nixos.org/channels/*/nixexprs.tar.xz|https://nixos.org/channels/*/nixexprs.tar.xz)
-      return 0
-      ;;
-    http://channels.nixos.org/*/nixexprs.tar.xz|https://channels.nixos.org/*/nixexprs.tar.xz)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 normalize_project_contract_path() {
   local rel_path="$1"
 
@@ -131,9 +117,12 @@ pin_shell_fetchtarball() {
   local content=""
   local url=""
   local hash=""
-  local cache_key=""
-  local cache_file=""
-  local cacheable="1"
+  local project_key=""
+  local url_key=""
+  local lock_file=""
+  local lock_tmp=""
+  local locked_url=""
+  local locked_hash=""
   local pinned_file="$target_dir/.agent-sandbox-pinned-nixpkgs.json"
 
   content="$(cat "$shell_file")"
@@ -143,34 +132,45 @@ pin_shell_fetchtarball() {
     return 0
   fi
 
-  cache_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
-  cache_file="${HOME}/.cache/agent-sandbox/pinned-nixpkgs-${cache_key}.json"
-
-  if is_mutable_fetchtarball_url "$url"; then
-    cacheable="0"
+  if [ -z "${CACHE_DIR:-}" ] || [ -z "${PROJECT_ROOT:-}" ]; then
+    echo "[agent] ERROR: fetchTarball pinning requires CACHE_DIR and PROJECT_ROOT" >&2
+    return 1
   fi
 
-  if [ "$cacheable" = "1" ] && [ -f "$cache_file" ]; then
-    cp "$cache_file" "$pinned_file"
-    echo "[agent] pinned fetchTarball for shell.nix (cached): $url" >&2
+  project_key="$(printf '%s' "$PROJECT_ROOT" | sha256sum | awk '{print $1}')"
+  url_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  lock_file="$CACHE_DIR/project-contracts/$project_key/pinned-nixpkgs-$url_key.json"
+
+  if [ -f "$lock_file" ]; then
+    locked_url="$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$lock_file")"
+    locked_hash="$(sed -n 's/.*"sha256":"\([^"]*\)".*/\1/p' "$lock_file")"
+    if [ "$locked_url" != "$url" ] || [ -z "$locked_hash" ]; then
+      echo "[agent] ERROR: invalid fetchTarball lock; remove $lock_file and retry" >&2
+      return 1
+    fi
+
+    cp "$lock_file" "$pinned_file"
+    echo "[agent] pinned fetchTarball for shell.nix (locked; remove $lock_file to refresh): $url" >&2
     return 0
   fi
 
-  hash="$(nix-prefetch-url --unpack "$url" 2>/dev/null)"
+  hash="$(nix-prefetch-url --option tarball-ttl 0 --unpack "$url" 2>/dev/null)"
 
   if [ -z "$hash" ]; then
-    echo "[agent] warning: could not prefetch $url, shell.nix may need --impure" >&2
-    return 0
+    echo "[agent] ERROR: could not create fetchTarball lock for $url" >&2
+    return 1
   fi
 
-  printf '{"url":"%s","sha256":"%s"}\n' "$url" "$hash" > "$pinned_file"
-  if [ "$cacheable" = "1" ]; then
-    mkdir -p "$(dirname "$cache_file")"
-    cp "$pinned_file" "$cache_file"
-    echo "[agent] pinned fetchTarball for shell.nix: $url" >&2
-  else
-    echo "[agent] pinned fetchTarball for shell.nix (refreshed mutable URL): $url" >&2
+  mkdir -p "$(dirname "$lock_file")"
+  lock_tmp="$(mktemp "${lock_file}.tmp.XXXXXX")"
+  if ! printf '{"url":"%s","sha256":"%s"}\n' "$url" "$hash" > "$lock_tmp"; then
+    rm -f "$lock_tmp"
+    echo "[agent] ERROR: could not write fetchTarball lock at $lock_file" >&2
+    return 1
   fi
+  mv "$lock_tmp" "$lock_file"
+  cp "$lock_file" "$pinned_file"
+  echo "[agent] pinned fetchTarball for shell.nix (created lock $lock_file): $url" >&2
 }
 
 stage_project_contract_input() {

@@ -56,16 +56,13 @@ let
     else
       pkgs;
 
-  # Pass project's own nixpkgs when available, otherwise let shell.nix use its default
-  shellArgs =
-    if nixpkgsLocked != null || pinnedNixpkgsData != null then { pkgs = projectOwnPkgs; }
-    else { };
-
   fromShell =
     let
       shellExpr = import shellPath;
+      # Pure flake evaluation cannot resolve defaults such as import <nixpkgs>.
+      # The project contract always receives the nixpkgs instance resolved above.
       shellDrv =
-        if builtins.isFunction shellExpr then shellExpr shellArgs else shellExpr;
+        if builtins.isFunction shellExpr then shellExpr { pkgs = projectOwnPkgs; } else shellExpr;
       fromBuildInputs = shellDrv.buildInputs or [ ];
       fromNativeBuildInputs = shellDrv.nativeBuildInputs or [ ];
       fromPackagesAttr = shellDrv.packages or [ ];

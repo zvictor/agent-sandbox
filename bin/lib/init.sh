@@ -157,6 +157,7 @@ print_init_and_exit() {
   resolve_project_paths
   resolve_project_config_file
   resolve_host_home
+  prepare_cache_dirs
   resolve_tool_config_roots
 
   target_file="$(resolve_project_config_target_file)"

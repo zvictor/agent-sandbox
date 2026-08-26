@@ -427,8 +427,8 @@ print_doctor_and_exit() {
   resolve_sandbox_flake
   resolve_lock_args
   resolve_host_home
-  prepare_project_contract_input
   prepare_cache_dirs
+  prepare_project_contract_input
   resolve_direnv_nix_path
   resolve_container_api_mode
   resolve_need_helper_mode

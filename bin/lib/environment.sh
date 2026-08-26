@@ -13,7 +13,7 @@ trim_whitespace() {
 
 is_project_config_key_allowed() {
   case "$1" in
-    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|CCHV_*|TESTCONTAINERS_*|GIT_ALLOW|OPENAI_*|ANTHROPIC_*)
+    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|CCHV_*|TESTCONTAINERS_*|OPENAI_*|ANTHROPIC_*)
       return 0
       ;;
     *)
@@ -419,6 +419,7 @@ prepare_tool_resolution_context() {
   resolve_project_paths
   load_project_config
   resolve_host_home
+  prepare_cache_dirs
   resolve_effective_tools_list
 }
 
@@ -536,7 +537,6 @@ bootstrap_environment() {
   resolve_sandbox_flake
   resolve_lock_args
   prepare_project_contract_input
-  prepare_cache_dirs
   resolve_direnv_nix_path
   prepare_dev_env_state
   prepare_project_store_input
