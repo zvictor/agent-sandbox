@@ -34,7 +34,7 @@ This keeps the outer sandbox but avoids wrapper-added bypass flags such as Codex
 
 ## Project-Scoped Codex Login
 
-Use this when you want sessions and config under the repo.
+Use this when you want sessions to travel with the current project.
 
 ```sh
 ./scripts/agent login codex work --config project
@@ -42,7 +42,9 @@ Use this when you want sessions and config under the repo.
 CODEX_CONFIG=project ./scripts/codex
 ```
 
-This keeps state under `$PROJECT_ROOT/.codex`.
+This keeps transcripts under `$PROJECT_ROOT/.codex/sessions`. Agent-sandbox
+stores the project-mode settings in
+`$PROJECT_ROOT/.agent-sandbox/codex/managed_config.toml`.
 
 ## One-Off Clean Run
 
@@ -157,18 +159,6 @@ Bootstrap the file:
 ```
 
 This writes `.agent-sandbox.env` unless you override `AGENT_PROJECT_CONFIG_FILE`.
-
-## Allow Full Git Temporarily
-
-By default, the sandbox Git wrapper protects the current repo's local state and still allows `git clone`.
-
-If you intentionally want unrestricted Git inside the sandbox:
-
-```sh
-GIT_ALLOW=1 ./scripts/codex
-```
-
-Use this narrowly. It removes one of the main guardrails.
 
 ## Raw Host Socket Escape Hatches
 

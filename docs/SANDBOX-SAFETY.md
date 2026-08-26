@@ -1,6 +1,6 @@
 # Sandbox Safety
 
-Updated: 2026-03-12
+Updated: 2026-08-16
 
 This document describes the safety properties of `agent-sandbox` as it exists in this repository today. It also compares those properties with the native safety models of the agent CLIs we run inside it.
 
@@ -22,10 +22,21 @@ Practically, this means agent-generated processes do not run in the host namespa
 `AGENT_SANDBOX_PROFILE=firecracker-host` is a separate host-control profile. It
 uses Linux rootful Podman through `sudo -n podman`, runs the container
 privileged with host user, cgroup, and network namespaces, mounts `/dev/kvm`,
-`/dev/net/tun`, and writable `/sys/fs/cgroup`, and enables in-container sudo.
-This profile exists for Firecracker host smoke workflows and should be treated
-as materially closer to running a privileged host tool than to the default
-sandbox.
+`/dev/net/tun`, grants `CAP_NET_ADMIN` to the host-UID command process for tap
+setup, mounts writable `/sys/fs/cgroup`, and enables in-container sudo.
+Inside that profile, the `podman` command is also routed through rootful sudo
+for local OCI image validation, using an isolated `vfs` store at
+`/cache/agent-firecracker-podman` with managed network definitions under the
+same state directory. This profile exists for Firecracker host smoke and
+image-validation workflows and should be treated as materially closer to
+running a privileged host tool than to the default sandbox.
+
+The outer container can run long-lived processes, but individual agent command
+execution surfaces may clean up child processes when a command returns. Do not
+model proof gates as `start` in one command and `health` in a later command
+unless the process is owned by an explicit durable service. Keep local daemon,
+VM, health-check, and cleanup phases under one foreground owner, or use the
+remote tmux-backed sandbox lifecycle when split-phase inspection is required.
 
 ### 2. Filesystem scope is explicit, not ambient
 
@@ -50,16 +61,7 @@ This reduces accidental invalidation and limits what the Nix evaluation path can
 
 The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` mode, the launcher asks host `direnv` for the workspace environment at startup, caches the filtered result, and injects the resulting variables into the container. The running container does not keep a live bridge back to host `direnv`; restarting the session is the refresh path. That avoids granting the agent general access to the host Nix daemon just to get `.envrc` behavior.
 
-### 4. Git writes are blocked by default inside the image
-
-The base image replaces `git` with a wrapper that allows common read-only subcommands and blocks subcommands that can mutate the current repository's local state unless `GIT_ALLOW=1` is set. `git clone` is the one explicit exception, because it creates a separate checkout instead of mutating the current repository's index, refs, or config. See:
-
-- [`image.nix`](../nix/image.nix)
-- [`README.md`](../README.md)
-
-This is useful because many agent mistakes show up first as destructive Git operations.
-
-### 5. Tool launch defaults are centralized
+### 4. Tool launch defaults are centralized
 
 The wrapper layer is opinionated about which native agent safety features stay enabled:
 
@@ -75,13 +77,13 @@ See:
 
 This matters because for some tools our container becomes the primary safety boundary once the tool's own prompts are bypassed.
 
-### 6. Container API access is split into safe and unsafe modes
+### 5. Container API access is split into safe and unsafe modes
 
 The default launcher behavior is still no host container API access. For Testcontainers-style workflows, the preferred high-level setting is now `AGENT_CONTAINER_API=auto`, which resolves to `podman-session` when host Podman is available. `podman-session` starts a dedicated rootless Podman API service with state under `AGENT_CACHE_DIR` and mounts only that session socket into the sandbox.
 
 That is materially tighter than mounting the developer's real Podman or Docker socket directly, while still preserving a devbox-like container workflow.
 
-### 7. Host-side Nix tool expansion is now narrowed
+### 6. Host-side Nix tool expansion is now narrowed
 
 On-demand tool expansion no longer has to imply raw host Nix daemon access. The launcher can now start a narrow host-side helper worker that only materializes constrained installables and returns resulting store paths to the sandbox through a mounted request/response bridge.
 
@@ -93,7 +95,7 @@ These are the most important caveats.
 
 ### 1. The repo itself is not protected from writes
 
-The mounted workspace is read-write. The sandbox protects the rest of the host better than a naked host run, but it does not protect the checked-out repository from edits, deletions, or generated files.
+The mounted workspace is read-write. The sandbox protects the rest of the host better than a naked host run, but it does not protect the checked-out repository from edits, deletions, generated files, or mutating Git commands. The image provides standard Git without a command allowlist.
 
 ### 2. Outbound network is generally allowed
 
@@ -107,7 +109,7 @@ So this runtime is not equivalent to the built-in network restrictions offered b
 
 ### 3. Tool config mounts are writable
 
-For `codex`, `claude`, and `opencode`, the host config roots are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
+For project-scoped `codex`, the workspace's `.codex` is the writable Codex home and `.agent-sandbox/codex` supplies the managed settings for later launches. Host, explicit, and fresh Codex roots, plus the `claude` and `opencode` roots, are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
 
 This is convenient, but it means tokens, auth files, and tool settings are inside the blast radius of the agent.
 
@@ -158,7 +160,7 @@ For the current implementation, the runtime is best described like this:
 | Workspace protection from agent writes | Weak |
 | Credential isolation | Mixed |
 | Outbound network isolation | Weak |
-| Protection from accidental Git damage | Moderate |
+| Protection from accidental Git damage | None; standard Git is unrestricted |
 | Protection from hostile code with access to raw host sockets | Weak |
 | Protection from hostile code with `podman-session` access | Moderate |
 | Protection from hostile code with narrow host Nix helper access | Moderate |

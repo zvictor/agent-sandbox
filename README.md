@@ -92,8 +92,14 @@ That profile supports only Linux rootful Podman through `sudo -n podman`.
 It preflights KVM, `/dev/net/tun`, writable cgroup v2, root workspace
 write/chown, and non-interactive sudo before launch. The container runs
 privileged with host user, cgroup, and network namespaces while the agent
-process stays on the host UID/GID; privileged Firecracker operations go
-through in-container `sudo`. Run the launcher itself as the operator user;
+process stays on the host UID/GID and has `CAP_NET_ADMIN` for tap setup;
+other privileged Firecracker operations go through in-container `sudo`. Inside
+this profile, the sandbox PATH maps
+`podman` to rootful Podman with an isolated `vfs` store at
+`/cache/agent-firecracker-podman` and managed network definitions under that
+same state directory, so local OCI image build/run validation does not depend
+on rootless `/etc/subuid` or `/etc/subgid` mappings, nested overlay support, or
+mutable `/etc/containers` state. Run the launcher itself as the operator user;
 `sudo ./scripts/codex` is rejected because it changes host auth/config and
 cache ownership semantics.
 
@@ -154,6 +160,8 @@ pkgs.mkShell {
 }
 ```
 
+The launcher always supplies `pkgs` when it evaluates this contract. Defaults such as `import <nixpkgs> {}` remain useful for direct `nix-shell` and direnv use, but are not evaluated by the sandbox's pure flake build.
+
 Use `nix/packages.nix` if your `shell.nix` is complex or relies on evaluation patterns that do not import cleanly.
 
 ### No Nix files present
@@ -174,6 +182,8 @@ When the launcher stages project package inputs for Nix evaluation, it copies on
 - extra project files listed in `AGENT_PROJECT_CONTRACT_FILES`
 
 Changes outside that set do not invalidate the sandbox package input.
+
+When `shell.nix` uses the string form `fetchTarball "..."` and no `flake.lock` is present, the launcher resolves it once and stores a project-scoped pin under `AGENT_CACHE_DIR/project-contracts`. Later starts reuse that pin without checking the URL, including mutable Nix channel URLs. The startup log prints the exact pin path; remove that file when you want to update the tarball.
 
 If your Nix contract depends on files outside the selected `nix/` directory, list them explicitly in `nix/agent-sandbox.paths`:
 
@@ -207,7 +217,7 @@ CODEX_CONFIG=project
 CODEX_AUTH=work
 ```
 
-Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool auth/config keys, `TESTCONTAINERS_*`, and `GIT_ALLOW`.
+Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool auth/config keys, and `TESTCONTAINERS_*`.
 
 Bootstrap the file with:
 
@@ -232,7 +242,8 @@ For SSH operations under Codex's native sandbox, the launcher exposes the sandbo
 - Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.
 - Fastest Codex workflow: run `./scripts/codex` after `./scripts/agent init`.
 - Session viewer: run `./scripts/viewer` or `agent viewer` to start Claude Code History Viewer server mode on `127.0.0.1:3727`; the launcher prints the authenticated URL.
-- Repo-local state: set `CODEX_CONFIG=project`, `CLAUDE_CONFIG=project`, or `OPENCODE_CONFIG=project`.
+- Remote sandbox: run `./scripts/agent remote up` from a worktree, then `./scripts/agent remote codex` to use a durable tmux-backed Codex session that can also be reached from a phone over Tailscale/SSH. See [docs/REMOTE.md](docs/REMOTE.md).
+- Project-scoped state: set `CODEX_CONFIG=project`, `CLAUDE_CONFIG=project`, or `OPENCODE_CONFIG=project`.
 - Ephemeral run: set `<TOOL>_CONFIG=fresh`.
 - Project-local login: `./scripts/agent login codex work --config project`.
 - Missing command: run `need <command>` or `need run <command> -- <command> ...`.
@@ -246,7 +257,7 @@ More complete workflows live in [docs/RECIPES.md](docs/RECIPES.md).
 You can rely on these behaviors:
 - The selected workspace is mounted read-write at the same absolute path inside the sandbox.
 - Tool config mounts are explicit rather than ambient.
-- The current repo's Git state is protected from common mutating commands by default; `git clone` is the one explicit exception.
+- The standard Git executable is available, including commands that update the index, refs, and repository configuration.
 - Container-local `sudo` is disabled by default and is enabled only with `AGENT_ALLOW_SUDO=1`.
 - `agent doctor` uses the same runtime resolution rules as real execution.
 - Podman runs the rootfs artifact directly; Docker runs the OCI image artifact.
@@ -384,7 +395,7 @@ Use `agent sessions codex` to list the Codex sessions visible through the curren
 This is the fastest way to confirm what `codex resume <session>` will be able to see:
 
 - `CODEX_CONFIG=host`: all sessions in the host `~/.codex`
-- `CODEX_CONFIG=project`: only sessions stored under `$PROJECT_ROOT/.codex`
+- `CODEX_CONFIG=project`: only sessions stored under `$PROJECT_ROOT/.codex/sessions`
 - `CODEX_CONFIG=fresh`: no prior sessions are visible
 - `CODEX_CONFIG=/path/to/.codex`: sessions from that exact config root
 
@@ -392,9 +403,9 @@ For `CODEX_CONFIG=project`, `agent sessions codex` treats the config root itself
 
 ## Tool Configuration Mounts
 
-The launcher mounts tool config directories into the container at the tools' normal home-relative locations.
+The launcher mounts tool config directories into the container at the tools' normal home-relative locations. Codex always sees its selected home at `/cache/.codex`, including when `CODEX_CONFIG=project`; keeping that runtime path stable preserves the absolute rollout paths in Codex's thread inventory. Project-mode state remains stored on the host under `$PROJECT_ROOT/.codex`, while settings live in `.agent-sandbox/codex/managed_config.toml` and are mounted read-only at `/etc/codex`. `.codex/config.toml` remains writable for Codex runtime metadata such as project trust. On first use, the managed config is seeded from the temporary cache-backed project config, an existing project config, or the host config, in that order. Project launches also repair thread-inventory paths written by the short-lived absolute workspace-home layout, allowing those sessions to be forked as well as resumed.
 
-- `codex`: host config root to container `~/.codex`
+- `codex`: selected host config root to `/cache/.codex`
 - `opencode`: host config root to container `~/.config/opencode`
 - `claude`: host config root to container `~/.claude`
 - `omp`: host `~/.omp` to container `~/.omp`
@@ -407,10 +418,12 @@ Tool-specific auth selection:
 
 Tool-specific config selection:
 - `CODEX_CONFIG=host`: use the host default `~/.codex`
-- `CODEX_CONFIG=project`: use `$PROJECT_ROOT/.codex`
+- `CODEX_CONFIG=project`: use `$PROJECT_ROOT/.codex`, with sessions at `$PROJECT_ROOT/.codex/sessions`
 - `CODEX_CONFIG=fresh`: create a clean temporary config dir for this run
 - `CODEX_CONFIG=/path/to/.codex`: use that exact host directory
 - `CLAUDE_CONFIG` and `OPENCODE_CONFIG` follow the same `host|project|fresh|<path>` model
+
+The first project-mode run imports non-conflicting sessions, archived sessions, history, and SQLite state from the temporary cache-backed implementation. The old cache directory is preserved for recovery and is no longer an active Codex home.
 
 Create a fresh named Codex login with:
 
@@ -433,27 +446,7 @@ For a fuller threat model and a comparison with each supported agent's native sa
 
 ### Git inside the sandbox
 
-The sandbox replaces `git` with a wrapper that blocks subcommands that can mutate the current repository's local state by default.
-
-One explicit exception exists:
-- `clone` is allowed, because it creates a separate checkout instead of mutating the current repository's index, refs, or config
-
-Allowed examples:
-- `clone`
-- `status`
-- `diff`
-- `log`
-- `show`
-- `ls-files`
-- `rev-parse`
-- `blame`
-- `grep`
-
-If you need unrestricted Git, set:
-
-```sh
-GIT_ALLOW=1
-```
+The sandbox provides the standard Git executable without a command allowlist. Commands such as `add`, `commit`, `branch`, `config`, and `reset` run normally against the read-write workspace.
 
 ### Agent package installation
 
@@ -531,7 +524,7 @@ AGENT_FORCE_REBUILD=1
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` environment snapshot for the project root before the container starts, caches the filtered result under `AGENT_CACHE_DIR`, and passes that environment into the sandbox at startup. There is no live host `direnv` bridge in the running container; if `.envrc` changes, restart the sandbox session to refresh the injected environment.
 
-When a dev environment exports `PATH`, the sandbox keeps safety wrappers such as `git`, `sh`, `nix`, `nix-shell`, and `need` first, then project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after the safety wrappers. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox guardrails.
+When a dev environment exports `PATH`, the sandbox keeps its base commands and compatibility wrappers (`git`, `sh`, `nix`, `nix-shell`, and `need`) first, then project-local paths and the dev-environment `PATH` before ambient `need inject` tools and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after those base commands. This prevents stale injected tools from shadowing the project's Nix shell while preserving the sandbox runtime behavior.
 
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input. If you need to force a specific `nixpkgs` tree for host-helper resolution, set `AGENT_DIRENV_NIX_PATH=/path/to/nixpkgs`.
 

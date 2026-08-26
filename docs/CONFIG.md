@@ -38,13 +38,12 @@ Existing environment variables always win over file values.
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
 | `AGENT_NEED_HELPER` | `1` | `0`, `1` | Enables or disables the narrow host-backed Nix helper |
 | `AGENT_CODEX_VERSION` | unset | exact npm version, `latest` | Pins the sandboxed `@openai/codex` package; unset or `latest` keeps auto-update behavior |
-| `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex config root |
+| `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex home; `project` uses `$AGENT_PROJECT_ROOT/.codex` |
 | `CLAUDE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Claude config root |
 | `OPENCODE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects OpenCode config root |
 | `CODEX_AUTH` | unset | slot name, file path | Overlays Codex credentials |
 | `CLAUDE_AUTH` | unset | slot name, file path | Overlays Claude credentials |
 | `OPENCODE_AUTH` | unset | slot name, file path | Overlays OpenCode credentials |
-| `GIT_ALLOW` | unset | `1` | Disables the sandbox Git guardrail |
 
 ## Runtime And Project Resolution
 
@@ -56,6 +55,8 @@ Existing environment variables always win over file values.
 | `AGENT_CACHE_DIR` | `$XDG_CACHE_HOME/agent-sandbox` or host-home fallback | Cache root for artifacts, helpers, and tool installs |
 | `AGENT_HOST_HOME` | host home fallback | Used for discovering config roots, `.gitconfig`, and auth bases |
 | `AGENT_PROJECT_CONTRACT_FILES` | unset | Extra project-relative files or directories staged for package evaluation |
+
+For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell.nix` is pinned once under `AGENT_CACHE_DIR/project-contracts`. The pin is reused without a network check on later launches. Remove the exact pin file reported in the startup log to resolve the URL again.
 
 ## Runtime Behavior
 
@@ -74,6 +75,35 @@ Existing environment variables always win over file values.
 | `AGENT_HELPER_TMPDIR` | `$AGENT_CACHE_DIR/tmp` | Temp directory for helper runs |
 | `AGENT_DEBUG` | `0` | Print resolved paths and execution details |
 
+## Remote Sandboxes
+
+Remote mode is documented in [REMOTE.md](REMOTE.md). It creates one durable
+Podman pod per worktree and exposes the sandbox through a Tailscale sidecar.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AGENT_REMOTE_NAME` | derived from worktree path | Stable remote endpoint name |
+| `AGENT_REMOTE_HOSTNAME` | `AGENT_REMOTE_NAME` | Tailscale hostname for the sidecar |
+| `AGENT_REMOTE_USER` | `codex` | SSH login user inside the runtime container |
+| `AGENT_REMOTE_AUTHORIZED_KEYS_FILE` | host `~/.ssh/authorized_keys` when present | Public keys allowed to SSH into the sandbox |
+| `AGENT_REMOTE_AUTHORIZED_KEY` | unset | Single public key allowed to SSH into the sandbox |
+| `AGENT_REMOTE_TS_AUTHKEY_FILE` | unset | File containing the Tailscale auth key for first start |
+| `AGENT_REMOTE_TS_AUTHKEY` | unset | Tailscale auth key for first start |
+| `AGENT_REMOTE_TS_CLIENT_ID` / `AGENT_REMOTE_TS_CLIENT_SECRET` | unset | Tailscale OAuth credentials for first start |
+| `AGENT_REMOTE_TAILSCALE_TAG` | `tag:codex-agent` | Tag advertised by the sidecar |
+| `AGENT_REMOTE_TAILSCALE_IMAGE` | `docker.io/tailscale/tailscale:latest` | Tailscale sidecar image |
+| `CODEX_CONFIG` in remote mode | `project` | Codex config/session root for remote sandboxes; set `host` explicitly to share host `~/.codex` |
+| `AGENT_REMOTE_ALLOW_CONTAINER_API` | `0` | Allow remote mode to inherit `AGENT_CONTAINER_API` |
+| `AGENT_REMOTE_ALLOW_NEED_HELPER` | `0` | Allow remote mode to use the host Nix helper |
+| `AGENT_REMOTE_ALLOW_NIX_DAEMON` | `0` | Allow raw Nix daemon socket access in remote mode |
+| `AGENT_REMOTE_ALLOW_EXTRA_MOUNTS` | `0` | Allow `AGENT_EXTRA_MOUNTS` in remote mode |
+| `AGENT_REMOTE_ALLOW_EXTRA_DEVICES` | `0` | Allow extra devices or `AGENT_ALLOW_KVM` in remote mode |
+| `AGENT_REMOTE_ALLOW_AUTO_MOUNTS` | `0` | Allow `AGENT_AUTO_MOUNT_DIRS` in remote mode |
+| `AGENT_REMOTE_ALLOW_EXTRA_ENV` | `0` | Allow `AGENT_EXTRA_ENV` in remote mode |
+| `AGENT_REMOTE_ALLOW_HOST_ENV` | `0` | Allow broad host environment passthrough in remote mode |
+| `AGENT_REMOTE_FORWARD_SSH_AGENT` | `0` | Forward the host SSH agent into the remote runtime |
+| `AGENT_REMOTE_ALLOW_PRIVILEGED_HOST_CONTROL` | unset | Set to `I_UNDERSTAND` to allow non-interactive `firecracker-host` remote startup |
+
 ### Firecracker Host Profile
 
 Use `AGENT_SANDBOX_PROFILE=firecracker-host` when the agent must run host-level
@@ -83,6 +113,14 @@ This profile supports one backend: Linux rootful Podman through
 `sudo -n podman`. It rejects Docker, remote Podman, rootless Podman, non-Linux
 hosts, and explicit container API modes. `AGENT_CONTAINER_API=auto` resolves to
 `none` in this profile.
+
+Inside the launched sandbox, `podman` is a profile-specific wrapper around the
+image's fixed Podman package and `/agent-sudo/bin/sudo -n`. Local OCI image
+build/run validation uses rootful Podman with an isolated `vfs` store at
+`/cache/agent-firecracker-podman` and managed network definitions under that
+same state directory, so it does not require rootless `/etc/subuid` or
+`/etc/subgid` mappings, nested overlay support, or mutable `/etc/containers`
+state.
 
 The launcher preflights the host before building/running the sandbox:
 - the launcher is not itself running through `sudo` from a non-root operator
@@ -98,6 +136,7 @@ The launcher preflights the host before building/running the sandbox:
 
 The launched container uses privileged host-control semantics:
 - `--privileged`
+- `--cap-add=NET_ADMIN` for tap setup by the host-UID command process
 - `--userns=host`
 - `--cgroupns=host`
 - `--network=host`
@@ -114,11 +153,13 @@ it changes host auth/config and cache ownership semantics.
 ## Tool Config Roots And Auth
 
 Tool config mounts:
-- `codex`: host config root to container `~/.codex`
+- `codex`: every selected home mounts at `/cache/.codex`; project mode backs it with `$AGENT_PROJECT_ROOT/.codex` and seeds settings under `.agent-sandbox/codex/managed_config.toml`, mounted at `/etc/codex`
 - `opencode`: host config root to container `~/.config/opencode`
 - `claude`: host config root to container `~/.claude`
 - `omp`: host `~/.omp` to container `~/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together
+
+Project-mode `.codex` and `.agent-sandbox/codex` paths must be real directories, not symlinks, so the launcher can bind the selected Codex home to its stable runtime path unambiguously.
 
 Config selectors:
 
@@ -191,7 +232,7 @@ These widen the sandbox boundary substantially.
 
 With `AGENT_DEV_ENV=host-helper`, the launcher resolves a clean host `direnv` snapshot before the container starts, caches the filtered result, and injects it into the sandbox at startup. There is no live bridge back to host direnv; restart the session to refresh `.envrc` changes.
 
-When the snapshot includes `PATH`, safety wrappers for `git`, `sh`, `nix`, `nix-shell`, and `need` stay first. Project-local bins and the dev-environment `PATH` come before ambient `need inject` bins and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after the safety wrappers.
+When the snapshot includes `PATH`, the sandbox's base commands and compatibility wrappers (`git`, `sh`, `nix`, `nix-shell`, and `need`) stay first. Project-local bins and the dev-environment `PATH` come before ambient `need inject` bins and image fallback paths. If `AGENT_ALLOW_SUDO=1`, `/agent-sudo/bin` is inserted immediately after those base commands.
 
 For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses the current host `NIX_PATH` if present, then falls back to the sandbox flake's locked `nixpkgs` input.
 
@@ -285,7 +326,6 @@ The project defaults file accepts plain `KEY=VALUE` lines. Blank lines and `#` c
 - `OMP_*`
 - `PI_*`
 - `TESTCONTAINERS_*`
-- `GIT_ALLOW`
 
 Example:
 

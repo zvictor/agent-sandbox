@@ -12,6 +12,12 @@ This document explains how the launcher resolves a project, prepares artifacts, 
 4. Start optional helper services such as the narrow Nix helper, direnv snapshot helper, or isolated Podman session API.
 5. Assemble mounts, env vars, and entrypoint args, then run the selected tool inside the container.
 
+Remote mode uses the same project/config/artifact preparation path, but changes
+the final lifecycle: it creates a stable Podman pod, runs the agent rootfs
+container detached with an OpenSSH/tmux entrypoint, and adds a Tailscale
+sidecar that forwards tailnet TCP/22 to the runtime container's local SSH port.
+See [REMOTE.md](REMOTE.md).
+
 ## Launcher Flow
 
 High-level flow:
@@ -59,12 +65,13 @@ logical agent instead of only `podman` or `docker`.
 - [`bin/lib/doctor.sh`](../bin/lib/doctor.sh): diagnostics
 - [`bin/lib/login.sh`](../bin/lib/login.sh): managed login flow
 - [`bin/lib/sessions.sh`](../bin/lib/sessions.sh): session discovery
+- [`bin/lib/remote.sh`](../bin/lib/remote.sh): durable remote sandbox lifecycle
 - [`bin/lib/init.sh`](../bin/lib/init.sh): project defaults bootstrap
 
 ### Nix Definitions
 
 - [`flake.nix`](../flake.nix): flake outputs and script-packaged wrappers
-- [`nix/image.nix`](../nix/image.nix): image/rootfs composition, tool launchers, Git wrapper, compatibility shims
+- [`nix/image.nix`](../nix/image.nix): image/rootfs composition, tool launchers, and compatibility shims
 - [`nix/detect-packages.nix`](../nix/detect-packages.nix): host project package contract import logic
 - [`nix/empty-project`](../nix/empty-project): placeholder project input so flake introspection still evaluates
 
@@ -89,6 +96,10 @@ Staged inputs include:
 - all files under the selected project `nix/` contract directory
 - extra allowlisted paths from `nix/agent-sandbox.paths`
 - extra allowlisted paths from `AGENT_PROJECT_CONTRACT_FILES`
+
+For `shell.nix` without `flake.lock`, string-form `fetchTarball` inputs are resolved into project-scoped pins under `AGENT_CACHE_DIR/project-contracts`. Those pins are stable inputs until explicitly removed, so mutable channel URLs do not trigger network checks or package-graph churn during normal startup.
+
+When evaluating `shell.nix`, the detector always injects the resolved `pkgs` package set. This keeps defaults such as `import <nixpkgs> {}` out of pure flake evaluation while preserving them for direct project tooling.
 
 ## Artifact Model
 
@@ -123,6 +134,7 @@ When `AGENT_DEV_ENV=host-helper` and `.envrc` exists, the launcher:
 - caches the resulting env file
 - injects that snapshot into the container at startup
 - orders `PATH` so sandbox guardrail wrappers stay first, then project-local and dev-environment paths, then ambient `need inject` bins and image fallbacks; `AGENT_ALLOW_SUDO=1` inserts `/agent-sudo/bin` immediately after the wrappers
+- for `firecracker-host`, adds a `podman` guard wrapper that runs the image's fixed Podman package through `/agent-sudo/bin/sudo -n` with isolated `vfs` and network state under `/cache/agent-firecracker-podman`
 
 There is no live bridge back to host direnv.
 
@@ -149,7 +161,8 @@ This is safer than raw host engine sockets, but it is still a capability bridge.
 
 The final container typically receives:
 - the workspace at the same absolute path, read-write
-- for Codex, the resolved config root is also exposed at `$WORKSPACE_PATH/.codex` so its native sandbox can reuse the same config path without creating a new repo-local directory
+- Codex always sees the selected home at `/cache/.codex`, preserving the stable absolute rollout paths stored in its thread inventory; project-scoped state is backed by `$PROJECT_ROOT/.codex`, and project launches transactionally rewrite inventory paths left by the former absolute workspace-home layout
+- project-scoped Codex settings are stored under `.agent-sandbox/codex` and mounted read-only at `/etc/codex`
 - for Codex SSH, `/cache/.ssh` and `/run/host-services` are exposed to Codex's native sandbox with `--add-dir`, avoiding workspace mountpoints
 - when the workspace is inside a git repository, the git top-level plus any separate git metadata directories (`--git-common-dir` and `--absolute-git-dir`) needed to make linked worktrees resolve correctly
 - `/cache` for tool installs and helper state
@@ -169,8 +182,7 @@ There are two wrapper layers:
    - `agent <tool>` keeps the underlying tool invocation unchanged
    - `codex`, `claude`, and `opencode` add tool-specific defaults
 2. Image wrappers:
-   - Git wrapper protects the current repo's local state by default
-   - `need` and compat shims make missing-tool expansion feel closer to normal shell usage
+   - `need` and compatibility shims provide missing-tool expansion and stable `sh`/Nix behavior
 
 Current shortcut-wrapper defaults:
 - `codex`: adds `--yolo`
