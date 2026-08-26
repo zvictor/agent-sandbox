@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$AGENT_BIN_DIR/lib/nix_roots.sh"
+. "$AGENT_BIN_DIR/lib/runtime_lease.sh"
+
 usage() {
   echo "usage: agent-nix-helper <materialize|serve> ..." >&2
   exit 1
@@ -80,8 +84,101 @@ validate_installable() {
   return 1
 }
 
+remove_materialization_roots() {
+  local root_base="$1"
+  local candidate=""
+
+  rm -f -- "$root_base"
+  for candidate in "$root_base"-*; do
+    [ -L "$candidate" ] || continue
+    rm -f -- "$candidate"
+  done
+}
+
+verify_materialization_roots() {
+  local root_base="$1"
+  shift
+  local output_path=""
+  local candidate=""
+  local rooted_path=""
+  local found="0"
+
+  for output_path in "$@"; do
+    found="0"
+    for candidate in "$root_base" "$root_base"-*; do
+      [ -L "$candidate" ] || continue
+      rooted_path="$(readlink -f "$candidate" 2>/dev/null || true)"
+      if [ "$rooted_path" = "$output_path" ]; then
+        found="1"
+        break
+      fi
+    done
+    if [ "$found" != "1" ]; then
+      echo "Nix did not create a permanent root for output: $output_path" >&2
+      return 1
+    fi
+  done
+}
+
+write_materialization_receipt() {
+  local target="$1"
+  local lease_id="$2"
+  local installable="$3"
+  local selected_out_path="$4"
+  local bin_path="$5"
+  shift 5
+  local closure_file=""
+  local outputs_file=""
+  local pending=""
+
+  closure_file="$(mktemp "$(dirname "$target")/.closure.XXXXXX")"
+  outputs_file="$(mktemp "$(dirname "$target")/.outputs.XXXXXX")"
+  pending="$(mktemp "$(dirname "$target")/.receipt.XXXXXX")"
+  printf '%s\n' "$@" > "$outputs_file"
+
+  if ! runtime_lease_path_info "$closure_file" "$@"; then
+    rm -f "$closure_file" "$outputs_file" "$pending"
+    return 1
+  fi
+
+  if ! jq -n \
+    --arg lease_id "$lease_id" \
+    --arg installable "$installable" \
+    --arg selected_out_path "$selected_out_path" \
+    --arg bin_path "$bin_path" \
+    --rawfile outputs "$outputs_file" \
+    --slurpfile closure "$closure_file" \
+    '{
+      schema_version: 1,
+      lease_id: $lease_id,
+      kind: "need-materialization",
+      installable: $installable,
+      output_paths: ($outputs | split("\n") | map(select(length > 0))),
+      selected_out_path: $selected_out_path,
+      bin_path: (if $bin_path == "" then null else $bin_path end),
+      closure: ($closure[0] | to_entries | map({
+        path: .key,
+        narHash: .value.narHash,
+        narSize: .value.narSize,
+        references: (.value.references // [])
+      }) | sort_by(.path))
+    }' > "$pending"; then
+    rm -f "$closure_file" "$outputs_file" "$pending"
+    echo "could not write materialization receipt" >&2
+    return 1
+  fi
+
+  rm -f "$closure_file" "$outputs_file"
+  chmod 0444 "$pending"
+  mv -f "$pending" "$target"
+}
+
 materialize_installable() {
   local installable="$1"
+  local root_base="$2"
+  local receipt_file="$3"
+  local receipt_path="$4"
+  local lease_id="$5"
   local out_path=""
   local bin_path=""
   local candidate_path=""
@@ -92,9 +189,31 @@ materialize_installable() {
   prepare_host_env
 
   mapfile -t out_paths < <(
-    env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$installable"
-  ) || return 1
-  [ "${#out_paths[@]}" -gt 0 ] || return 1
+    env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build \
+      --out-link "$root_base" --print-out-paths "$installable"
+  ) || {
+    remove_materialization_roots "$root_base"
+    return 1
+  }
+  if [ "${#out_paths[@]}" -eq 0 ]; then
+    remove_materialization_roots "$root_base"
+    return 1
+  fi
+
+  for candidate_path in "${out_paths[@]}"; do
+    case "$candidate_path" in
+      /nix/store/*) ;;
+      *)
+        echo "Nix returned a non-store output: $candidate_path" >&2
+        remove_materialization_roots "$root_base"
+        return 1
+        ;;
+    esac
+  done
+  if ! verify_materialization_roots "$root_base" "${out_paths[@]}"; then
+    remove_materialization_roots "$root_base"
+    return 1
+  fi
 
   out_path="${out_paths[0]}"
   for candidate_path in "${out_paths[@]}"; do
@@ -105,10 +224,18 @@ materialize_installable() {
     fi
   done
 
+  if ! write_materialization_receipt \
+    "$receipt_file" "$lease_id" "$installable" "$out_path" "$bin_path" "${out_paths[@]}"; then
+    remove_materialization_roots "$root_base"
+    return 1
+  fi
+
   printf 'status=ok\n'
   printf 'installable=%s\n' "$installable"
   printf 'out_path=%s\n' "$out_path"
   printf 'bin_path=%s\n' "$bin_path"
+  printf 'lease_id=%s\n' "$lease_id"
+  printf 'receipt_path=%s\n' "$receipt_path"
 }
 
 write_error_response() {
@@ -139,6 +266,9 @@ write_ok_response() {
 serve_bridge() {
   local bridge_dir="$1"
   local ttl="${2:-900}"
+  local lease_id="$3"
+  local roots_dir="$4"
+  local receipts_dir="$5"
   local requests_dir="$bridge_dir/requests"
   local processing_dir="$bridge_dir/processing"
   local responses_dir="$bridge_dir/responses"
@@ -154,9 +284,28 @@ serve_bridge() {
   local last_heartbeat=0
   local stderr_file=""
   local task_pid=""
+  local request_key=""
+  local root_base=""
+  local receipt_name=""
+  local receipt_file=""
+  local receipt_path=""
   declare -A bg_tasks=()
 
-  trap 'echo "[helper] received signal, exiting" >&2; rm -f "$heartbeat_file"; exit 0' TERM INT HUP
+  shutdown_bridge() {
+    local child_pid=""
+    trap - TERM INT HUP
+    echo "[helper] received signal, exiting" >&2
+    for child_pid in "${!bg_tasks[@]}"; do
+      kill "$child_pid" 2>/dev/null || true
+    done
+    for child_pid in "${!bg_tasks[@]}"; do
+      wait "$child_pid" 2>/dev/null || true
+    done
+    rm -f "$heartbeat_file"
+    exit 0
+  }
+
+  trap shutdown_bridge TERM INT HUP
   trap 'echo "[helper] error at line $LINENO (exit $?)" >&2' ERR
 
   mkdir -p "$requests_dir" "$processing_dir" "$responses_dir"
@@ -197,12 +346,19 @@ serve_bridge() {
       response_file="$responses_dir/$(basename "${processing_file%.req}").resp"
       result_file="$processing_dir/result.$RANDOM.$$"
       stderr_file="$processing_dir/stderr.$RANDOM.$$"
+      request_key="$(printf '%s' "$(basename "$processing_file")" | sha256sum | awk '{print $1}')"
+      root_base="$roots_dir/need-$request_key"
+      receipt_name="need-$request_key.json"
+      receipt_file="$receipts_dir/$receipt_name"
+      receipt_path="/run/agent-runtime-receipts/$receipt_name"
 
       case "$command" in
         materialize)
           (
             set +e
-            if materialize_installable "$installable" >"$result_file" 2>"$stderr_file"; then
+            if materialize_installable \
+              "$installable" "$root_base" "$receipt_file" "$receipt_path" "$lease_id" \
+              >"$result_file" 2>"$stderr_file"; then
               write_ok_response "$response_file" "$result_file"
             else
               write_error_response "$response_file" "$installable" "$(tr '\n' ' ' < "$stderr_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
@@ -252,12 +408,12 @@ shift
 
 case "$COMMAND" in
   materialize)
-    [ "$#" -eq 1 ] || usage
-    materialize_installable "$1"
+    [ "$#" -eq 5 ] || usage
+    materialize_installable "$1" "$2" "$3" "$4" "$5"
     ;;
   serve)
-    [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
-    serve_bridge "$1" "${2:-900}"
+    [ "$#" -eq 5 ] || usage
+    serve_bridge "$1" "$2" "$3" "$4" "$5"
     ;;
   *)
     usage

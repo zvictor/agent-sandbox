@@ -710,10 +710,19 @@ remote_run_up() {
   remote_require_tailscale_auth_available
   remote_prepare_authorized_keys
 
-  prepare_runtime_artifacts
-  prepare_container_api
-  prepare_need_helper
-  log_debug_context
+  prepare_runtime_lease
+  if remote_container_running "$REMOTE_RUNTIME_CONTAINER"; then
+    if ! runtime_lease_has_artifact_receipt; then
+      echo "[agent] ERROR: running remote sandbox predates runtime leases; run 'agent remote down' and start it again" >&2
+      exit 1
+    fi
+    prepare_need_helper
+  else
+    prepare_runtime_artifacts
+    prepare_container_api
+    prepare_need_helper
+    log_debug_context
+  fi
 
   remote_create_pod
   remote_start_runtime_container
@@ -756,6 +765,7 @@ remote_run_down() {
   else
     podman_runtime_cmd rm -f "$REMOTE_RUNTIME_CONTAINER" "$REMOTE_TS_CONTAINER" >/dev/null 2>&1 || true
   fi
+  remove_runtime_lease "$REMOTE_STATE_DIR/runtime-lease"
   if [ "$REMOTE_DELETE_STATE" = "1" ]; then
     rm -rf "$REMOTE_STATE_DIR"
   fi

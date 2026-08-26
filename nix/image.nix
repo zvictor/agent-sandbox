@@ -329,7 +329,7 @@ EOF
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/var/tmp" "$out/config"
     mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"
-    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
+    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
   '';
 
   imageBasePaths =
@@ -415,7 +415,7 @@ rec {
       # Keep common runtime mount destinations as normal directories, not
       # symlink chains.
       for d in \
-        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var var/run var/tmp \
+        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/secrets var var/run var/tmp \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
         proc sys sys/fs sys/fs/cgroup dev dev/net
       do

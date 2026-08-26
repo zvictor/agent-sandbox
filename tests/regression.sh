@@ -38,16 +38,36 @@ write_need_materialization_cache() {
   local installable="$2"
   local out_path="$3"
   local bin_path="$4"
-  local cache_key cache_file
+  local lease_id="$5"
+  local receipts_dir="$6"
+  local cache_key cache_file receipt_path
 
   cache_key="$(printf '%s' "$installable" | sha256sum | awk '{print $1}')"
   cache_file="$need_cache/materialized/$cache_key.env"
-  mkdir -p "$(dirname "$cache_file")"
+  receipt_path="$receipts_dir/need-test.json"
+  mkdir -p "$(dirname "$cache_file")" "$receipts_dir"
+  jq -n \
+    --arg lease_id "$lease_id" \
+    --arg installable "$installable" \
+    --arg out_path "$out_path" \
+    --arg bin_path "$bin_path" \
+    '{
+      schema_version: 1,
+      lease_id: $lease_id,
+      kind: "need-materialization",
+      installable: $installable,
+      output_paths: [$out_path],
+      selected_out_path: $out_path,
+      bin_path: (if $bin_path == "" then null else $bin_path end),
+      closure: []
+    }' > "$receipt_path"
   {
     printf 'status=ok\n'
     printf 'installable=%s\n' "$installable"
     printf 'out_path=%s\n' "$out_path"
     printf 'bin_path=%s\n' "$bin_path"
+    printf 'lease_id=%s\n' "$lease_id"
+    printf 'receipt_path=%s\n' "$receipt_path"
   } > "$cache_file"
 }
 
@@ -2029,10 +2049,351 @@ test_firecracker_preflight_rejects_root_workspace_failure() (
   assert_contains "$output" "firecracker-host preflight failed: root must be able to write and chown files under the workspace"
 )
 
+test_host_gc_root_registration_uses_final_path() (
+  set -euo pipefail
+
+  local tmp_dir bin_dir store_path root_path output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  bin_dir="$tmp_dir/bin"
+  root_path="$tmp_dir/roots/runtime"
+  store_path="$(readlink -f /bin/bash)"
+  mkdir -p "$bin_dir"
+
+  cat > "$bin_dir/nix-store" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > "$FAKE_NIX_STORE_LOG"
+root_path=""
+store_path=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --add-root)
+      root_path="$2"
+      shift 2
+      ;;
+    --indirect)
+      shift
+      ;;
+    *)
+      store_path="$1"
+      shift
+      ;;
+  esac
+done
+mkdir -p "$(dirname "$root_path")"
+ln -sfn "$store_path" "$root_path"
+EOF
+  chmod +x "$bin_dir/nix-store"
+
+  source "$REPO_ROOT/bin/lib/nix_roots.sh"
+  FAKE_NIX_STORE_LOG="$tmp_dir/nix-store.log"
+  export FAKE_NIX_STORE_LOG
+  PATH="$bin_dir:/usr/bin:/bin" register_host_gc_root "$store_path" "$root_path"
+
+  output="$(cat "$FAKE_NIX_STORE_LOG")"
+  assert_contains "$output" "--add-root $root_path --indirect --realise $store_path"
+  [ "$(readlink -f "$root_path")" = "$store_path" ] || fail "expected final-path GC root"
+)
+
+test_runtime_lease_retains_artifact_and_mounts_receipts() (
+  set -euo pipefail
+
+  local tmp_dir bin_dir store_path lease_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  bin_dir="$tmp_dir/bin"
+  store_path="$(readlink -f /bin/bash)"
+  mkdir -p "$bin_dir" "$tmp_dir/project"
+
+  cat > "$bin_dir/nix-store" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+root_path=""
+store_path=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --add-root)
+      root_path="$2"
+      shift 2
+      ;;
+    --indirect)
+      shift
+      ;;
+    *)
+      store_path="$1"
+      shift
+      ;;
+  esac
+done
+mkdir -p "$(dirname "$root_path")"
+ln -sfn "$store_path" "$root_path"
+EOF
+  cat > "$bin_dir/nix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{"%s":{"narHash":"sha256-test","narSize":1,"references":[]}}\n' "$FAKE_STORE_PATH"
+EOF
+  chmod +x "$bin_dir/nix-store" "$bin_dir/nix"
+
+  hash_short() {
+    printf '%s' "$1" | sha256sum | awk '{print substr($1,1,16)}'
+  }
+  source "$REPO_ROOT/bin/lib/nix_roots.sh"
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  CACHE_DIR="$tmp_dir/cache"
+  PROJECT_ROOT="$tmp_dir/project"
+  AGENT_COMMAND="run"
+  FAKE_STORE_PATH="$store_path"
+  export FAKE_STORE_PATH
+  PATH="$bin_dir:/usr/bin:/bin"
+  export PATH
+
+  mkdir -p "$CACHE_DIR/runtime-leases/sandbox-stale"
+  {
+    printf 'pid=999999999\n'
+    printf 'identity=missing\n'
+  } > "$CACHE_DIR/runtime-leases/sandbox-stale/owner.env"
+
+  prepare_runtime_lease
+  lease_dir="$RUNTIME_LEASE_DIR"
+  [ ! -e "$CACHE_DIR/runtime-leases/sandbox-stale" ] || fail "expected stale foreground lease pruning"
+  retain_runtime_artifact rootfs "$store_path"
+
+  [ -L "$RUNTIME_LEASE_ROOTS_DIR/runtime-rootfs" ] || fail "expected sandbox-owned runtime root"
+  jq -e \
+    --arg lease_id "$RUNTIME_LEASE_ID" \
+    --arg store_path "$store_path" \
+    '.lease_id == $lease_id and .kind == "runtime-artifact" and .output_paths == [$store_path] and (.closure | length) == 1' \
+    "$RUNTIME_LEASE_RECEIPTS_DIR/runtime-rootfs.json" >/dev/null
+  runtime_lease_has_artifact_receipt || fail "expected retained artifact receipt to validate"
+
+  ARGS=()
+  Z_SUFFIX=""
+  append_runtime_receipt_mount_args
+  output="${ARGS[*]}"
+  assert_contains "$output" "$RUNTIME_LEASE_RECEIPTS_DIR:/run/agent-runtime-receipts:ro"
+  assert_contains "$output" "AGENT_RUNTIME_LEASE_ID=$RUNTIME_LEASE_ID"
+  assert_not_contains "$output" "$RUNTIME_LEASE_ROOTS_DIR:"
+
+  cleanup_runtime_lease
+  [ ! -e "$lease_dir" ] || fail "expected foreground runtime lease cleanup"
+)
+
+test_remote_runtime_lease_persists_until_explicit_removal() (
+  set -euo pipefail
+
+  local tmp_dir lease_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  mkdir -p "$tmp_dir/project"
+
+  hash_short() {
+    printf '%s' "$1" | sha256sum | awk '{print substr($1,1,16)}'
+  }
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+
+  CACHE_DIR="$tmp_dir/cache"
+  PROJECT_ROOT="$tmp_dir/project"
+  AGENT_COMMAND="remote"
+  REMOTE_NAME="test-remote"
+  REMOTE_STATE_DIR="$CACHE_DIR/remote/$REMOTE_NAME"
+  prepare_runtime_lease
+  lease_dir="$RUNTIME_LEASE_DIR"
+
+  cleanup_runtime_lease
+  [ -d "$lease_dir" ] || fail "expected remote lease to survive launcher exit"
+  remove_runtime_lease "$lease_dir"
+  [ ! -e "$lease_dir" ] || fail "expected remote lease removal at remote teardown"
+)
+
+test_need_helper_materialization_creates_leased_receipt() (
+  set -euo pipefail
+
+  local tmp_dir bin_dir roots_dir receipts_dir root_base receipt_file store_path output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  bin_dir="$tmp_dir/bin"
+  roots_dir="$tmp_dir/roots"
+  receipts_dir="$tmp_dir/receipts"
+  root_base="$roots_dir/need-test"
+  receipt_file="$receipts_dir/need-test.json"
+  store_path="$(readlink -f /bin/bash)"
+  mkdir -p "$bin_dir" "$roots_dir" "$receipts_dir" "$tmp_dir/home"
+
+  cat > "$bin_dir/nix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+mode=""
+root_path=""
+for arg in "$@"; do
+  case "$arg" in
+    build|path-info) mode="$arg" ;;
+  esac
+done
+if [ "$mode" = "build" ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--out-link" ]; then
+      root_path="$2"
+      break
+    fi
+    shift
+  done
+  printf 'build-root=%s\n' "$root_path" >> "$FAKE_NIX_LOG"
+  ln -sfn "$FAKE_STORE_PATH" "$root_path"
+  printf '%s\n' "$FAKE_STORE_PATH"
+  exit 0
+fi
+if [ "$mode" = "path-info" ]; then
+  printf '{"%s":{"narHash":"sha256-test","narSize":1,"references":[]}}\n' "$FAKE_STORE_PATH"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$bin_dir/nix"
+
+  output="$(
+    FAKE_NIX_LOG="$tmp_dir/nix.log" \
+    FAKE_STORE_PATH="$store_path" \
+    AGENT_HOST_HOME="$tmp_dir/home" \
+    PATH="$bin_dir:/usr/bin:/bin" \
+    bash "$REPO_ROOT/bin/agent-nix-helper" materialize \
+      nixpkgs#bash "$root_base" "$receipt_file" \
+      /run/agent-runtime-receipts/need-test.json lease-test
+  )"
+
+  assert_contains "$output" "lease_id=lease-test"
+  assert_contains "$output" "receipt_path=/run/agent-runtime-receipts/need-test.json"
+  assert_contains "$(cat "$tmp_dir/nix.log")" "build-root=$root_base"
+  [ -L "$root_base" ] || fail "expected materialization root to survive helper exit"
+  [ "$(stat -c '%a' "$receipt_file")" = "444" ] || fail "expected immutable receipt mode"
+  jq -e \
+    --arg store_path "$store_path" \
+    '.lease_id == "lease-test" and .kind == "need-materialization" and .selected_out_path == $store_path and (.closure | length) == 1' \
+    "$receipt_file" >/dev/null
+)
+
+test_need_rejects_cache_from_previous_lease() (
+  set -euo pipefail
+
+  local tmp_dir need_cache receipts_dir installable out_dir bin_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  need_cache="$tmp_dir/need"
+  receipts_dir="$tmp_dir/receipts"
+  installable="nixpkgs#jq"
+  out_dir="$tmp_dir/out"
+  bin_dir="$out_dir/bin"
+  mkdir -p "$bin_dir"
+  : > "$bin_dir/jq"
+  chmod +x "$bin_dir/jq"
+  write_need_materialization_cache \
+    "$need_cache" "$installable" "$out_dir" "$bin_dir" old-lease "$receipts_dir"
+
+  set +e
+  output="$(
+    AGENT_NEED_CACHE_DIR="$need_cache" \
+    AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    AGENT_RUNTIME_LEASE_ID="new-lease" \
+    AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
+    PATH="/usr/bin:/bin" \
+    bash "$REPO_ROOT/scripts/image/need.sh" materialize "$installable" 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected previous-lease cache to be rejected"
+  assert_contains "$output" "unleased materialization is disabled"
+)
+
+test_need_inject_creates_lease_checking_launcher() (
+  set -euo pipefail
+
+  local tmp_dir need_cache receipts_dir tools_dir installable out_dir bin_dir launcher
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  need_cache="$tmp_dir/need"
+  receipts_dir="$tmp_dir/receipts"
+  tools_dir="$need_cache/projects/test/bin"
+  installable="nixpkgs#jq"
+  out_dir="$tmp_dir/out"
+  bin_dir="$out_dir/bin"
+  mkdir -p "$bin_dir"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin_dir/jq"
+  chmod +x "$bin_dir/jq"
+  write_need_materialization_cache \
+    "$need_cache" "$installable" "$out_dir" "$bin_dir" lease-test "$receipts_dir"
+
+  AGENT_NEED_CACHE_DIR="$need_cache" \
+  AGENT_NEED_TOOLS_DIR="$tools_dir" \
+  AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+  AGENT_RUNTIME_LEASE_ID="lease-test" \
+  AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
+  PATH="/usr/bin:/bin" \
+  bash "$REPO_ROOT/scripts/image/need.sh" inject "$installable" >/dev/null
+
+  launcher="$tools_dir/jq"
+  [ -f "$launcher" ] && [ ! -L "$launcher" ] || fail "expected injected command to be a launcher"
+  assert_contains "$(cat "$launcher")" "exec /bin/need run nixpkgs#jq -- jq"
+)
+
+test_runtime_owned_env_override_is_rejected() (
+  set -euo pipefail
+
+  local output status
+  set +e
+  output="$(
+    AGENT_EXTRA_ENV='AGENT_RUNTIME_LEASE_ID=forged' \
+    bash -c '
+      set -euo pipefail
+      source "$1"
+      split_csv_or_lines() { printf "%s\n" "$1"; }
+      ARGS=()
+      append_extra_env_args
+    ' bash "$REPO_ROOT/bin/lib/container_runtime.sh" 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected runtime-owned env override to fail"
+  assert_contains "$output" "AGENT_EXTRA_ENV cannot override runtime-owned variable: AGENT_RUNTIME_LEASE_ID"
+)
+
+test_need_helper_does_not_mount_nix_daemon_socket() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  ARGS=()
+  HOST_HOME="$tmp_dir"
+  Z_SUFFIX=""
+  NEED_HELPER_MODE="1"
+  NEED_HELPER_BRIDGE_DIR=""
+  CONTAINER_API_MODE="none"
+  AGENT_ALLOW_NIX_DAEMON_SOCKET="0"
+  unset SSH_AUTH_SOCK
+  append_host_socket_args
+  output="${ARGS[*]}"
+  assert_not_contains "$output" "/nix/var/nix/daemon-socket/socket"
+
+  ARGS=()
+  AGENT_ALLOW_NIX_DAEMON_SOCKET="1"
+  append_host_socket_args
+  output="${ARGS[*]}"
+  if [ -S /nix/var/nix/daemon-socket/socket ]; then
+    assert_contains "$output" "/nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw"
+  fi
+)
+
 test_need_run_allows_command_side_sandbox_sudo() (
   set -euo pipefail
 
-  local tmp_dir need_cache installable out_dir bin_dir sudo_dir output
+  local tmp_dir need_cache installable out_dir bin_dir sudo_dir receipts_dir lease_id output
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -2041,16 +2402,20 @@ test_need_run_allows_command_side_sandbox_sudo() (
   out_dir="$tmp_dir/out"
   bin_dir="$out_dir/bin"
   sudo_dir="$tmp_dir/sandbox-bin"
+  receipts_dir="$tmp_dir/receipts"
+  lease_id="lease-test"
   mkdir -p "$bin_dir" "$sudo_dir"
   printf '#!/usr/bin/env bash\nprintf "fake-jq\\n"\n' > "$bin_dir/jq"
   printf '#!/usr/bin/env bash\nprintf "sandbox-sudo:%%s\\n" "$*"\n' > "$sudo_dir/sudo"
   chmod +x "$bin_dir/jq" "$sudo_dir/sudo"
 
-  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir"
+  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir" "$lease_id" "$receipts_dir"
 
   output="$(
     AGENT_NEED_CACHE_DIR="$need_cache" \
     AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    AGENT_RUNTIME_LEASE_ID="$lease_id" \
+    AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
     PATH="$sudo_dir:/usr/bin:/bin" \
     bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sudo id
   )"
@@ -2061,7 +2426,7 @@ test_need_run_allows_command_side_sandbox_sudo() (
 test_need_run_refuses_materialized_sudo_shadow() (
   set -euo pipefail
 
-  local tmp_dir need_cache installable out_dir bin_dir output status
+  local tmp_dir need_cache installable out_dir bin_dir receipts_dir lease_id output status
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -2069,16 +2434,20 @@ test_need_run_refuses_materialized_sudo_shadow() (
   installable="nixpkgs#sudo"
   out_dir="$tmp_dir/out"
   bin_dir="$out_dir/bin"
+  receipts_dir="$tmp_dir/receipts"
+  lease_id="lease-test"
   mkdir -p "$bin_dir"
   printf '#!/usr/bin/env bash\nprintf "unsafe-sudo\\n"\n' > "$bin_dir/sudo"
   chmod +x "$bin_dir/sudo"
 
-  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir"
+  write_need_materialization_cache "$need_cache" "$installable" "$out_dir" "$bin_dir" "$lease_id" "$receipts_dir"
 
   set +e
   output="$(
     AGENT_NEED_CACHE_DIR="$need_cache" \
     AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
+    AGENT_RUNTIME_LEASE_ID="$lease_id" \
+    AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
     AGENT_ALLOW_SUDO=0 \
     PATH="/usr/bin:/bin" \
     bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sh -c 'sudo id' 2>&1
@@ -2567,12 +2936,15 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$image_file" "var/tmp"
-  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=5"
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=6"
   assert_contains "$rootfs_file" "run/agent-path-guard"
+  assert_contains "$rootfs_file" "run/agent-runtime-receipts"
   assert_contains "$rootfs_file" "var/tmp"
   assert_contains "$rootfs_file" "sys/fs/cgroup"
   assert_contains "$rootfs_file" "dev/net"
   assert_contains "$artifact_file" "prepare_rootfs_artifact"
+  assert_contains "$artifact_file" '--out-link "$gcroot_path"'
+  assert_not_contains "$artifact_file" 'tmp_root="${gcroot_path}.tmp.$$"'
   assert_contains "$artifact_file" "copyToDockerDaemon"
   assert_not_contains "$artifact_file" "copyToPodman"
 )
@@ -2662,6 +3034,14 @@ main() {
   run_test "firecracker preflight rejects missing kvm" test_firecracker_preflight_rejects_missing_kvm
   run_test "firecracker preflight rejects missing tun" test_firecracker_preflight_rejects_missing_tun
   run_test "firecracker preflight rejects root workspace failure" test_firecracker_preflight_rejects_root_workspace_failure
+  run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
+  run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
+  run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
+  run_test "need helper creates leased receipt" test_need_helper_materialization_creates_leased_receipt
+  run_test "need rejects previous lease cache" test_need_rejects_cache_from_previous_lease
+  run_test "need inject creates lease-checking launcher" test_need_inject_creates_lease_checking_launcher
+  run_test "runtime-owned env overrides are rejected" test_runtime_owned_env_override_is_rejected
+  run_test "need helper does not mount Nix daemon socket" test_need_helper_does_not_mount_nix_daemon_socket
   run_test "need run allows command-side sandbox sudo" test_need_run_allows_command_side_sandbox_sudo
   run_test "need run refuses materialized sudo shadow" test_need_run_refuses_materialized_sudo_shadow
   run_test "podman session ignores stale reused pid" test_container_api_does_not_kill_stale_reused_pid

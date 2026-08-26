@@ -1,5 +1,6 @@
 NEED_HELPER_MODE=""
 NEED_HELPER_DIR=""
+NEED_HELPER_BRIDGE_DIR=""
 NEED_HELPER_PID_FILE=""
 NEED_HELPER_LOG_FILE=""
 NEED_HELPER_TTL=""
@@ -23,25 +24,28 @@ need_helper_service_running() {
   local pid
   pid="$(cat "$NEED_HELPER_PID_FILE" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" 2>/dev/null
+  runtime_lease_helper_process_matches "$pid" "$NEED_HELPER_BRIDGE_DIR"
 }
 
 prepare_need_helper() {
-  local key
   local lock_dir
   local service_pid=""
 
   resolve_need_helper_mode
   [ "$NEED_HELPER_MODE" = "1" ] || return 0
+  if [ -z "${RUNTIME_LEASE_DIR:-}" ] || [ -z "${RUNTIME_LEASE_ID:-}" ]; then
+    echo "[agent] ERROR: need helper requires an active runtime lease" >&2
+    exit 1
+  fi
 
-  key="$(hash_short "$(id -u)|$HOST_HOME|$PROJECT_ROOT")"
   NEED_HELPER_TTL="${AGENT_NEED_HELPER_TTL:-900}"
-  NEED_HELPER_DIR="$CACHE_DIR/nix-tool-helper/$key"
+  NEED_HELPER_DIR="$RUNTIME_LEASE_DIR/need-helper"
+  NEED_HELPER_BRIDGE_DIR="$NEED_HELPER_DIR/bridge"
   NEED_HELPER_PID_FILE="$NEED_HELPER_DIR/service.pid"
   NEED_HELPER_LOG_FILE="$NEED_HELPER_DIR/service.log"
   lock_dir="$NEED_HELPER_DIR/.lock"
 
-  mkdir -p "$NEED_HELPER_DIR/requests" "$NEED_HELPER_DIR/processing" "$NEED_HELPER_DIR/responses"
+  mkdir -p "$NEED_HELPER_BRIDGE_DIR/requests" "$NEED_HELPER_BRIDGE_DIR/processing" "$NEED_HELPER_BRIDGE_DIR/responses"
 
   if need_helper_service_running; then
     return 0
@@ -68,7 +72,9 @@ prepare_need_helper() {
 
   (
     umask 077
-    exec "$AGENT_BIN_DIR/agent-nix-helper" serve "$NEED_HELPER_DIR" "$NEED_HELPER_TTL" \
+    exec "$AGENT_BIN_DIR/agent-nix-helper" serve \
+      "$NEED_HELPER_BRIDGE_DIR" "$NEED_HELPER_TTL" "$RUNTIME_LEASE_ID" \
+      "$RUNTIME_LEASE_ROOTS_DIR" "$RUNTIME_LEASE_RECEIPTS_DIR" \
       </dev/null >"$NEED_HELPER_LOG_FILE" 2>&1
   ) &
   service_pid="$!"

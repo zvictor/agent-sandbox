@@ -405,6 +405,34 @@ append_split_arg_values() {
   done < <(split_csv_or_lines "$specs")
 }
 
+runtime_env_key_is_reserved() {
+  case "$1" in
+    AGENT_NEED_HELPER_DIR|AGENT_RUNTIME_LEASE_ID|AGENT_RUNTIME_RECEIPTS_DIR)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+append_extra_env_args() {
+  local specs="${AGENT_EXTRA_ENV:-}"
+  local entry=""
+  local key=""
+
+  [ -n "$specs" ] || return 0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    key="${entry%%=*}"
+    if runtime_env_key_is_reserved "$key"; then
+      echo "[agent] ERROR: AGENT_EXTRA_ENV cannot override runtime-owned variable: $key" >&2
+      exit 1
+    fi
+    ARGS+=( -e "$entry" )
+  done < <(split_csv_or_lines "$specs")
+}
+
 mount_standard_engine() {
   local engine="$1"
 
@@ -875,6 +903,17 @@ append_nix_mount_args() {
   fi
 }
 
+append_runtime_receipt_mount_args() {
+  if [ -z "${RUNTIME_LEASE_RECEIPTS_DIR:-}" ] || [ ! -d "$RUNTIME_LEASE_RECEIPTS_DIR" ]; then
+    echo "[agent] ERROR: runtime lease receipt directory is unavailable" >&2
+    exit 1
+  fi
+
+  ARGS+=( -v "$RUNTIME_LEASE_RECEIPTS_DIR:/run/agent-runtime-receipts:ro${Z_SUFFIX}" )
+  ARGS+=( -e "AGENT_RUNTIME_LEASE_ID=$RUNTIME_LEASE_ID" )
+  ARGS+=( -e "AGENT_RUNTIME_RECEIPTS_DIR=/run/agent-runtime-receipts" )
+}
+
 sanitize_runtime_account_name() {
   local raw_name="$1"
 
@@ -1078,8 +1117,8 @@ append_host_socket_args() {
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
-  if [ "${NEED_HELPER_MODE:-0}" = "1" ] && [ -n "${NEED_HELPER_DIR:-}" ] && [ -d "$NEED_HELPER_DIR" ]; then
-    ARGS+=( -v "$NEED_HELPER_DIR:/run/agent-nix-helper:rw${Z_SUFFIX}" )
+  if [ "${NEED_HELPER_MODE:-0}" = "1" ] && [ -n "${NEED_HELPER_BRIDGE_DIR:-}" ] && [ -d "$NEED_HELPER_BRIDGE_DIR" ]; then
+    ARGS+=( -v "$NEED_HELPER_BRIDGE_DIR:/run/agent-nix-helper:rw${Z_SUFFIX}" )
     ARGS+=( -e AGENT_NEED_HELPER=1 )
     ARGS+=( -e AGENT_NEED_HELPER_DIR=/run/agent-nix-helper )
   fi
@@ -1123,7 +1162,7 @@ append_host_socket_args() {
     ARGS+=( -e DOCKER_HOST=unix:///var/run/docker.sock )
   fi
 
-  if { [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] || [ "${NEED_HELPER_MODE:-0}" = "1" ]; } && [ -S /nix/var/nix/daemon-socket/socket ]; then
+  if [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "1" ] && [ -S /nix/var/nix/daemon-socket/socket ]; then
     ARGS+=( -v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket:rw )
   fi
 
@@ -1334,6 +1373,9 @@ append_passthrough_env_args() {
         continue
         ;;
     esac
+    if runtime_env_key_is_reserved "$key"; then
+      continue
+    fi
 
     while IFS= read -r prefix; do
       [ -z "$prefix" ] && continue
@@ -1467,6 +1509,7 @@ build_container_args() {
   build_base_container_args
   append_path_guard_mount_args
   append_nix_mount_args
+  append_runtime_receipt_mount_args
   append_runtime_identity_mount_args
   append_runtime_identity_args
   append_firecracker_host_args
@@ -1476,7 +1519,7 @@ build_container_args() {
   append_dev_env_args
   append_workspace_mount_args
 
-  append_split_arg_values -e "${AGENT_EXTRA_ENV:-}"
+  append_extra_env_args
   append_auto_mount_dir_args
   append_split_arg_values -v "${AGENT_EXTRA_MOUNTS:-}"
   append_extra_device_args

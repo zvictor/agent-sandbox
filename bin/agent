@@ -72,6 +72,8 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/cli.sh"
 . "$AGENT_BIN_DIR/lib/project_contract.sh"
 . "$AGENT_BIN_DIR/lib/rootfs.sh"
+. "$AGENT_BIN_DIR/lib/nix_roots.sh"
+. "$AGENT_BIN_DIR/lib/runtime_lease.sh"
 . "$AGENT_BIN_DIR/lib/artifact_prep.sh"
 . "$AGENT_BIN_DIR/lib/container_api.sh"
 . "$AGENT_BIN_DIR/lib/need_helper.sh"
@@ -173,6 +175,7 @@ PATH_GUARD_HOST_DIR=""
 RUNTIME_IDENTITY_HOST_DIR=""
 CODEX_AUTH_PLACEHOLDER=""
 cleanup() {
+  cleanup_runtime_lease
   if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
   fi
@@ -202,6 +205,7 @@ bootstrap_environment
 if [ "$AGENT_COMMAND" = "login" ]; then
   prepare_login_state
 fi
+prepare_runtime_lease
 prepare_runtime_artifacts
 prepare_container_api
 prepare_need_helper

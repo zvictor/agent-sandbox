@@ -7,6 +7,8 @@ RESPONSES_DIR="$BRIDGE_DIR/responses"
 HEARTBEAT_FILE="$BRIDGE_DIR/heartbeat"
 HEARTBEAT_STALE_THRESHOLD=120
 TIMEOUT="${AGENT_NEED_TIMEOUT:-600}"
+RUNTIME_LEASE_ID="${AGENT_RUNTIME_LEASE_ID:-}"
+RECEIPTS_DIR="${AGENT_RUNTIME_RECEIPTS_DIR:-/run/agent-runtime-receipts}"
 HELPER_WAITED=0
 CACHE_HOME="${XDG_CACHE_HOME:-/cache}"
 NEED_CACHE_DIR="${AGENT_NEED_CACHE_DIR:-$CACHE_HOME/need}"
@@ -123,6 +125,8 @@ load_response_file() {
   installable=""
   out_path=""
   bin_path=""
+  lease_id=""
+  receipt_path=""
   message=""
 
   while IFS='=' read -r key value; do
@@ -131,6 +135,8 @@ load_response_file() {
       installable) installable="$value" ;;
       out_path) out_path="$value" ;;
       bin_path) bin_path="$value" ;;
+      lease_id) lease_id="$value" ;;
+      receipt_path) receipt_path="$value" ;;
       message) message="$value" ;;
     esac
   done < "$response_file"
@@ -141,6 +147,33 @@ load_response_file() {
 }
 
 response_is_usable() {
+  local receipt_name=""
+
+  [ -n "$RUNTIME_LEASE_ID" ] || return 1
+  [ "$lease_id" = "$RUNTIME_LEASE_ID" ] || return 1
+  case "$receipt_path" in
+    "$RECEIPTS_DIR"/*.json) ;;
+    *) return 1 ;;
+  esac
+  receipt_name="${receipt_path#"$RECEIPTS_DIR"/}"
+  case "$receipt_name" in
+    ''|.*|*/*) return 1 ;;
+  esac
+  [ -r "$receipt_path" ] || return 1
+  jq -e \
+    --arg lease_id "$RUNTIME_LEASE_ID" \
+    --arg installable "$installable" \
+    --arg out_path "$out_path" \
+    --arg bin_path "$bin_path" \
+    '.schema_version == 1 and
+     .kind == "need-materialization" and
+     .lease_id == $lease_id and
+     .installable == $installable and
+     .selected_out_path == $out_path and
+     ((.bin_path // "") == $bin_path) and
+     (.output_paths | index($out_path) != null)' \
+    "$receipt_path" >/dev/null 2>&1 || return 1
+
   if [ -n "$bin_path" ] && [ -d "$bin_path" ]; then
     return 0
   fi
@@ -182,6 +215,8 @@ store_cached_materialization() {
     printf 'installable=%s\n' "$installable"
     printf 'out_path=%s\n' "$out_path"
     printf 'bin_path=%s\n' "$bin_path"
+    printf 'lease_id=%s\n' "$lease_id"
+    printf 'receipt_path=%s\n' "$receipt_path"
   } > "$tmp_file"
   mv -f "$tmp_file" "$cache_file"
 }
@@ -248,6 +283,11 @@ load_helper_response() {
   load_response_file "$response_file" "1"
   if [ "$status" != "ok" ]; then
     echo "[agent] nix helper failed for '$target_installable': $message" >&2
+    exit 1
+  fi
+
+  if ! response_is_usable; then
+    echo "[agent] nix helper returned an invalid or unleased receipt for '$target_installable'" >&2
     exit 1
   fi
 
@@ -520,34 +560,8 @@ materialize_installable() {
       helper_request "$resolved_installable"
       load_helper_response "$resolved_installable"
       store_cached_materialization "$resolved_installable"
-    elif command -v nix >/dev/null 2>&1; then
-      tool_notice "host helper unavailable, building $resolved_installable directly..."
-      local nix_features="${AGENT_NIX_EXPERIMENTAL_FEATURES:-nix-command flakes}"
-      local -a out_paths
-      mapfile -t out_paths < <(
-        env -u NIX_CONFIG nix --extra-experimental-features "$nix_features" build --no-link --print-out-paths "$resolved_installable"
-      ) || {
-        echo "[agent] nix build failed for '$resolved_installable'" >&2
-        exit 1
-      }
-      [ "${#out_paths[@]}" -gt 0 ] || {
-        echo "[agent] nix build produced no output for '$resolved_installable'" >&2
-        exit 1
-      }
-      out_path="${out_paths[0]}"
-      bin_path=""
-      local candidate_path
-      for candidate_path in "${out_paths[@]}"; do
-        if [ -d "$candidate_path/bin" ]; then
-          bin_path="$candidate_path/bin"
-          out_path="$candidate_path"
-          break
-        fi
-      done
-      installable="$resolved_installable"
-      store_cached_materialization "$resolved_installable"
     else
-      echo "[agent] nix helper is not running and nix command is not available" >&2
+      echo "[agent] nix helper is not running; unleased materialization is disabled" >&2
       echo "[agent] restart the sandbox or run: agent doctor --verbose" >&2
       exit 1
     fi
@@ -649,6 +663,7 @@ lookup_guidance() {
 inject_materialized_bins() {
   local entry=""
   local target_path=""
+  local pending_path=""
 
   [ -n "$bin_path" ] || {
     echo "[agent] $resolved_installable does not expose a bin directory" >&2
@@ -662,10 +677,16 @@ inject_materialized_bins() {
     [ -e "$entry" ] || continue
     [ -x "$entry" ] || continue
     target_path="$TOOLS_DIR/$(basename "$entry")"
-    ln -sfn "$entry" "$target_path"
+    pending_path="$(mktemp "$TOOLS_DIR/.need-injected.XXXXXX")"
+    {
+      printf '#!/bin/bash\n'
+      printf 'exec /bin/need run %q -- %q "$@"\n' "$resolved_installable" "$(basename "$entry")"
+    } > "$pending_path"
+    chmod 0755 "$pending_path"
+    mv -f "$pending_path" "$target_path"
   done
 
-  tool_notice "injected executables from $resolved_installable into $TOOLS_DIR"
+  tool_notice "injected leased launchers from $resolved_installable into $TOOLS_DIR"
 }
 
 clear_injected_bins() {

@@ -42,19 +42,6 @@ compute_sandbox_meta_key() {
   printf '%s\n' "$meta_key"
 }
 
-persist_artifact_gcroot() {
-  local artifact_out="$1"
-  local gcroot_path="$2"
-  local tmp_root="${gcroot_path}.tmp.$$"
-
-  if command -v nix-store >/dev/null 2>&1; then
-    nix-store --add-root "$tmp_root" --indirect "$artifact_out" >/dev/null 2>&1 || ln -sfn "$artifact_out" "$tmp_root"
-  else
-    ln -sfn "$artifact_out" "$tmp_root"
-  fi
-  mv -f "$tmp_root" "$gcroot_path"
-}
-
 resolve_runtime_mode() {
   if [ "$RUNTIME" = "podman" ]; then
     MODE="podman-rootfs"
@@ -120,7 +107,7 @@ build_cached_artifact() {
       nix_cmd build "${SANDBOX_FLAKE}#${target_name}" \
         "${PROJECT_OVERRIDE_ARGS[@]}" \
         --print-out-paths \
-        --no-link \
+        --out-link "$gcroot_path" \
         "${LOCK_ARGS[@]}"
     )"; then
       echo "$failure_message" >&2
@@ -131,10 +118,11 @@ build_cached_artifact() {
     BUILD_MS="$((BUILD_END_MS - BUILD_START_MS))"
     echo "[agent] ${build_label} build completed in $(format_duration_ms "$BUILD_MS")" >&2
     perf_log "${success_perf_message} completed in $(format_duration_ms "$BUILD_MS")"
-
-    persist_artifact_gcroot "$artifact_out" "$gcroot_path"
   fi
 
+  # Re-register cache hits as well, repairing roots created by older launchers
+  # that moved an indirect root after registration.
+  register_host_gc_root "$artifact_out" "$gcroot_path"
   printf '%s\n' "$artifact_out"
 }
 
@@ -269,8 +257,10 @@ prepare_runtime_artifacts() {
 
   if [ "$MODE" = "podman-rootfs" ]; then
     prepare_rootfs_artifact
+    retain_runtime_artifact "rootfs" "$ROOTFS_OUT"
   else
     prepare_stream_image_artifact
+    retain_runtime_artifact "stream-image" "$IMAGE_OUT"
     load_runtime_image_id
   fi
 
