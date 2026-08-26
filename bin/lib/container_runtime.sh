@@ -7,10 +7,7 @@ mount_engine() {
   local auth_env_name="$6"
   local auth_base_dir="$7"
   local active_credentials_file="$8"
-  local workspace_alias_path="${9:-}"
   local mount_source=""
-  local workspace_alias_mount_path=""
-  local workspace_alias_is_symlink="0"
   local resolved_auth_path=""
   local selector_value=""
 
@@ -35,34 +32,13 @@ mount_engine() {
   mount_source="$(resolve_mount_dir "$mount_source")"
 
   ARGS+=( -v "$mount_source:$container_config_dir:rw${Z_SUFFIX}" )
-  if [ -n "$workspace_alias_path" ] && [ "$workspace_alias_path" != "$mount_source" ]; then
-    if [ -L "$workspace_alias_path" ]; then
-      workspace_alias_is_symlink="1"
-    fi
-    workspace_alias_mount_path="$(ensure_workspace_alias_mount_target "$engine" "$workspace_alias_path")"
-    if [ "$workspace_alias_mount_path" != "$mount_source" ] || [ "$workspace_alias_is_symlink" = "1" ]; then
-      ARGS+=( -v "$mount_source:$workspace_alias_mount_path:rw${Z_SUFFIX}" )
-    fi
-  fi
-
-  # Force file-based MCP OAuth credential storage inside the container.
-  # The default "auto" mode may use kernel keyutils on Linux, which don't
-  # persist across container restarts.  When the mounted config dir has no
-  # config.toml, inject one with the file-store setting so credentials land
-  # in $CODEX_HOME/.credentials.json (which survives container restarts via
-  # the rw directory mount).
-  if [ "$engine" = "codex" ] && [ ! -f "$mount_source/config.toml" ]; then
-    local fallback_config
-    fallback_config="$(mktemp "$HELPER_TMPDIR/codex-config.XXXXXX")"
-    printf 'mcp_oauth_credentials_store = "file"\n' > "$fallback_config"
-    if [ -f "$HOST_HOME/.codex/config.toml" ]; then
-      grep -v '^mcp_oauth_credentials_store' "$HOST_HOME/.codex/config.toml" >> "$fallback_config" || true
-    fi
-    ARGS+=( -v "$fallback_config:$container_config_dir/config.toml:ro${Z_SUFFIX}" )
-  fi
 
   if [ -n "$auth_env_name" ]; then
     selector_value="${!auth_env_name:-}"
+  fi
+
+  if [ "$engine" = "codex" ]; then
+    initialize_codex_config_file "$mount_source" "$selector_value" "$config_mode"
   fi
 
   # Synthesize auth.json from OPENAI_API_KEY when no CODEX_AUTH slot is set
@@ -75,11 +51,8 @@ mount_engine() {
       '{OPENAI_API_KEY: $key, email: "apikey@example.com", planType: "pro"}')
     printf '%s\n' "$synth_json" > "$synth_auth_dir/auth.json"
     chmod 600 "$synth_auth_dir/auth.json"
+    prepare_codex_auth_mount_target "$mount_source/$active_credentials_file"
     ARGS+=( -v "$synth_auth_dir/auth.json:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
-    if [ -n "${OPENAI_BASE_URL:-}" ]; then
-      printf 'openai_base_url = "%s"\n' "$OPENAI_BASE_URL" > "$synth_auth_dir/config.toml"
-      ARGS+=( -v "$synth_auth_dir/config.toml:$container_config_dir/config.toml:ro${Z_SUFFIX}" )
-    fi
     return 0
   fi
 
@@ -89,8 +62,123 @@ mount_engine() {
       echo "[agent] ERROR: auth selector '$selector_value' for $engine did not resolve to a readable file: $resolved_auth_path" >&2
       exit 1
     fi
+    if [ "$engine" = "codex" ]; then
+      prepare_codex_auth_mount_target "$mount_source/$active_credentials_file"
+    fi
     ARGS+=( -v "$resolved_auth_path:$container_config_dir/$active_credentials_file:ro${Z_SUFFIX}" )
     ARGS+=( -e "${engine^^}_AUTH=$selector_value" )
+  fi
+}
+
+initialize_codex_config_file() {
+  local config_dir="$1"
+  local auth_selector="$2"
+  local config_mode="${3:-host}"
+  local config_file="$config_dir/config.toml"
+  local host_config_file="$HOST_HOME/.codex/config.toml"
+  local pending_config=""
+
+  if [ -e "$config_file" ]; then
+    return 0
+  fi
+
+  pending_config="$(mktemp "$config_dir/.config.toml.XXXXXX")"
+  if ! {
+    printf 'mcp_oauth_credentials_store = "file"\n'
+    if [ -z "$auth_selector" ] && [ -n "${OPENAI_API_KEY:-}" ] && [ -n "${OPENAI_BASE_URL:-}" ]; then
+      printf 'openai_base_url = %s\n' "$(jq -Rn --arg value "$OPENAI_BASE_URL" '$value')"
+    fi
+    if [ "$config_mode" != "project" ] && [ "$host_config_file" != "$config_file" ] && [ -f "$host_config_file" ]; then
+      sed -e '/^mcp_oauth_credentials_store[[:space:]]*=/d' -e '/^openai_base_url[[:space:]]*=/d' "$host_config_file"
+    fi
+  } > "$pending_config"; then
+    rm -f "$pending_config"
+    echo "[agent] ERROR: could not initialize Codex config file: $config_file" >&2
+    exit 1
+  fi
+
+  if ! mv "$pending_config" "$config_file"; then
+    rm -f "$pending_config"
+    echo "[agent] ERROR: could not install Codex config file: $config_file" >&2
+    exit 1
+  fi
+}
+
+prepare_codex_auth_mount_target() {
+  local target_file="$1"
+
+  if [ -L "$target_file" ] || { [ -e "$target_file" ] && [ ! -f "$target_file" ]; }; then
+    echo "[agent] ERROR: Codex auth mount target must be a regular file: $target_file" >&2
+    exit 1
+  fi
+  if [ -e "$target_file" ]; then
+    return 0
+  fi
+
+  if ! : > "$target_file" || ! chmod 600 "$target_file"; then
+    echo "[agent] ERROR: could not prepare Codex auth mount target: $target_file" >&2
+    exit 1
+  fi
+  CODEX_AUTH_PLACEHOLDER="$target_file"
+}
+
+prepare_codex_project_managed_config() {
+  local managed_dir="$CODEX_MANAGED_CONFIG_PROJECT_DIR"
+  local managed_file="$managed_dir/managed_config.toml"
+  local project_config="$CODEX_HOST_CONFIG/config.toml"
+  local host_config="$HOST_HOME/.codex/config.toml"
+  local legacy_config="$CODEX_CONFIG_LEGACY_PROJECT_PATH/config.toml"
+  local source_config=""
+  local pending_config=""
+
+  if [ -L "$managed_dir" ] || { [ -e "$managed_dir" ] && [ ! -d "$managed_dir" ]; }; then
+    echo "[agent] ERROR: project Codex config path must be a real directory: $managed_dir" >&2
+    exit 1
+  fi
+  if ! mkdir -p "$managed_dir"; then
+    echo "[agent] ERROR: could not create project Codex config directory: $managed_dir" >&2
+    exit 1
+  fi
+
+  if [ -L "$managed_file" ] || { [ -e "$managed_file" ] && [ ! -f "$managed_file" ]; }; then
+    echo "[agent] ERROR: project Codex managed config must be a regular file: $managed_file" >&2
+    exit 1
+  fi
+  if [ -e "$managed_file" ]; then
+    if [ ! -r "$managed_file" ]; then
+      echo "[agent] ERROR: project Codex managed config is not readable: $managed_file" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  if [ -f "$legacy_config" ] && [ -r "$legacy_config" ]; then
+    source_config="$legacy_config"
+  elif [ -f "$project_config" ] && [ -r "$project_config" ]; then
+    source_config="$project_config"
+  elif [ "$host_config" != "$project_config" ] && [ -f "$host_config" ] && [ -r "$host_config" ]; then
+    source_config="$host_config"
+  fi
+
+  pending_config="$(mktemp "$managed_dir/.managed_config.toml.XXXXXX")"
+  if ! {
+    printf 'mcp_oauth_credentials_store = "file"\n'
+    if [ -n "${OPENAI_BASE_URL:-}" ]; then
+      printf 'openai_base_url = %s\n' "$(jq -Rn --arg value "$OPENAI_BASE_URL" '$value')"
+    fi
+    if [ -n "$source_config" ]; then
+      sed -e '/^mcp_oauth_credentials_store[[:space:]]*=/d' -e '/^openai_base_url[[:space:]]*=/d' "$source_config"
+    fi
+  } > "$pending_config"; then
+    rm -f "$pending_config"
+    echo "[agent] ERROR: could not initialize project Codex managed config: $managed_file" >&2
+    exit 1
+  fi
+
+  if ! chmod u+rw "$pending_config" || ! mv "$pending_config" "$managed_file"; then
+    rm -f "$pending_config"
+    echo "[agent] ERROR: could not install project Codex managed config: $managed_file" >&2
+    exit 1
   fi
 }
 
@@ -105,6 +193,10 @@ resolve_mount_dir() {
 
 current_sandbox_profile() {
   printf '%s\n' "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}"
+}
+
+remote_container_mode() {
+  [ "${AGENT_REMOTE_CONTAINER_MODE:-0}" = "1" ]
 }
 
 firecracker_host_profile() {
@@ -127,23 +219,6 @@ runtime_run_label() {
   fi
 
   printf '%s\n' "${RUNTIME:-unknown}"
-}
-
-ensure_workspace_alias_mount_target() {
-  local engine="$1"
-  local alias_path="$2"
-
-  if [ -e "$alias_path" ] && [ ! -d "$alias_path" ]; then
-    echo "[agent] ERROR: workspace config alias for $engine is not a directory: $alias_path" >&2
-    exit 1
-  fi
-
-  if ! mkdir -p "$alias_path"; then
-    echo "[agent] ERROR: could not create workspace config alias for $engine: $alias_path" >&2
-    exit 1
-  fi
-
-  resolve_mount_dir "$alias_path"
 }
 
 expand_host_selector_path() {
@@ -216,8 +291,8 @@ require_runtime_config_dir_access() {
       ;;
   esac
 
-  if [ -n "$config_file" ] && [ -e "$config_file" ] && [ ! -r "$config_file" ]; then
-    echo "[agent] ERROR: config file for $engine is not readable: $config_file" >&2
+  if [ -n "$config_file" ] && [ -e "$config_file" ] && { [ ! -r "$config_file" ] || [ ! -w "$config_file" ]; }; then
+    echo "[agent] ERROR: config file for $engine must be readable and writable: $config_file" >&2
     echo "[agent] Hint: fix ownership/permissions on the host file, or select a different config root." >&2
     exit 1
   fi
@@ -335,10 +410,17 @@ mount_standard_engine() {
 
   case "$engine" in
     codex)
+      if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+        migrate_legacy_codex_project_state
+        prepare_codex_project_managed_config
+      fi
       mount_engine "codex" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG" "/cache/.codex" \
         "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
-        "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json" \
-        "$WORKSPACE_PATH/.codex"
+        "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json"
+      if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+        ARGS+=( -e "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
+        ARGS+=( -v "$CODEX_MANAGED_CONFIG_PROJECT_DIR:/etc/codex:ro${Z_SUFFIX}" )
+      fi
       ;;
     opencode)
       mount_engine "opencode" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG" "/cache/.config/opencode" \
@@ -351,7 +433,7 @@ mount_standard_engine() {
         "CLAUDE_AUTH" "$CLAUDE_AUTH_BASE" ".credentials.json"
       ;;
     omp)
-      mount_engine "omp" "host" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" "" ""
+      mount_engine "omp" "host" "$OMP_HOST_CONFIG" "/cache/.omp" "" "" "" ""
       ;;
     commandcode)
       mount_engine "commandcode" "$COMMANDCODE_CONFIG_MODE" "$COMMANDCODE_HOST_CONFIG" "/cache/.commandcode" \
@@ -397,6 +479,10 @@ prepare_path_guard_dir() {
   for guarded_command in git sh nix nix-shell need; do
     ln -s "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
   done
+
+  if firecracker_host_profile; then
+    ln -s "/bin/agent-firecracker-podman" "$PATH_GUARD_HOST_DIR/podman"
+  fi
 }
 
 runtime_path_scope_key() {
@@ -408,6 +494,71 @@ runtime_path_scope_key() {
     printf '%s' "$value" | shasum -a 256 | awk '{print substr($1,1,16)}'
   else
     printf '%s' "$value" | tr -cd 'a-zA-Z0-9' | head -c 16
+  fi
+}
+
+copy_codex_state_tree_without_clobber() {
+  local source_dir="$1"
+  local target_dir="$2"
+  local source_path=""
+  local relative_path=""
+  local target_path=""
+
+  [ -d "$source_dir" ] || return 0
+  if ! mkdir -p "$target_dir"; then
+    echo "[agent] ERROR: could not prepare Codex session migration target: $target_dir" >&2
+    exit 1
+  fi
+
+  while IFS= read -r source_path; do
+    relative_path="${source_path#$source_dir/}"
+    target_path="$target_dir/$relative_path"
+    if [ -d "$source_path" ] && [ ! -L "$source_path" ]; then
+      mkdir -p "$target_path"
+    elif [ ! -e "$target_path" ] && [ ! -L "$target_path" ]; then
+      mkdir -p "$(dirname "$target_path")"
+      cp -a "$source_path" "$target_path"
+      CODEX_MIGRATED_FILE_COUNT=$((CODEX_MIGRATED_FILE_COUNT + 1))
+    fi
+  done < <(find "$source_dir" -mindepth 1 -print)
+}
+
+migrate_legacy_codex_project_state() {
+  local legacy_root="$CODEX_CONFIG_LEGACY_PROJECT_PATH"
+  local project_root="$CODEX_CONFIG_PROJECT_PATH"
+  local marker_dir="$CODEX_MANAGED_CONFIG_PROJECT_DIR"
+  local marker_file="$marker_dir/cache-state-migration-v1"
+  local source_file=""
+  local target_file=""
+
+  [ -d "$legacy_root" ] || return 0
+  [ ! -e "$marker_file" ] || return 0
+
+  if ! mkdir -p "$project_root" "$marker_dir"; then
+    echo "[agent] ERROR: could not prepare project-local Codex state migration" >&2
+    exit 1
+  fi
+
+  CODEX_MIGRATED_FILE_COUNT=0
+  copy_codex_state_tree_without_clobber "$legacy_root/sessions" "$project_root/sessions"
+  copy_codex_state_tree_without_clobber "$legacy_root/archived_sessions" "$project_root/archived_sessions"
+
+  for source_file in "$legacy_root/history.jsonl" "$legacy_root"/state*.sqlite*; do
+    [ -f "$source_file" ] || continue
+    target_file="$project_root/$(basename "$source_file")"
+    if [ ! -e "$target_file" ]; then
+      cp -a "$source_file" "$target_file"
+      CODEX_MIGRATED_FILE_COUNT=$((CODEX_MIGRATED_FILE_COUNT + 1))
+    fi
+  done
+
+  if ! printf '%s\n' "$legacy_root" > "$marker_file"; then
+    echo "[agent] ERROR: could not record project-local Codex state migration" >&2
+    exit 1
+  fi
+  if [ "$CODEX_MIGRATED_FILE_COUNT" -gt 0 ]; then
+    echo "[agent] migrated $CODEX_MIGRATED_FILE_COUNT Codex state files into $project_root" >&2
+    echo "[agent] preserved the previous state at $legacy_root" >&2
   fi
 }
 
@@ -632,17 +783,37 @@ sudo_enabled() {
 }
 
 build_base_container_args() {
-  CONTAINER_NAME="agent-${TOOL}-$(printf '%s%s' "${RANDOM:-0}" "${RANDOM:-0}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
-  CONTAINER_NAME="${CONTAINER_NAME:0:63}"
+  if remote_container_mode; then
+    if [ -z "${AGENT_REMOTE_RUNTIME_CONTAINER:-}" ]; then
+      echo "[agent] ERROR: remote container mode requires AGENT_REMOTE_RUNTIME_CONTAINER" >&2
+      exit 1
+    fi
+    if [ "${AGENT_REMOTE_POD_DISABLED:-0}" != "1" ] && [ -z "${AGENT_REMOTE_POD_NAME:-}" ]; then
+      echo "[agent] ERROR: remote container mode requires AGENT_REMOTE_POD_NAME" >&2
+      exit 1
+    fi
+    CONTAINER_NAME="$AGENT_REMOTE_RUNTIME_CONTAINER"
+  else
+    CONTAINER_NAME="agent-${TOOL}-$(printf '%s%s' "${RANDOM:-0}" "${RANDOM:-0}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
+    CONTAINER_NAME="${CONTAINER_NAME:0:63}"
+  fi
 
   ARGS=(
-    --rm
     --name "$CONTAINER_NAME"
   )
+  if remote_container_mode; then
+    ARGS+=( --replace -d )
+    if [ "${AGENT_REMOTE_POD_DISABLED:-0}" != "1" ]; then
+      ARGS+=( --pod "$AGENT_REMOTE_POD_NAME" )
+    fi
+  else
+    ARGS+=( --rm )
+  fi
 
   if firecracker_host_profile; then
     ARGS+=(
       --privileged
+      --cap-add=NET_ADMIN
       --security-opt=label=disable
     )
   else
@@ -773,7 +944,11 @@ prepare_runtime_identity_dir() {
 
   uid="$(id -u)"
   gid="$(id -g)"
-  account_name="$(sanitize_runtime_account_name "${USER:-${LOGNAME:-agent}}")"
+  if remote_container_mode; then
+    account_name="$(sanitize_runtime_account_name "${AGENT_REMOTE_USER:-codex}")"
+  else
+    account_name="$(sanitize_runtime_account_name "${USER:-${LOGNAME:-agent}}")"
+  fi
   group_name="$account_name"
   if [ "$uid" = "0" ]; then
     account_name="root"
@@ -873,6 +1048,9 @@ append_runtime_identity_args() {
       ARGS+=( --network=host )
     else
       ARGS+=( --userns=keep-id )
+      if remote_container_mode; then
+        return
+      fi
       if podman info --format '{{.Host.Slirp4NetNS.Executable}}' 2>/dev/null | grep -q slirp4netns; then
         ARGS+=( --network=slirp4netns:allow_host_loopback=true )
       else
@@ -974,6 +1152,10 @@ append_ssh_agent_args() {
   local host_sock=""
   local container_sock="/run/host-services/ssh-auth.sock"
 
+  if remote_container_mode && [ "${AGENT_REMOTE_FORWARD_SSH_AGENT:-0}" != "1" ]; then
+    return 0
+  fi
+
   host_sock="$(resolve_ssh_auth_socket)"
   [ -n "$host_sock" ] || return 0
 
@@ -986,6 +1168,17 @@ append_ssh_runtime_mount_args() {
   if [ -n "${SSH_RUNTIME_DIR:-}" ] && [ -d "$SSH_RUNTIME_DIR" ]; then
     ARGS+=( -v "$SSH_RUNTIME_DIR:/cache/.ssh:ro${Z_SUFFIX}" )
   fi
+}
+
+append_remote_state_mount_args() {
+  if ! remote_container_mode; then
+    return 0
+  fi
+  if [ -z "${AGENT_REMOTE_RUNTIME_STATE_DIR:-}" ] || [ ! -d "$AGENT_REMOTE_RUNTIME_STATE_DIR" ]; then
+    echo "[agent] ERROR: remote container mode requires AGENT_REMOTE_RUNTIME_STATE_DIR" >&2
+    exit 1
+  fi
+  ARGS+=( -v "$AGENT_REMOTE_RUNTIME_STATE_DIR:/run/agent-remote:rw${Z_SUFFIX}" )
 }
 
 append_codex_ssh_sandbox_args() {
@@ -1121,7 +1314,11 @@ append_auto_mount_dir_args() {
 append_passthrough_env_args() {
   local key value prefix
 
-  DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nGIT_ALLOW\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nCOMMANDCODE_\nOMP_\nPI_\nAGENT_'
+  if remote_container_mode && [ "${AGENT_REMOTE_ALLOW_HOST_ENV:-0}" != "1" ]; then
+    DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED'
+  else
+    DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nCOMMANDCODE_\nOMP_\nPI_\nAGENT_'
+  fi
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
   while IFS='=' read -r key value; do
@@ -1131,6 +1328,9 @@ append_passthrough_env_args() {
         # paths, forwarding them into the tool can make the inner CLI
         # reinterpret them against the sandbox filesystem. SSH_AUTH_SOCK is
         # mounted separately so the container sees a valid in-container path.
+        continue
+        ;;
+      AGENT_REMOTE_TS_AUTHKEY|AGENT_REMOTE_TAILSCALE_AUTHKEY|TS_AUTHKEY|TS_AUTH_KEY|AGENT_REMOTE_TS_CLIENT_SECRET|AGENT_REMOTE_TS_CLIENT_SECRET_FILE|TS_CLIENT_SECRET)
         continue
         ;;
     esac
@@ -1172,6 +1372,8 @@ resolve_tool_config_roots() {
   COMMANDCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.commandcode"
 
   CODEX_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.codex"
+  CODEX_CONFIG_LEGACY_PROJECT_PATH="$CACHE_DIR/project-config/codex/$(runtime_path_scope_key "$PROJECT_ROOT")"
+  CODEX_MANAGED_CONFIG_PROJECT_DIR="$PROJECT_ROOT/.agent-sandbox/codex"
   OPENCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.config/opencode"
   CLAUDE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.claude"
   COMMANDCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.commandcode"
@@ -1189,6 +1391,13 @@ EOF
 $(resolve_config_root "${COMMANDCODE_CONFIG:-}" "$COMMANDCODE_CONFIG_DEFAULT_HOST" "$COMMANDCODE_CONFIG_PROJECT_PATH")
 EOF
 
+  if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+    if [ -L "$CODEX_CONFIG_PROJECT_PATH" ]; then
+      echo "[agent] ERROR: project Codex home must be a real directory, not a symlink: $CODEX_CONFIG_PROJECT_PATH" >&2
+      exit 1
+    fi
+  fi
+
   AGENT_AUTH_HOME="${AGENT_AUTH_HOME:-$HOST_HOME/.local/share/agent-sandbox/auth}"
   CODEX_AUTH_BASE="${CODEX_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/codex}"
   OPENCODE_AUTH_BASE="${OPENCODE_AUTH_BASE_DIR:-$AGENT_AUTH_HOME/opencode}"
@@ -1197,6 +1406,23 @@ EOF
 }
 
 append_stdio_and_target_args() {
+  if remote_container_mode; then
+    ARGS+=(
+      -e "AGENT_REMOTE_STATE_DIR=/run/agent-remote"
+      -e "AGENT_REMOTE_NAME=${AGENT_REMOTE_NAME:-}"
+      -e "AGENT_WORKSPACE_PATH=$WORKSPACE_PATH"
+      --entrypoint "/bin/agent-remote-entrypoint"
+    )
+    if [ "$MODE" = "podman-rootfs" ]; then
+      ARGS+=( --rootfs )
+      RUN_TARGET="$ROOTFS_IMAGE_ARG"
+    else
+      RUN_TARGET="$IMAGE_ID"
+    fi
+    ARGS+=( "$RUN_TARGET" )
+    return 0
+  fi
+
   ARGS+=( -i )
   if [ "${AGENT_FORCE_TTY:-0}" = "1" ] || { [ -t 0 ] && [ -t 1 ]; }; then
     ARGS+=( -t )
@@ -1246,6 +1472,7 @@ build_container_args() {
   append_firecracker_host_args
   append_host_socket_args
   append_ssh_runtime_mount_args
+  append_remote_state_mount_args
   append_dev_env_args
   append_workspace_mount_args
 

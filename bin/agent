@@ -83,6 +83,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/login.sh"
 . "$AGENT_BIN_DIR/lib/sessions.sh"
 . "$AGENT_BIN_DIR/lib/viewer.sh"
+. "$AGENT_BIN_DIR/lib/remote.sh"
 
 TOOL=""
 REMAINING_ARGS=()
@@ -111,6 +112,11 @@ if [ "$(basename "$0")" = "agent" ]; then
       ;;
     viewer)
       AGENT_COMMAND="viewer"
+      shift
+      REMAINING_ARGS=("$@")
+      ;;
+    remote)
+      AGENT_COMMAND="remote"
       shift
       REMAINING_ARGS=("$@")
       ;;
@@ -150,9 +156,13 @@ if [ "$AGENT_COMMAND" = "viewer" ]; then
   run_viewer_and_exit
 fi
 
+if [ "$AGENT_COMMAND" = "remote" ]; then
+  resolve_remote_args "${REMAINING_ARGS[@]}"
+fi
+
 if [ "$AGENT_COMMAND" = "login" ]; then
   resolve_login_args "${REMAINING_ARGS[@]}"
-else
+elif [ "$AGENT_COMMAND" != "remote" ]; then
   validate_tool_access
 fi
 
@@ -161,12 +171,16 @@ HELPER_STATE_DIR=""
 LOGIN_STATE_DIR=""
 PATH_GUARD_HOST_DIR=""
 RUNTIME_IDENTITY_HOST_DIR=""
+CODEX_AUTH_PLACEHOLDER=""
 cleanup() {
   if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
   fi
   if [ -n "$RUNTIME_IDENTITY_HOST_DIR" ] && [ -d "$RUNTIME_IDENTITY_HOST_DIR" ]; then
     rm -rf "$RUNTIME_IDENTITY_HOST_DIR"
+  fi
+  if [ -n "$CODEX_AUTH_PLACEHOLDER" ] && [ -f "$CODEX_AUTH_PLACEHOLDER" ] && [ ! -s "$CODEX_AUTH_PLACEHOLDER" ]; then
+    rm -f "$CODEX_AUTH_PLACEHOLDER"
   fi
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
@@ -179,6 +193,10 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if [ "$AGENT_COMMAND" = "remote" ]; then
+  run_remote_and_exit
+fi
 
 bootstrap_environment
 if [ "$AGENT_COMMAND" = "login" ]; then

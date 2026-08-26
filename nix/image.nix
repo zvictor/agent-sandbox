@@ -54,43 +54,6 @@ let
     chmod 755 "$out/usr/lib/libstdc++.so.6"
   '';
 
-  gitWrapper = pkgs.writeShellScriptBin "git" ''
-    #!/bin/sh
-    set -e
-
-    if [ -n "''${GIT_ALLOW:-}" ]; then
-      exec ${pkgs.git}/bin/git "$@"
-    fi
-
-    # Preserve the current repo's local state by default. `clone` is the only
-    # write-capable exception because it creates a separate checkout rather than
-    # mutating the current repository's index, refs, or config.
-    SAFE_COMMANDS="clone|status|diff|log|show|ls-files|rev-parse|describe|ls-tree|cat-file|blame|grep|reflog|for-each-ref|rev-list|shortlog|symbolic-ref|name-rev|merge-base"
-    SUBCOMMAND=""
-
-    while [ "$#" -gt 0 ]; do
-      arg="$1"
-      case "$arg" in
-        -C|--git-dir|--work-tree|-c)
-          shift 2 ;;
-        --*) shift ;;
-        -*) shift ;;
-        *) SUBCOMMAND="$arg"; break ;;
-      esac
-    done
-
-    if [ -z "$SUBCOMMAND" ]; then
-      exec ${pkgs.git}/bin/git "$@"
-    fi
-
-    if echo "$SUBCOMMAND" | grep -qE "^($SAFE_COMMANDS)"; then
-      exec ${pkgs.git}/bin/git "$@"
-    fi
-
-    echo "Error: git $SUBCOMMAND is blocked (side effects not allowed)" >&2
-    exit 1
-  '';
-
   tools = {
     codex = {
       pkg = "@openai/codex";
@@ -126,6 +89,54 @@ let
 
   needCommand = pkgs.runCommand "need" { } ''
     install -Dm0755 ${../scripts/image/need.sh} "$out/bin/need"
+  '';
+
+  remoteScripts = pkgs.runCommand "agent-remote-scripts" { } ''
+    install -Dm0755 ${../scripts/image/remote-entrypoint.sh} "$out/bin/agent-remote-entrypoint"
+    install -Dm0755 ${../scripts/image/remote-dispatch.sh} "$out/bin/agent-remote-dispatch"
+    install -Dm0755 ${../scripts/image/remote-shell.sh} "$out/bin/agent-remote-shell"
+    install -Dm0755 ${../scripts/image/remote-codex.sh} "$out/bin/agent-remote-codex"
+  '';
+
+  firecrackerPodmanWrapper = pkgs.writeShellScriptBin "agent-firecracker-podman" ''
+    set -eu
+
+    podman_state=/cache/agent-firecracker-podman
+    podman_root="$podman_state/root"
+    podman_runroot=/run/agent-firecracker-podman
+    podman_tmpdir="$podman_state/tmp"
+    podman_network_config="$podman_state/networks"
+
+    /agent-sudo/bin/sudo -n mkdir -p "$podman_root" "$podman_runroot" "$podman_tmpdir" "$podman_network_config"
+    /agent-sudo/bin/sudo -n chmod 0700 "$podman_root" "$podman_runroot" "$podman_network_config"
+    /agent-sudo/bin/sudo -n chmod 1777 "$podman_tmpdir"
+
+    exec /agent-sudo/bin/sudo -n env TMPDIR="$podman_tmpdir" \
+      ${pkgs.podman}/bin/podman \
+      --storage-driver vfs \
+      --root "$podman_root" \
+      --runroot "$podman_runroot" \
+      --network-config-dir "$podman_network_config" \
+      "$@"
+  '';
+
+  containersPolicy = pkgs.writeTextDir "etc/containers/policy.json" ''
+    {
+      "default": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ],
+      "transports": {
+        "docker-daemon": {
+          "": [
+            {
+              "type": "insecureAcceptAnything"
+            }
+          ]
+        }
+      }
+    }
   '';
 
   sudoPackage = pkgs.sudo.overrideAttrs (oldAttrs: {
@@ -217,6 +228,9 @@ EOF
       if [ "${name}" = "codex" ]; then
         export CODEX_HOME="''${CODEX_HOME:-/cache/.codex}"
         export CODEX_CONFIG_DIR="''${CODEX_CONFIG_DIR:-''${CODEX_HOME}}"
+        if [ -n "''${AGENT_CODEX_ROLLOUT_SOURCE_HOME:-}" ]; then
+          ${pkgs.bun}/bin/bun ${../scripts/image/codex-state-migrate.ts}
+        fi
       fi
 
       if [ "''${AGENT_NEED_BOOTSTRAP_INDEX:-1}" = "1" ] && command -v need >/dev/null 2>&1; then
@@ -313,7 +327,7 @@ EOF
     ln -s /cache/nix/profiles "$out/nix/var/nix/profiles"
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
-    mkdir -p "$out/nixcache" "$out/tmp" "$out/config"
+    mkdir -p "$out/nixcache" "$out/tmp" "$out/var/tmp" "$out/config"
     mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"
     mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
   '';
@@ -321,7 +335,7 @@ EOF
   imageBasePaths =
     [
       skeleton
-      gitWrapper
+      pkgs.git
       agentCompat
       pkgs.direnv
       pkgs.nix-direnv
@@ -335,6 +349,7 @@ EOF
       pkgs.gawk
       pkgs.findutils
       pkgs.openssh
+      pkgs.tmux
       pkgs.curl
       pkgs.wget
       pkgs.jq
@@ -347,7 +362,7 @@ EOF
     ++ devPackagesImage
     ++ toolLaunchers
     ++ compatWrappers
-    ++ [ needCommand sudoConfig sudoRuntime ];
+    ++ [ needCommand remoteScripts firecrackerPodmanWrapper containersPolicy sudoConfig sudoRuntime ];
 
   imageSpec = {
     name = "agent-base";
@@ -400,14 +415,14 @@ rec {
       # Keep common runtime mount destinations as normal directories, not
       # symlink chains.
       for d in \
-        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var/run \
+        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/secrets var var/run var/tmp \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
         proc sys sys/fs sys/fs/cgroup dev dev/net
       do
         rm -rf "$out/$d"
         mkdir -p "$out/$d"
       done
-      chmod 1777 "$out/tmp"
+      chmod 1777 "$out/tmp" "$out/var/tmp"
       ln -sfn /cache/nix/profiles "$out/nix/var/nix/profiles"
       ln -sfn /cache/nix/gcroots "$out/nix/var/nix/gcroots"
     '';

@@ -232,6 +232,7 @@ print_sessions_and_exit() {
   resolve_project_paths
   load_project_config
   resolve_host_home
+  prepare_cache_dirs
   resolve_tool_config_roots
 
   case "$SESSIONS_TOOL" in
@@ -256,7 +257,7 @@ print_sessions_and_exit() {
   if [ "$SESSIONS_ALL" = "1" ]; then
     scope_summary="all sessions in config root"
   elif [ "$config_mode" = "project" ]; then
-    scope_summary="all sessions in project config root"
+    scope_summary="all sessions in project Codex home"
   else
     scope_summary="sessions visible from current cwd"
   fi
