@@ -529,6 +529,7 @@ remote_start_tailscale_sidecar() {
 
   if remote_uses_pod; then
     podman_runtime_cmd run -d \
+      --init \
       --pod "$REMOTE_POD_NAME" \
       --name "$REMOTE_TS_CONTAINER" \
       --replace \
@@ -539,6 +540,7 @@ remote_start_tailscale_sidecar() {
       >/dev/null
   else
     podman_runtime_cmd run -d \
+      --init \
       --network=host \
       --name "$REMOTE_TS_CONTAINER" \
       --replace \

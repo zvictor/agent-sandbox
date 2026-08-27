@@ -828,6 +828,7 @@ build_base_container_args() {
 
   ARGS=(
     --name "$CONTAINER_NAME"
+    --init
   )
   if remote_container_mode; then
     ARGS+=( --replace -d )

@@ -394,6 +394,7 @@ base_container_args_for() (
 
   local allow_sudo="${1:-0}"
   local profile="${2:-default}"
+  local runtime="${3:-podman}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
@@ -406,6 +407,7 @@ base_container_args_for() (
   fi
 
   TOOL="codex"
+  RUNTIME="$runtime"
   WORKSPACE_PATH="/workspace"
   WORKSPACE_RUNTIME_PATH="/cache/need/bin:/bin:/usr/bin:/usr/local/bin"
   TOOL_CACHE_DIR="/cache/tools/codex"
@@ -1464,7 +1466,7 @@ test_remote_tailscale_sidecar_uses_userspace_pod_network() (
     ' bash "$REPO_ROOT/bin/lib/remote.sh" "$tmp_dir"
   )"
 
-  assert_contains "$output" "run -d --pod agent-remote-test --name agent-remote-test-ts --replace"
+  assert_contains "$output" "run -d --init --pod agent-remote-test --name agent-remote-test-ts --replace"
   assert_contains "$output" "TS_HOSTNAME=codex-test"
   assert_contains "$output" "TS_USERSPACE=true"
   assert_contains "$output" "TS_AUTH_ONCE=true"
@@ -1475,6 +1477,36 @@ test_remote_tailscale_sidecar_uses_userspace_pod_network() (
   assert_not_contains "$output" "--device"
   assert_not_contains "$output" "-p "
   assert_not_contains "$output" "--publish"
+)
+
+test_remote_firecracker_tailscale_sidecar_uses_host_network_init() (
+  set -euo pipefail
+
+  local tmp_dir output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  mkdir -p "$tmp_dir/ts"
+
+  output="$(
+    CMD_LOG="$tmp_dir/cmd.log" bash -c '
+      source "$1"
+      REMOTE_TS_CONTAINER=agent-remote-test-ts
+      REMOTE_TS_STATE_DIR="$2/ts"
+      REMOTE_HOSTNAME=codex-test
+      AGENT_REMOTE_TS_AUTHKEY=tskey-test
+      firecracker_host_profile() { return 0; }
+      remote_container_running() { return 1; }
+      podman_runtime_cmd() { printf "%s\n" "$*" >> "$CMD_LOG"; }
+      remote_start_tailscale_sidecar
+      cat "$CMD_LOG"
+    ' bash "$REPO_ROOT/bin/lib/remote.sh" "$tmp_dir"
+  )"
+
+  assert_contains "$output" "run -d --init --network=host --name agent-remote-test-ts --replace"
+  assert_not_contains "$output" "--pod"
+  assert_not_contains "$output" "--privileged"
+  assert_not_contains "$output" "--cap-add"
+  assert_not_contains "$output" "--device"
 )
 
 test_remote_sessions_text_distinguishes_live_and_transcripts() (
@@ -1754,6 +1786,25 @@ test_stdio_target_uses_podman_rootfs() (
   assert_contains "$output" "--rootfs"
   assert_contains "$output" "/tmp/rootfs:O"
   assert_not_contains "$output" "sha256:unused"
+)
+
+test_runtime_containers_require_pid1_init() (
+  set -euo pipefail
+
+  local output=""
+  local init_count=""
+
+  for output in \
+    "$(base_container_args_for)" \
+    "$(base_container_args_for 0 default docker)" \
+    "$(base_container_args_for 0 firecracker-host)" \
+    "$(remote_base_container_args_for)" \
+    "$(remote_base_container_args_for firecracker-host)"
+  do
+    init_count="$(printf '%s\n' "$output" | grep -c -x -- '--init')"
+    [ "$init_count" -eq 1 ] || fail "expected exactly one mandatory --init flag, found $init_count"
+    assert_not_contains "$output" "--pid=host"
+  done
 )
 
 test_remote_base_container_uses_stable_pod() (
@@ -3001,6 +3052,7 @@ main() {
   run_test "remote up preflights auth before artifacts" test_remote_up_preflights_auth_before_artifacts
   run_test "remote pod has no published ports" test_remote_pod_has_no_published_ports
   run_test "remote tailscale sidecar uses userspace pod network" test_remote_tailscale_sidecar_uses_userspace_pod_network
+  run_test "remote firecracker tailscale sidecar uses host network init" test_remote_firecracker_tailscale_sidecar_uses_host_network_init
   run_test "remote sessions text distinguishes live and transcripts" test_remote_sessions_text_distinguishes_live_and_transcripts
   run_test "remote codex noninteractive starts without attach" test_remote_codex_noninteractive_starts_without_attach
   run_test "ssh runtime generation" test_ssh_runtime_generation
@@ -3013,6 +3065,7 @@ main() {
   run_test "runtime identity masks sudo by default" test_runtime_identity_masks_sudo_by_default
   run_test "runtime identity mounts sudo overlay when enabled" test_runtime_identity_mounts_sudo_overlay_when_enabled
   run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
+  run_test "runtime containers require PID 1 init" test_runtime_containers_require_pid1_init
   run_test "remote base container uses stable pod" test_remote_base_container_uses_stable_pod
   run_test "remote firecracker base container skips pod" test_remote_firecracker_base_container_skips_pod
   run_test "remote target uses entrypoint" test_remote_target_uses_entrypoint
@@ -3063,6 +3116,9 @@ main() {
 
   if [ "${AGENT_RUN_KVM_TESTS:-0}" = "1" ]; then
     run_test "microvm smoke" "$REPO_ROOT/tests/kvm-smoke.sh"
+  fi
+  if [ "${AGENT_RUN_PID1_REAPER_TESTS:-0}" = "1" ]; then
+    run_test "PID 1 orphan reaping smoke" "$REPO_ROOT/tests/runtime-init-smoke.sh"
   fi
 }
 
