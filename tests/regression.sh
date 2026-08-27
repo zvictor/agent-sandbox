@@ -806,11 +806,17 @@ test_runtime_resolution_parity() (
   local bad_runtime doctor_output run_output status=0
   bad_runtime="definitely-not-a-runtime"
 
-  doctor_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" ./scripts/agent doctor 2>&1)"
+  doctor_output="$(
+    cd "$REPO_ROOT" &&
+      AGENT_SANDBOX_PROFILE=default AGENT_RUNTIME="$bad_runtime" ./scripts/agent doctor 2>&1
+  )"
   assert_contains "$doctor_output" "requested runtime '$bad_runtime' is not available"
 
   set +e
-  run_output="$(cd "$REPO_ROOT" && AGENT_RUNTIME="$bad_runtime" ./scripts/agent codex 2>&1)"
+  run_output="$(
+    cd "$REPO_ROOT" &&
+      AGENT_SANDBOX_PROFILE=default AGENT_RUNTIME="$bad_runtime" ./scripts/agent codex 2>&1
+  )"
   status=$?
   set -e
 
@@ -957,19 +963,22 @@ test_missing_fetchtarball_lock_is_created() (
 test_shell_nix_nix_path_default_receives_explicit_pkgs() (
   set -euo pipefail
 
-  local tmp_dir output
+  local tmp_dir project_dir output
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  project_dir="$tmp_dir/project"
+  mkdir -p "$project_dir"
+  trap 'chmod -R u+w "$tmp_dir" 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
 
   printf '%s\n' \
     '{ pkgs ? import <nixpkgs> {} }:' \
     'pkgs.mkShell { packages = [ pkgs.hello ]; }' \
-    > "$tmp_dir/shell.nix"
+    > "$project_dir/shell.nix"
 
   output="$(
     env -u NIX_CONFIG \
+      NIX_REMOTE="local?root=$tmp_dir/nix-root" \
       NIX_PATH= \
-      AGENT_TEST_PROJECT="$tmp_dir" \
+      AGENT_TEST_PROJECT="$project_dir" \
       AGENT_TEST_REPO_ROOT="$REPO_ROOT" \
       nix --extra-experimental-features 'nix-command flakes' eval --impure --json --expr '
         let
