@@ -577,7 +577,6 @@ Those paths use the host-backed Nix helper when possible, so the agent can keep 
 ### Host Nix tool helper
 
 - `AGENT_NEED_HELPER=1|0`: enable or disable the narrow host-side need helper; default `1`
-- `AGENT_NEED_HELPER_TTL`: inactivity timeout in seconds for the helper worker; default `900`
 - `AGENT_NEED_TIMEOUT`: request timeout in seconds for `need`; default `600`
 - `AGENT_NEED_BOOTSTRAP_INDEX=1|0`: automatically start a background `need update-index` on first shell startup when the local command index is missing; default `1`
 
@@ -594,7 +593,7 @@ need clear --all
 
 The helper is intentionally narrow. It only materializes constrained installables such as `nixpkgs#<attr>` and selected `github:NixOS/nixpkgs/...#<attr>` refs. Every output is rooted by a host-owned runtime lease before it is returned. The root directory is not mounted into the sandbox. Instead, the sandbox receives `/run/agent-runtime-receipts` as a read-only mount containing the lease identity, output paths, and complete closure identities. Bare `need <command>` lookups use `nixos-unstable` by default; use `nixpkgs#...` when you explicitly want the stable channel.
 
-The lease outlives the helper's inactivity timeout and inner coordinator restarts. Foreground leases are removed when the outer sandbox exits; stale leases from killed launchers are pruned on the next launch. Remote leases remain until `agent remote down`.
+The enabled helper and its lease outlive inner coordinator restarts. The helper remains available until the foreground sandbox exits or `agent remote down` removes a remote lease. Foreground leases are removed when the outer sandbox exits; stale leases from killed launchers are pruned on the next launch.
 
 `need inject` writes lease-checking command launchers to a project-scoped bin directory by default, so an injected tool in one checkout does not shadow another project's shell or bypass admission in a later sandbox. `need clear` removes the current project's injected launchers, `need clear --legacy` removes the old shared injected bin directory, and `need clear --all` removes the whole `need` cache for the current tool cache. These cache operations do not expose or mutate host lease roots.
 

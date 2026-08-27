@@ -165,10 +165,10 @@ When `AGENT_NEED_HELPER=1`, the launcher starts a narrow host-side worker that:
 - returns paths through a separate writable request/response bridge
 - keeps `need inject` lease-checking launchers in a project-scoped bin directory by default
 
-The helper inactivity timeout affects request availability, not retention. Once
-admitted, an output remains rooted after the helper or coordinator exits and is
-released only with the outer sandbox lease. The helper never causes the raw Nix
-daemon socket or writable GC-root state to be mounted into the sandbox.
+The enabled helper remains available for the runtime lease's lifetime, including
+across inner coordinator restarts. Once admitted, an output remains rooted until
+the outer sandbox lease is released. The helper never causes the raw Nix daemon
+socket or writable GC-root state to be mounted into the sandbox.
 
 ### Podman Session API
 

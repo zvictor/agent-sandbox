@@ -246,7 +246,6 @@ For `.envrc` files that use `use nix` with `<nixpkgs>`, the helper first reuses 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `AGENT_NEED_HELPER` | `1` | Enables the narrow host-side helper worker |
-| `AGENT_NEED_HELPER_TTL` | `900` | Inactivity timeout for the helper |
 | `AGENT_NEED_TIMEOUT` | `600` | Request timeout for `need` |
 | `AGENT_NEED_BOOTSTRAP_INDEX` | `1` | Starts background `need update-index` when needed |
 | `AGENT_NEED_INDEX_URL` | nix-index release URL | Override the downloaded nix-index database |
@@ -278,9 +277,8 @@ cannot be overridden through `AGENT_EXTRA_ENV` or host passthrough.
 
 Materialization succeeds only after Nix has created a permanent root at its
 final pathname and the helper has published a receipt. Cache entries from a
-different lease are rejected. `AGENT_NEED_HELPER_TTL` controls only how long
-the request worker waits while idle; it does not limit an admitted output's
-retention.
+different lease are rejected. When enabled, the request worker remains
+available until the runtime lease is released.
 
 The sandbox also prefers compatibility shims over sandbox-specific instructions when possible:
 - `nix shell <installable> --command ...`
