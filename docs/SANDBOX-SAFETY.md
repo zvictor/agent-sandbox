@@ -1,6 +1,6 @@
 # Sandbox Safety
 
-Updated: 2026-08-16
+Updated: 2026-08-27
 
 This document describes the safety properties of `agent-sandbox` as it exists in this repository today. It also compares those properties with the native safety models of the agent CLIs we run inside it.
 
@@ -19,6 +19,13 @@ Interactive runs execute inside a Podman rootfs container or Docker-loaded OCI i
 
 Practically, this means agent-generated processes do not run in the host namespace with ambient host capabilities. Enabling sudo does not grant host root, but it does widen the in-container boundary and is therefore explicit.
 
+The outer container always keeps a private PID namespace and uses the
+container engine's administrator-owned init facility. The agent tool, remote
+SSH service, and remote sidecar run below that PID 1, which reaps orphaned
+descendants. Project and Flow code receive no init selector, host PID namespace,
+or lifecycle control. Run-scoped supervisors should still reap their own
+children promptly; the outer init is the final owner if such a supervisor dies.
+
 `AGENT_SANDBOX_PROFILE=firecracker-host` is a separate host-control profile. It
 uses Linux rootful Podman through `sudo -n podman`, runs the container
 privileged with host user, cgroup, and network namespaces, mounts `/dev/kvm`,
@@ -31,12 +38,13 @@ same state directory. This profile exists for Firecracker host smoke and
 image-validation workflows and should be treated as materially closer to
 running a privileged host tool than to the default sandbox.
 
-The outer container can run long-lived processes, but individual agent command
-execution surfaces may clean up child processes when a command returns. Do not
-model proof gates as `start` in one command and `health` in a later command
-unless the process is owned by an explicit durable service. Keep local daemon,
-VM, health-check, and cleanup phases under one foreground owner, or use the
-remote tmux-backed sandbox lifecycle when split-phase inspection is required.
+The outer PID 1 reaps orphans but does not make arbitrary command children
+durable. Individual agent command execution surfaces may still terminate child
+processes when a command returns. Do not model proof gates as `start` in one
+command and `health` in a later command unless the process is owned by an
+explicit durable service. Keep local daemon, VM, health-check, and cleanup
+phases under one foreground owner, or use the remote tmux-backed sandbox
+lifecycle when split-phase inspection is required.
 
 ### 2. Filesystem scope is explicit, not ambient
 
@@ -172,6 +180,7 @@ For the current implementation, the runtime is best described like this:
 | Protection from hostile code with `podman-session` access | Moderate |
 | Protection from hostile code with narrow host Nix helper access | Moderate |
 | Protection from hostile code with `firecracker-host` profile | Weak |
+| Container-wide orphan reaping | Good; engine-managed PID 1 is mandatory |
 | Resource exhaustion protection | Moderate |
 
 ## Comparison With Each Agent

@@ -136,6 +136,12 @@ Docker path:
 - loads it with `streamImage.copyToDockerDaemon`
 - caches the resolved runtime image ID
 
+Both paths require the container engine's `--init` facility. The engine-owned
+init is PID 1 in a private PID namespace and launches the selected tool or
+remote service as its child. This gives the outer sandbox one final owner for
+orphan reaping without exposing PID-namespace or init controls inside the
+container. Remote Tailscale sidecars use the same init contract.
+
 ## Helper Services
 
 ### Direnv Snapshot Helper
@@ -189,7 +195,9 @@ The final container typically receives:
 - optional container API sockets
 - optional extra mounts or env passthrough
 
-The final entrypoint is `/bin/<tool>`, backed by the image's Bun-installed tool launcher.
+The engine-managed init is PID 1. Its foreground payload entrypoint is
+`/bin/<tool>`, backed by the image's Bun-installed tool launcher; remote mode
+uses `/bin/agent-remote-entrypoint` as the init child instead.
 
 ## Tool Wrappers
 
@@ -212,6 +220,7 @@ Current shortcut-wrapper defaults:
 | --- | --- |
 | CLI command parsing | [`bin/agent`](../bin/agent), [`bin/lib/cli.sh`](../bin/lib/cli.sh) |
 | runtime and project resolution | [`bin/lib/environment.sh`](../bin/lib/environment.sh) |
+| PID 1 lifecycle and runtime arguments | [`bin/lib/container_runtime.sh`](../bin/lib/container_runtime.sh), [`tests/pid1-reaper-probe.sh`](../tests/pid1-reaper-probe.sh) |
 | package contract staging | [`bin/lib/project_contract.sh`](../bin/lib/project_contract.sh), [`nix/detect-packages.nix`](../nix/detect-packages.nix) |
 | build/load caching | [`bin/lib/artifact_prep.sh`](../bin/lib/artifact_prep.sh), [`bin/lib/rootfs.sh`](../bin/lib/rootfs.sh) |
 | container args | [`bin/lib/container_runtime.sh`](../bin/lib/container_runtime.sh) |

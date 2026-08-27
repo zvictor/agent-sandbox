@@ -60,6 +60,11 @@ For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell
 
 ## Runtime Behavior
 
+The PID-1 reaper is mandatory infrastructure, not a configuration option.
+Every Podman and Docker launch uses the engine's `--init` facility, including
+foreground tools, remote runtime containers, and remote sidecars. A runtime
+that cannot provide init fails during container creation.
+
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `AGENT_FORCE_TTY` | auto | Force `-t` when set to `1` |

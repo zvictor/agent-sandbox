@@ -259,6 +259,7 @@ You can rely on these behaviors:
 - Tool config mounts are explicit rather than ambient.
 - The standard Git executable is available, including commands that update the index, refs, and repository configuration.
 - Container-local `sudo` is disabled by default and is enabled only with `AGENT_ALLOW_SUDO=1`.
+- Every supported container runs an engine-managed init as PID 1; agent tools and remote services are its children, so orphaned descendants are reaped.
 - `agent doctor` uses the same runtime resolution rules as real execution.
 - Podman runs the rootfs artifact directly; Docker runs the OCI image artifact.
 
@@ -280,6 +281,7 @@ The runtime paths are intentionally narrow:
 Practical consequences:
 - Podman requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`.
 - Docker is the fallback when Podman is not available.
+- Podman and Docker must support `run --init`; launch fails instead of running an agent or service directly as PID 1.
 - If the selected runtime does not satisfy its requirements, the launcher fails fast.
 
 For the implementation flow and file map, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -718,6 +720,16 @@ Show flake outputs:
 ```sh
 nix flake show path:.
 ```
+
+Run the fast regression suite and the live Podman/rootfs PID-1 test:
+
+```sh
+bash tests/regression.sh
+AGENT_RUN_PID1_REAPER_TESTS=1 bash tests/regression.sh
+```
+
+The live test repeatedly orphans descendants and requires the zombie count to
+return to its baseline after every cycle.
 
 ## Release
 
