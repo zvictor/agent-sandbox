@@ -725,11 +725,13 @@ Run the fast regression suite and the live Podman/rootfs PID-1 test:
 
 ```sh
 bash tests/regression.sh
+# Run from the host or a firecracker-host sandbox with Podman available.
 AGENT_RUN_PID1_REAPER_TESTS=1 bash tests/regression.sh
 ```
 
 The live test repeatedly orphans descendants and requires the zombie count to
-return to its baseline after every cycle.
+return to its baseline after every cycle. The default sandbox intentionally
+does not expose nested Podman, so use the fast suite there.
 
 ## Release
 
