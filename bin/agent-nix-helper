@@ -6,7 +6,8 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/runtime_lease.sh"
 
 usage() {
-  echo "usage: agent-nix-helper <materialize|serve> ..." >&2
+  echo "usage: agent-nix-helper materialize <installable> <root> <receipt-file> <receipt-path> <lease-id>" >&2
+  echo "   or: agent-nix-helper serve <bridge-dir> <lease-id> <roots-dir> <receipts-dir>" >&2
   exit 1
 }
 
@@ -265,10 +266,9 @@ write_ok_response() {
 
 serve_bridge() {
   local bridge_dir="$1"
-  local ttl="${2:-900}"
-  local lease_id="$3"
-  local roots_dir="$4"
-  local receipts_dir="$5"
+  local lease_id="$2"
+  local roots_dir="$3"
+  local receipts_dir="$4"
   local requests_dir="$bridge_dir/requests"
   local processing_dir="$bridge_dir/processing"
   local responses_dir="$bridge_dir/responses"
@@ -280,7 +280,6 @@ serve_bridge() {
   local command=""
   local installable=""
   local now=0
-  local last_activity
   local last_heartbeat=0
   local stderr_file=""
   local task_pid=""
@@ -313,8 +312,7 @@ serve_bridge() {
   # Clean up stale request/response files from a previous dead helper
   rm -f "$requests_dir"/*.req "$processing_dir"/*.req "$processing_dir"/result.* "$processing_dir"/stderr.* 2>/dev/null || true
 
-  echo "[helper] started (pid=$$, ttl=${ttl}s, bridge=$bridge_dir)" >&2
-  last_activity="$(date +%s)"
+  echo "[helper] started (pid=$$, lease=$lease_id, bridge=$bridge_dir)" >&2
 
   while :; do
     # Write heartbeat every 30 seconds
@@ -373,27 +371,14 @@ serve_bridge() {
           ;;
       esac
 
-      last_activity="$(date +%s)"
     done
 
     for task_pid in "${!bg_tasks[@]}"; do
       if ! kill -0 "$task_pid" 2>/dev/null; then
+        wait "$task_pid" 2>/dev/null || true
         unset 'bg_tasks["$task_pid"]'
       fi
     done
-
-    if [ "${#bg_tasks[@]}" -gt 0 ]; then
-      last_activity="$(date +%s)"
-    fi
-
-    now="$(date +%s)"
-    if [ "$ttl" -gt 0 ] && [ $((now - last_activity)) -ge "$ttl" ]; then
-      for task_pid in "${!bg_tasks[@]}"; do
-        wait "$task_pid" 2>/dev/null || true
-      done
-      rm -f "$heartbeat_file"
-      exit 0
-    fi
 
     sleep 1
   done
@@ -412,8 +397,8 @@ case "$COMMAND" in
     materialize_installable "$1" "$2" "$3" "$4" "$5"
     ;;
   serve)
-    [ "$#" -eq 5 ] || usage
-    serve_bridge "$1" "$2" "$3" "$4" "$5"
+    [ "$#" -eq 4 ] || usage
+    serve_bridge "$1" "$2" "$3" "$4"
     ;;
   *)
     usage

@@ -3,10 +3,15 @@ NEED_HELPER_DIR=""
 NEED_HELPER_BRIDGE_DIR=""
 NEED_HELPER_PID_FILE=""
 NEED_HELPER_LOG_FILE=""
-NEED_HELPER_TTL=""
+NEED_HELPER_HEARTBEAT_FILE=""
 
 resolve_need_helper_mode() {
   NEED_HELPER_MODE="${AGENT_NEED_HELPER:-1}"
+
+  if [ -n "${AGENT_NEED_HELPER_TTL+x}" ]; then
+    echo "[agent] AGENT_NEED_HELPER_TTL is no longer supported; the enabled helper lives until runtime lease teardown" >&2
+    exit 1
+  fi
 
   case "$NEED_HELPER_MODE" in
     0|1) ;;
@@ -30,6 +35,7 @@ need_helper_service_running() {
 prepare_need_helper() {
   local lock_dir
   local service_pid=""
+  local ready_attempt="0"
 
   resolve_need_helper_mode
   [ "$NEED_HELPER_MODE" = "1" ] || return 0
@@ -38,11 +44,11 @@ prepare_need_helper() {
     exit 1
   fi
 
-  NEED_HELPER_TTL="${AGENT_NEED_HELPER_TTL:-900}"
   NEED_HELPER_DIR="$RUNTIME_LEASE_DIR/need-helper"
   NEED_HELPER_BRIDGE_DIR="$NEED_HELPER_DIR/bridge"
   NEED_HELPER_PID_FILE="$NEED_HELPER_DIR/service.pid"
   NEED_HELPER_LOG_FILE="$NEED_HELPER_DIR/service.log"
+  NEED_HELPER_HEARTBEAT_FILE="$NEED_HELPER_BRIDGE_DIR/heartbeat"
   lock_dir="$NEED_HELPER_DIR/.lock"
 
   mkdir -p "$NEED_HELPER_BRIDGE_DIR/requests" "$NEED_HELPER_BRIDGE_DIR/processing" "$NEED_HELPER_BRIDGE_DIR/responses"
@@ -59,9 +65,13 @@ prepare_need_helper() {
   if ! mkdir "$lock_dir" 2>/dev/null; then
     if [ -d "$lock_dir" ] && ! need_helper_service_running; then
       rmdir "$lock_dir" 2>/dev/null || true
-      mkdir "$lock_dir" 2>/dev/null || return 0
+      if ! mkdir "$lock_dir" 2>/dev/null; then
+        echo "[agent] ERROR: could not acquire need helper startup lock" >&2
+        exit 1
+      fi
     else
-      return 0
+      echo "[agent] ERROR: need helper startup lock is held without a healthy service" >&2
+      exit 1
     fi
   fi
 
@@ -73,13 +83,30 @@ prepare_need_helper() {
   (
     umask 077
     exec "$AGENT_BIN_DIR/agent-nix-helper" serve \
-      "$NEED_HELPER_BRIDGE_DIR" "$NEED_HELPER_TTL" "$RUNTIME_LEASE_ID" \
+      "$NEED_HELPER_BRIDGE_DIR" "$RUNTIME_LEASE_ID" \
       "$RUNTIME_LEASE_ROOTS_DIR" "$RUNTIME_LEASE_RECEIPTS_DIR" \
       </dev/null >"$NEED_HELPER_LOG_FILE" 2>&1
   ) &
   service_pid="$!"
   printf '%s\n' "$service_pid" > "$NEED_HELPER_PID_FILE"
-  perf_log "need helper started in background (pid=$service_pid ttl=${NEED_HELPER_TTL}s)"
-
   rmdir "$lock_dir" 2>/dev/null || true
+
+  while [ "$ready_attempt" -lt 50 ]; do
+    if need_helper_service_running && [ -f "$NEED_HELPER_HEARTBEAT_FILE" ]; then
+      perf_log "need helper started for runtime lease (pid=$service_pid)"
+      return 0
+    fi
+    if ! kill -0 "$service_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+    ready_attempt=$((ready_attempt + 1))
+  done
+
+  echo "[agent] ERROR: need helper failed to become ready" >&2
+  if [ -s "$NEED_HELPER_LOG_FILE" ]; then
+    sed 's/^/[agent] need helper: /' "$NEED_HELPER_LOG_FILE" >&2
+  fi
+  stop_runtime_lease_helper "$RUNTIME_LEASE_DIR"
+  exit 1
 }

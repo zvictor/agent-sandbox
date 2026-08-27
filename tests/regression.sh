@@ -2269,6 +2269,105 @@ test_remote_runtime_lease_persists_until_explicit_removal() (
   [ ! -e "$lease_dir" ] || fail "expected remote lease removal at remote teardown"
 )
 
+test_need_helper_lifetime_follows_runtime_lease() (
+  set -euo pipefail
+
+  local tmp_dir helper_pid=""
+  tmp_dir="$(mktemp -d)"
+  cleanup_need_helper_lifetime_test() {
+    if [ -n "$helper_pid" ]; then
+      kill "$helper_pid" 2>/dev/null || true
+      wait "$helper_pid" 2>/dev/null || true
+    fi
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_need_helper_lifetime_test EXIT
+
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  source "$REPO_ROOT/bin/lib/need_helper.sh"
+  perf_log() { :; }
+
+  AGENT_BIN_DIR="$REPO_ROOT/bin"
+  AGENT_NEED_HELPER=1
+  unset AGENT_NEED_HELPER_TTL
+  RUNTIME_LEASE_DIR="$tmp_dir/lease"
+  RUNTIME_LEASE_ID="lease-test"
+  RUNTIME_LEASE_ROOTS_DIR="$RUNTIME_LEASE_DIR/roots"
+  RUNTIME_LEASE_RECEIPTS_DIR="$RUNTIME_LEASE_DIR/receipts"
+  mkdir -p "$RUNTIME_LEASE_ROOTS_DIR" "$RUNTIME_LEASE_RECEIPTS_DIR"
+
+  prepare_need_helper
+  helper_pid="$(cat "$NEED_HELPER_PID_FILE")"
+  need_helper_service_running || fail "expected need helper to be healthy after startup"
+  [ -s "$NEED_HELPER_HEARTBEAT_FILE" ] || fail "expected need helper readiness heartbeat"
+
+  sleep 2
+  need_helper_service_running || fail "expected idle need helper to remain lease-scoped"
+
+  kill "$helper_pid"
+  wait "$helper_pid"
+  helper_pid=""
+  [ ! -e "$NEED_HELPER_HEARTBEAT_FILE" ] || fail "expected need helper shutdown to remove its heartbeat"
+)
+
+test_need_helper_startup_failure_is_fatal() (
+  set -euo pipefail
+
+  local tmp_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  mkdir -p "$tmp_dir/bin" "$tmp_dir/lease/roots" "$tmp_dir/lease/receipts"
+  cat > "$tmp_dir/bin/agent-nix-helper" <<'EOF'
+#!/usr/bin/env bash
+echo "synthetic startup failure" >&2
+exit 23
+EOF
+  chmod +x "$tmp_dir/bin/agent-nix-helper"
+
+  set +e
+  output="$(
+    (
+      source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+      source "$REPO_ROOT/bin/lib/need_helper.sh"
+      perf_log() { :; }
+
+      AGENT_BIN_DIR="$tmp_dir/bin"
+      AGENT_NEED_HELPER=1
+      unset AGENT_NEED_HELPER_TTL
+      RUNTIME_LEASE_DIR="$tmp_dir/lease"
+      RUNTIME_LEASE_ID="lease-test"
+      RUNTIME_LEASE_ROOTS_DIR="$RUNTIME_LEASE_DIR/roots"
+      RUNTIME_LEASE_RECEIPTS_DIR="$RUNTIME_LEASE_DIR/receipts"
+      prepare_need_helper
+    ) 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected failed need helper startup to stop launch"
+  assert_contains "$output" "need helper failed to become ready"
+  assert_contains "$output" "synthetic startup failure"
+)
+
+test_need_helper_rejects_obsolete_ttl() (
+  set -euo pipefail
+
+  local output status
+  set +e
+  output="$(
+    AGENT_NEED_HELPER_TTL=1 bash -c '
+      source "$1"
+      resolve_need_helper_mode
+    ' bash "$REPO_ROOT/bin/lib/need_helper.sh" 2>&1
+  )"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected obsolete need helper TTL to fail"
+  assert_contains "$output" "AGENT_NEED_HELPER_TTL is no longer supported"
+  assert_contains "$output" "lives until runtime lease teardown"
+)
+
 test_need_helper_materialization_creates_leased_receipt() (
   set -euo pipefail
 
@@ -3099,6 +3198,9 @@ main() {
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
   run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
+  run_test "need helper lifetime follows runtime lease" test_need_helper_lifetime_follows_runtime_lease
+  run_test "need helper startup failure is fatal" test_need_helper_startup_failure_is_fatal
+  run_test "need helper rejects obsolete TTL" test_need_helper_rejects_obsolete_ttl
   run_test "need helper creates leased receipt" test_need_helper_materialization_creates_leased_receipt
   run_test "need rejects previous lease cache" test_need_rejects_cache_from_previous_lease
   run_test "need inject creates lease-checking launcher" test_need_inject_creates_lease_checking_launcher
