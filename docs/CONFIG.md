@@ -123,6 +123,7 @@ The host contract is deliberately strict:
 - delegated `cpu`, `memory`, and `pids` controllers
 - unprivileged user namespaces
 - local rootless Podman
+- `pasta` (preferred) or `slirp4netns` for an isolated rootless network namespace
 
 The profile supports only local Podman rootfs mode. It rejects Docker,
 remote-container mode, rootful Podman, root execution, and
@@ -132,6 +133,8 @@ transient delegated host user scope with `--cgroups=split`,
 `--cgroupns=private`, the engine-owned PID-1 init, and Podman systemd mode
 disabled. Only `/sys/fs/cgroup` is unmasked inside that private namespace so
 the container-local user manager can manage its delegated subtree.
+The profile refuses to fall back to the host network namespace when neither
+supported rootless network backend is available.
 Inside the container, a generic private `systemd --user` manager owns the
 agent's transient delegated service. The host user bus and manager sockets are
 never mounted into the container.

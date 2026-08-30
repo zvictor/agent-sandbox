@@ -207,6 +207,30 @@ rootless_linux_profile() {
   [ "$(current_sandbox_profile)" = "rootless-linux" ]
 }
 
+resolve_rootless_network_backend() {
+  local helper_path=""
+
+  helper_path="$(podman info --format '{{.Host.Pasta.Executable}}' 2>/dev/null || true)"
+  case "$helper_path" in
+    ""|"<nil>") ;;
+    *)
+      printf '%s\n' "pasta"
+      return 0
+      ;;
+  esac
+
+  helper_path="$(podman info --format '{{.Host.Slirp4NetNS.Executable}}' 2>/dev/null || true)"
+  case "$helper_path" in
+    ""|"<nil>") ;;
+    *)
+      printf '%s\n' "slirp4netns"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 podman_runtime_cmd() {
   if firecracker_host_profile; then
     sudo -n podman "$@"
@@ -1179,6 +1203,21 @@ append_runtime_identity_args() {
     else
       ARGS+=( --userns=keep-id )
       if remote_container_mode; then
+        return
+      fi
+      if rootless_linux_profile; then
+        case "${ROOTLESS_NETWORK_BACKEND:-}" in
+          pasta)
+            ARGS+=( --network=pasta )
+            ;;
+          slirp4netns)
+            ARGS+=( --network=slirp4netns:allow_host_loopback=true )
+            ;;
+          *)
+            echo "[agent] ERROR: rootless-linux preflight did not select an isolated network backend" >&2
+            exit 1
+            ;;
+        esac
         return
       fi
       if podman info --format '{{.Host.Slirp4NetNS.Executable}}' 2>/dev/null | grep -q slirp4netns; then

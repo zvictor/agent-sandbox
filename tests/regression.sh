@@ -552,6 +552,9 @@ runtime_identity_run_args_for() (
   AGENT_SANDBOX_PROFILE="$profile"
   RUNTIME="podman"
   OS_NAME="Linux"
+  if [ "$profile" = "rootless-linux" ]; then
+    ROOTLESS_NETWORK_BACKEND="pasta"
+  fi
   ARGS=()
 
   append_runtime_identity_args
@@ -672,6 +675,7 @@ rootless_linux_preflight_for() (
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
   source "$REPO_ROOT/bin/lib/environment.sh"
 
   systemctl() {
@@ -703,6 +707,18 @@ rootless_linux_preflight_for() (
         fi
         return 0
         ;;
+      "info --format {{.Host.Pasta.Executable}}")
+        if [ "$fail_case" != "network" ] && [ "$fail_case" != "slirp" ]; then
+          printf '/usr/bin/pasta\n'
+        fi
+        return 0
+        ;;
+      "info --format {{.Host.Slirp4NetNS.Executable}}")
+        if [ "$fail_case" = "slirp" ]; then
+          printf '/usr/bin/slirp4netns\n'
+        fi
+        return 0
+        ;;
     esac
     return 0
   }
@@ -723,6 +739,7 @@ rootless_linux_preflight_for() (
 
   preflight_rootless_linux_profile
   printf 'preflight-ok\n'
+  printf 'network=%s\n' "$ROOTLESS_NETWORK_BACKEND"
 )
 
 stdio_target_args_for() (
@@ -2170,6 +2187,17 @@ test_rootless_linux_profile_rejects_sudo() (
   assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux does not permit sudo"
 )
 
+test_rootless_linux_runtime_identity_uses_isolated_network() (
+  set -euo pipefail
+
+  local output
+  output="$(runtime_identity_run_args_for rootless-linux)"
+
+  assert_contains "$output" "--userns=keep-id"
+  assert_contains "$output" "--network=pasta"
+  assert_not_contains "$output" "--network=host"
+)
+
 test_firecracker_runtime_identity_uses_rootful_sudo_overlay() (
   set -euo pipefail
 
@@ -2327,6 +2355,17 @@ test_rootless_linux_preflight_accepts_capable_host() (
   output="$(rootless_linux_preflight_for)"
 
   assert_contains "$output" "preflight-ok"
+  assert_contains "$output" "network=pasta"
+)
+
+test_rootless_linux_preflight_uses_slirp_when_pasta_is_missing() (
+  set -euo pipefail
+
+  local output
+  output="$(rootless_linux_preflight_for slirp)"
+
+  assert_contains "$output" "preflight-ok"
+  assert_contains "$output" "network=slirp4netns"
 )
 
 test_rootless_linux_preflight_rejects_missing_user_manager() (
@@ -2384,6 +2423,20 @@ test_rootless_linux_preflight_rejects_rootful_podman() (
 
   [ "$status" -ne 0 ] || fail "expected rootful podman to fail"
   assert_contains "$output" "rootless-linux preflight failed: rootless podman is required"
+)
+
+test_rootless_linux_preflight_rejects_missing_isolated_network() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for network 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing rootless network backend to fail"
+  assert_contains "$output" "rootless-linux preflight failed: rootless Podman requires pasta or slirp4netns; host-network fallback is forbidden"
 )
 
 test_rootless_linux_session_contract() (
@@ -3510,6 +3563,7 @@ main() {
   run_test "sudo flag rejects invalid values" test_sudo_flag_rejects_invalid_values
   run_test "firecracker profile requires sudo" test_firecracker_profile_requires_sudo
   run_test "rootless linux profile rejects sudo" test_rootless_linux_profile_rejects_sudo
+  run_test "rootless linux runtime identity uses isolated network" test_rootless_linux_runtime_identity_uses_isolated_network
   run_test "firecracker runtime identity uses rootful sudo overlay" test_firecracker_runtime_identity_uses_rootful_sudo_overlay
   run_test "firecracker runtime identity args use host namespaces" test_firecracker_runtime_identity_args_use_host_namespaces
   run_test "firecracker host devices and cgroup mount" test_firecracker_host_devices_and_cgroup_mount
@@ -3522,10 +3576,12 @@ main() {
   run_test "firecracker preflight rejects missing tun" test_firecracker_preflight_rejects_missing_tun
   run_test "firecracker preflight rejects root workspace failure" test_firecracker_preflight_rejects_root_workspace_failure
   run_test "rootless linux preflight accepts capable host" test_rootless_linux_preflight_accepts_capable_host
+  run_test "rootless linux preflight uses slirp without pasta" test_rootless_linux_preflight_uses_slirp_when_pasta_is_missing
   run_test "rootless linux preflight rejects missing user manager" test_rootless_linux_preflight_rejects_missing_user_manager
   run_test "rootless linux preflight rejects incomplete delegation" test_rootless_linux_preflight_rejects_incomplete_delegation
   run_test "rootless linux preflight rejects missing user namespaces" test_rootless_linux_preflight_rejects_missing_user_namespaces
   run_test "rootless linux preflight rejects rootful podman" test_rootless_linux_preflight_rejects_rootful_podman
+  run_test "rootless linux preflight rejects missing isolated network" test_rootless_linux_preflight_rejects_missing_isolated_network
   run_test "rootless linux session contract" test_rootless_linux_session_contract
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts

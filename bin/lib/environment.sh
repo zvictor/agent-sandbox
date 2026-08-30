@@ -407,6 +407,10 @@ rmdir "$probe_path" \
   fi
   podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
   [ "$podman_rootless" = "true" ] || rootless_linux_preflight_fail "rootless podman is required"
+
+  if ! ROOTLESS_NETWORK_BACKEND="$(resolve_rootless_network_backend)"; then
+    rootless_linux_preflight_fail "rootless Podman requires pasta or slirp4netns; host-network fallback is forbidden"
+  fi
 }
 
 resolve_lock_args() {

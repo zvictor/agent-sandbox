@@ -57,7 +57,8 @@ sudo, root, Docker, and remote-container mode are rejected. The profile adds no
 Jig-specific helper, service, registration, or privileged launcher. It also
 rejects caller-supplied mounts/devices, container API access, KVM, and the
 Nix daemon socket so those channels cannot replace or widen the capability
-proof.
+proof. Networking uses a private rootless namespace through `pasta` or
+`slirp4netns`; the profile rejects host-network fallback.
 
 ### 2. Filesystem scope is explicit, not ambient
 
@@ -129,7 +130,8 @@ The mounted workspace is read-write. The sandbox protects the rest of the host b
 
 We do not currently implement a container-level network deny policy.
 
-- Podman uses `slirp4netns` when available, but falls back to `--network=host`
+- The default local Podman profile uses `slirp4netns` when available, but falls
+  back to `--network=host`; the `rootless-linux` profile forbids that fallback
 - Podman on Darwin uses `--network=host`
 - Docker uses its normal container network path
 
