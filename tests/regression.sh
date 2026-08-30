@@ -679,7 +679,11 @@ rootless_linux_preflight_for() (
   }
 
   systemd-run() {
-    [ "$fail_case" != "delegation" ]
+    if [ "$fail_case" = "delegation" ]; then
+      printf 'mock delegated controller failure\n' >&2
+      return 1
+    fi
+    return 0
   }
 
   unshare() {
@@ -2316,6 +2320,7 @@ test_rootless_linux_preflight_rejects_incomplete_delegation() (
   set -e
 
   [ "$status" -ne 0 ] || fail "expected incomplete cgroup delegation to fail"
+  assert_contains "$output" "rootless-linux delegation probe: mock delegated controller failure"
   assert_contains "$output" "rootless-linux preflight failed: the user manager must delegate writable CPU, memory, and PID cgroup-v2 controls"
 )
 
@@ -2350,7 +2355,8 @@ test_rootless_linux_preflight_rejects_rootful_podman() (
 test_rootless_linux_session_contract() (
   set -euo pipefail
 
-  local script_file image_file flake_file
+  local environment_file script_file image_file flake_file
+  environment_file="$(cat "$REPO_ROOT/bin/lib/environment.sh")"
   script_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-entrypoint.sh")"
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
   flake_file="$(cat "$REPO_ROOT/flake.nix")"
@@ -2368,6 +2374,12 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/cpu.max\""
   assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
   assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
+  assert_contains "$environment_file" 'payload_path="$scope_path/rootless-linux-payload.$$"'
+  assert_contains "$environment_file" '"$payload_path/cgroup.procs"'
+  assert_contains "$environment_file" '"$scope_path/cgroup.subtree_control"'
+  assert_contains "$script_file" 'payload_path="$scope_path/capability-payload.$$"'
+  assert_contains "$script_file" '"$payload_path/cgroup.procs"'
+  assert_contains "$script_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
   assert_not_contains "$script_file" "sudo"
   assert_not_contains "$script_file" "DBUS_SESSION_BUS_ADDRESS"
@@ -2375,11 +2387,9 @@ test_rootless_linux_session_contract() (
   assert_contains "$image_file" 'rootlessLinuxSession'
   assert_contains "$flake_file" 'pkgs.util-linux'
 
-  local environment_file
-  environment_file="$(cat "$REPO_ROOT/bin/lib/environment.sh")"
-  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/cpu.max\""
-  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
-  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
+  assert_contains "$environment_file" '"$probe_path/cpu.max"'
+  assert_contains "$environment_file" '"$probe_path/memory.max"'
+  assert_contains "$environment_file" '"$probe_path/pids.max"'
 )
 
 test_host_gc_root_registration_uses_final_path() (

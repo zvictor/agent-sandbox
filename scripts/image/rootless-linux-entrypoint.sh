@@ -112,7 +112,12 @@ for controller in cpu memory pids; do
   esac
 done
 [ -w "$scope_path/cgroup.procs" ]
+[ -w "$scope_path/cgroup.subtree_control" ]
+payload_path="$scope_path/capability-payload.$$"
 probe_path="$scope_path/capability-probe.$$"
+mkdir "$payload_path"
+printf '\''%s\n'\'' "$$" > "$payload_path/cgroup.procs"
+printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control"
 mkdir "$probe_path"
 printf 'max\n' > "$probe_path/cpu.max"
 printf 'max\n' > "$probe_path/memory.max"

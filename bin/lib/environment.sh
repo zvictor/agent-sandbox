@@ -294,6 +294,7 @@ rootless_linux_preflight_fail() {
 }
 
 preflight_rootless_linux_profile() {
+  local delegation_output=""
   local podman_rootless=""
   local delegated_probe=""
 
@@ -341,27 +342,56 @@ preflight_rootless_linux_profile() {
   fi
 
   delegated_probe='set -eu
+fail() {
+  printf '\''%s\n'\'' "$*" >&2
+  exit 1
+}
 cgroup_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
-[ -n "$cgroup_path" ]
+[ -n "$cgroup_path" ] || fail "could not resolve the transient scope cgroup"
 scope_path="/sys/fs/cgroup$cgroup_path"
-[ -w "$scope_path/cgroup.procs" ]
-controllers="$(cat "$scope_path/cgroup.controllers")"
+[ -w "$scope_path/cgroup.procs" ] \
+  || fail "transient scope cgroup.procs is not writable: $scope_path/cgroup.procs"
+[ -w "$scope_path/cgroup.subtree_control" ] \
+  || fail "transient scope cgroup.subtree_control is not writable: $scope_path/cgroup.subtree_control"
+controllers="$(cat "$scope_path/cgroup.controllers")" \
+  || fail "could not read the transient scope controllers"
 for controller in cpu memory pids; do
   case " $controllers " in
     *" $controller "*) ;;
-    *) exit 1 ;;
+    *) fail "$controller is not available to the transient scope (available: ${controllers:-none})" ;;
   esac
 done
-probe_path="$scope_path/rootless-linux-probe.$$"
-mkdir "$probe_path"
-printf 'max\n' > "$probe_path/cpu.max"
-printf 'max\n' > "$probe_path/memory.max"
-printf 'max\n' > "$probe_path/pids.max"
-rmdir "$probe_path"'
 
-  if ! systemd-run --user --scope --quiet --collect \
+# Delegate= makes controllers available at the scope boundary, but cgroup v2
+# requires the delegatee to move its own process below that boundary before it
+# may enable domain controllers for child cgroups.
+payload_path="$scope_path/rootless-linux-payload.$$"
+probe_path="$scope_path/rootless-linux-probe.$$"
+mkdir "$payload_path" \
+  || fail "could not create a payload cgroup below the transient scope"
+printf '\''%s\n'\'' "$$" > "$payload_path/cgroup.procs" \
+  || fail "could not move the delegation probe below the transient scope boundary"
+printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control" \
+  || fail "could not enable CPU, memory, and PID controllers below the transient scope"
+mkdir "$probe_path" \
+  || fail "could not create a controlled child cgroup below the transient scope"
+printf '\''max\n'\'' > "$probe_path/cpu.max" \
+  || fail "the delegated CPU controller is not writable"
+printf '\''max\n'\'' > "$probe_path/memory.max" \
+  || fail "the delegated memory controller is not writable"
+printf '\''max\n'\'' > "$probe_path/pids.max" \
+  || fail "the delegated PID controller is not writable"
+rmdir "$probe_path" \
+  || fail "could not remove the empty controlled child cgroup"'
+
+  if ! delegation_output="$(systemd-run --user --scope --quiet --collect \
     --property='Delegate=cpu memory pids' -- \
-    sh -c "$delegated_probe" >/dev/null 2>&1; then
+    sh -c "$delegated_probe" 2>&1)"; then
+    if [ -n "$delegation_output" ]; then
+      printf '%s\n' "$delegation_output" | while IFS= read -r diagnostic; do
+        printf '[agent] rootless-linux delegation probe: %s\n' "$diagnostic" >&2
+      done
+    fi
     rootless_linux_preflight_fail "the user manager must delegate writable CPU, memory, and PID cgroup-v2 controls"
   fi
 
