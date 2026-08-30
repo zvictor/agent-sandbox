@@ -969,8 +969,8 @@ build_base_container_args() {
 
   if rootless_linux_profile; then
     ARGS+=(
-      --tmpfs "/run/user/$(id -u):rw,nosuid,nodev,size=16m,mode=0700,uid=$(id -u),gid=$(id -g)"
-      --tmpfs "/run/systemd/system:rw,nosuid,nodev,size=1m,mode=0755,uid=$(id -u),gid=$(id -g)"
+      --mount "type=tmpfs,dst=/run/user/$(id -u),tmpfs-size=16m,tmpfs-mode=0700,chown"
+      --mount "type=tmpfs,dst=/run/systemd/system,tmpfs-size=1m,tmpfs-mode=0755,chown"
     )
   fi
 
