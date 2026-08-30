@@ -2453,6 +2453,10 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'effective_caps="$(awk '\''/^CapEff:/ { print $2; exit }'\'' /proc/self/status)"'
   assert_contains "$script_file" '[ -z "${effective_caps//0/}" ]'
   assert_contains "$script_file" '[ "$cgroup_path" = "/" ]'
+  assert_contains "$script_file" 'write-error=%s'
+  assert_contains "$script_file" '/proc/self/mountinfo'
+  assert_contains "$script_file" '/proc/self/uid_map'
+  assert_contains "$script_file" 'the container cgroup is not writable by the unprivileged session'
   assert_contains "$script_file" "printf '+cpu +memory +pids"
   assert_contains "$script_file" 'exec /lib/systemd/systemd --user --unit=basic.target'
   assert_contains "$script_file" 'SYSTEMD_UNIT_PATH=/example/systemd/user'

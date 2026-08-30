@@ -53,7 +53,27 @@ effective_caps="$(awk '/^CapEff:/ { print $2; exit }' /proc/self/status)"
 cgroup_path="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
 [ "$cgroup_path" = "/" ] || fail "a private cgroup namespace is required"
 cgroup_root=/sys/fs/cgroup
-[ -w "$cgroup_root/cgroup.procs" ] || fail "the container cgroup is not delegated"
+
+cgroup_write_error=""
+if ! cgroup_write_error="$(
+  { printf '%s\n' "$$" > "$cgroup_root/cgroup.procs"; } 2>&1
+)"; then
+  mount_state="$(awk '$5 == "/sys/fs/cgroup" { line = $0 } END { print line }' /proc/self/mountinfo 2>/dev/null || true)"
+  uid_map="$(awk '{ printf "%s%s", separator, $0; separator = ";" } END { print "" }' /proc/self/uid_map 2>/dev/null || true)"
+  gid_map="$(awk '{ printf "%s%s", separator, $0; separator = ";" } END { print "" }' /proc/self/gid_map 2>/dev/null || true)"
+
+  printf '[agent] rootless-linux cgroup probe: write-error=%s\n' "${cgroup_write_error:-unknown}" >&2
+  printf '[agent] rootless-linux cgroup probe: identity=%s\n' "$(id 2>/dev/null || true)" >&2
+  printf '[agent] rootless-linux cgroup probe: uid-map=%s\n' "${uid_map:-unknown}" >&2
+  printf '[agent] rootless-linux cgroup probe: gid-map=%s\n' "${gid_map:-unknown}" >&2
+  printf '[agent] rootless-linux cgroup probe: mount=%s\n' "${mount_state:-unknown}" >&2
+  stat -c '[agent] rootless-linux cgroup probe: %n uid=%u gid=%g mode=%a' \
+    "$cgroup_root" "$cgroup_root/cgroup.procs" "$cgroup_root/cgroup.subtree_control" \
+    >&2 2>/dev/null || true
+  printf '[agent] rootless-linux cgroup probe: controllers=%s\n' \
+    "$(cat "$cgroup_root/cgroup.controllers" 2>/dev/null || true)" >&2
+  fail "the container cgroup is not writable by the unprivileged session"
+fi
 
 controllers="$(cat "$cgroup_root/cgroup.controllers")"
 for controller in cpu memory pids; do
