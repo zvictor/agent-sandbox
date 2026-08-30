@@ -1073,8 +1073,10 @@ test_codex_bubblewrap_compat_path() (
   readme_file="$(cat "$REPO_ROOT/README.md")"
 
   assert_contains "$image_file" 'bubblewrapCompat = pkgs.runCommand "bubblewrap-compat"'
-  assert_contains "$image_file" 'ln -s ${pkgs.bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"'
-  assert_contains "$readme_file" '`agent codex` can now use Codex'\''s native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.'
+  assert_contains "$image_file" 'version = "0.12.0"'
+  assert_contains "$image_file" 'rev = "v0.12.0"'
+  assert_contains "$image_file" 'ln -s ${bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"'
+  assert_contains "$readme_file" '`agent codex` can use Codex'\''s native Bubblewrap sandbox inside the outer container because the image provides upstream Bubblewrap 0.12.0 at `/usr/bin/bwrap`.'
 )
 
 test_workspace_mounts_for_regular_repo_workspace_override() (

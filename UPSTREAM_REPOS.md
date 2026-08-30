@@ -6,3 +6,4 @@
 | Nix | NixOS/nix | Store, garbage-collector root, and CLI behavior |
 | Podman | containers/podman | Podman runtime, rootfs, and init behavior |
 | Docker Engine | moby/moby | Docker runtime and daemon-managed init behavior |
+| Bubblewrap | containers/bubblewrap | Rootless sandbox behavior and release baseline |

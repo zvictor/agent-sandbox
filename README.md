@@ -233,7 +233,7 @@ Useful variants:
 
 `agent init` now suggests named credential slots like `CODEX_AUTH=work` instead of the older profile convention.
 
-`agent codex` can now use Codex's native Bubblewrap sandbox inside the outer container because the image provides `/usr/bin/bwrap`.
+`agent codex` can use Codex's native Bubblewrap sandbox inside the outer container because the image provides upstream Bubblewrap 0.12.0 at `/usr/bin/bwrap`.
 
 For SSH operations under Codex's native sandbox, the launcher exposes the sandbox SSH runtime paths to Codex with `--add-dir` rather than creating a temporary mountpoint inside the workspace.
 

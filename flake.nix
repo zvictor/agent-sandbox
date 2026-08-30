@@ -113,7 +113,7 @@
             pkgs.nix
             pkgs.git
             cchvServer
-            pkgs.bubblewrap
+            images.bubblewrap
           ];
 
           mkTool =

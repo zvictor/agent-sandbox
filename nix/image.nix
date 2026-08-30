@@ -41,11 +41,33 @@ let
     ln -s ${pkgs.bashInteractive}/bin/bash "$out/bin/bash"
   '';
 
+  bubblewrap = pkgs.bubblewrap.overrideAttrs (oldAttrs: {
+    version = "0.12.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "containers";
+      repo = "bubblewrap";
+      rev = "v0.12.0";
+      hash = "sha256-VnhJ5bej3/GTHcU8+AkyR7f3J0KKDuoc94SFxo4grhk=";
+    };
+    mesonFlags =
+      builtins.filter
+        (flag: !(pkgs.lib.hasInfix "setuid" flag))
+        (oldAttrs.mesonFlags or [ ])
+      ++ [
+        "-Dtests=false"
+        "-Dselinux=disabled"
+        "-Dman=disabled"
+        "-Dbash_completion=disabled"
+        "-Dzsh_completion=disabled"
+      ];
+    doCheck = false;
+  });
+
   bubblewrapCompat = pkgs.runCommand "bubblewrap-compat" { } ''
     mkdir -p "$out/usr/bin"
     # Codex looks for the system bubblewrap binary at /usr/bin/bwrap when its
     # native sandbox is enabled.
-    ln -s ${pkgs.bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"
+    ln -s ${bubblewrap}/bin/bwrap "$out/usr/bin/bwrap"
   '';
 
   libstdcCompat = pkgs.runCommand "libstdc-compat" { } ''
@@ -390,7 +412,7 @@ EOF
   };
 in
 rec {
-  inherit tools;
+  inherit tools bubblewrap;
 
   rootfs = pkgs.buildEnv {
     name = "agent-rootfs";
