@@ -116,7 +116,9 @@ done
 payload_path="$scope_path/capability-payload.$$"
 probe_path="$scope_path/capability-probe.$$"
 mkdir "$payload_path"
-printf '\''%s\n'\'' "$$" > "$payload_path/cgroup.procs"
+printf '\''0\n'\'' > "$payload_path/cgroup.procs"
+migrated_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
+[ "$migrated_path" = "$cgroup_path/capability-payload.$$" ]
 printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control"
 mkdir "$probe_path"
 printf 'max\n' > "$probe_path/cpu.max"

@@ -369,8 +369,11 @@ payload_path="$scope_path/rootless-linux-payload.$$"
 probe_path="$scope_path/rootless-linux-probe.$$"
 mkdir "$payload_path" \
   || fail "could not create a payload cgroup below the transient scope"
-printf '\''%s\n'\'' "$$" > "$payload_path/cgroup.procs" \
+printf '\''0\n'\'' > "$payload_path/cgroup.procs" \
   || fail "could not move the delegation probe below the transient scope boundary"
+migrated_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
+[ "$migrated_path" = "$cgroup_path/rootless-linux-payload.$$" ] \
+  || fail "the delegation probe did not enter its payload cgroup (found: ${migrated_path:-unknown})"
 printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control" \
   || fail "could not enable CPU, memory, and PID controllers below the transient scope"
 mkdir "$probe_path" \

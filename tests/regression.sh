@@ -2375,10 +2375,12 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
   assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
   assert_contains "$environment_file" 'payload_path="$scope_path/rootless-linux-payload.$$"'
-  assert_contains "$environment_file" '"$payload_path/cgroup.procs"'
+  assert_contains "$environment_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
+  assert_contains "$environment_file" 'migrated_path="$(awk -F:'
   assert_contains "$environment_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$script_file" 'payload_path="$scope_path/capability-payload.$$"'
-  assert_contains "$script_file" '"$payload_path/cgroup.procs"'
+  assert_contains "$script_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
+  assert_contains "$script_file" 'migrated_path="$(awk -F:'
   assert_contains "$script_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
   assert_not_contains "$script_file" "sudo"
