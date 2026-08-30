@@ -52,6 +52,8 @@ host user-manager scope that delegates only cgroup control. The container gets
 a private cgroup namespace and a private container-local `systemd --user`
 manager; it does not receive the host user bus or the host manager's private
 socket. This avoids turning `systemd-run --user` into a host namespace escape.
+Its single-ID user namespace maps the invoking host user directly and leaves
+container root unmapped, keeping cgroup ownership with that unprivileged user.
 The agent runs with all capabilities dropped and `no-new-privileges`, while
 sudo, root, Docker, and remote-container mode are rejected. The profile adds no
 Jig-specific helper, service, registration, or privileged launcher. It also

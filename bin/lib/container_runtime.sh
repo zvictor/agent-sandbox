@@ -1201,7 +1201,18 @@ append_runtime_identity_args() {
     if [ "$OS_NAME" = "Darwin" ]; then
       ARGS+=( --network=host )
     else
-      ARGS+=( --userns=keep-id )
+      if rootless_linux_profile; then
+        # Map only the invoking user. Leaving container uid/gid 0 unmapped
+        # prevents crun from reassigning the delegated cgroup to container
+        # root, so the host user's ownership remains visible to the session.
+        ARGS+=(
+          --uidmap "$(id -u):0:1"
+          --gidmap "$(id -g):0:1"
+          --user "$(id -u):$(id -g)"
+        )
+      else
+        ARGS+=( --userns=keep-id )
+      fi
       if remote_container_mode; then
         return
       fi

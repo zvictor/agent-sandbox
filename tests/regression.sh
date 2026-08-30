@@ -2189,14 +2189,20 @@ test_rootless_linux_profile_rejects_sudo() (
   assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux does not permit sudo"
 )
 
-test_rootless_linux_runtime_identity_uses_isolated_network() (
+test_rootless_linux_runtime_identity_maps_only_host_user() (
   set -euo pipefail
 
   local output
   output="$(runtime_identity_run_args_for rootless-linux)"
 
-  assert_contains "$output" "--userns=keep-id"
+  assert_contains "$output" "--uidmap"
+  assert_contains "$output" "$(id -u):0:1"
+  assert_contains "$output" "--gidmap"
+  assert_contains "$output" "$(id -g):0:1"
+  assert_contains "$output" "--user"
+  assert_contains "$output" "$(id -u):$(id -g)"
   assert_contains "$output" "--network=pasta"
+  assert_not_contains "$output" "--userns=keep-id"
   assert_not_contains "$output" "--network=host"
 )
 
@@ -3569,7 +3575,7 @@ main() {
   run_test "sudo flag rejects invalid values" test_sudo_flag_rejects_invalid_values
   run_test "firecracker profile requires sudo" test_firecracker_profile_requires_sudo
   run_test "rootless linux profile rejects sudo" test_rootless_linux_profile_rejects_sudo
-  run_test "rootless linux runtime identity uses isolated network" test_rootless_linux_runtime_identity_uses_isolated_network
+  run_test "rootless linux runtime identity maps only host user" test_rootless_linux_runtime_identity_maps_only_host_user
   run_test "firecracker runtime identity uses rootful sudo overlay" test_firecracker_runtime_identity_uses_rootful_sudo_overlay
   run_test "firecracker runtime identity args use host namespaces" test_firecracker_runtime_identity_args_use_host_namespaces
   run_test "firecracker host devices and cgroup mount" test_firecracker_host_devices_and_cgroup_mount

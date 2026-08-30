@@ -133,6 +133,10 @@ transient delegated host user scope with `--cgroups=split`,
 `--cgroupns=private`, the engine-owned PID-1 init, and Podman systemd mode
 disabled. Only `/sys/fs/cgroup` is unmasked inside that private namespace so
 the container-local user manager can manage its delegated subtree.
+The user namespace maps only the invoking host user to its normal container
+UID/GID; container UID/GID 0 remain unmapped. This preserves host-user
+ownership of the delegated cgroup instead of asking the OCI runtime to assign
+it to container root.
 The profile refuses to fall back to the host network namespace when neither
 supported rootless network backend is available.
 Inside the container, a generic private `systemd --user` manager owns the

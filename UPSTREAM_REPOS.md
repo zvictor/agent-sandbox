@@ -5,6 +5,7 @@
 | Bun | oven-sh/bun | Bun runtime and built-in API behavior |
 | Nix | NixOS/nix | Store, garbage-collector root, and CLI behavior |
 | Podman | containers/podman | Podman runtime, rootfs, and init behavior |
+| crun | containers/crun | OCI user-namespace and cgroup delegation behavior |
 | Docker Engine | moby/moby | Docker runtime and daemon-managed init behavior |
 | Bubblewrap | containers/bubblewrap | Rootless sandbox behavior and release baseline |
 | systemd | systemd/systemd | User-manager and cgroup-v2 delegation behavior |
