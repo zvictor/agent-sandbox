@@ -7,3 +7,4 @@
 | Podman | containers/podman | Podman runtime, rootfs, and init behavior |
 | Docker Engine | moby/moby | Docker runtime and daemon-managed init behavior |
 | Bubblewrap | containers/bubblewrap | Rootless sandbox behavior and release baseline |
+| systemd | systemd/systemd | User-manager and cgroup-v2 delegation behavior |

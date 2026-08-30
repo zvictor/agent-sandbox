@@ -46,6 +46,19 @@ explicit durable service. Keep local daemon, VM, health-check, and cleanup
 phases under one foreground owner, or use the remote tmux-backed sandbox
 lifecycle when split-phase inspection is required.
 
+`AGENT_SANDBOX_PROFILE=rootless-linux` is a separate fail-fast capability
+profile for rootless cgroup/Bubblewrap proofs. Rootless Podman is launched in a
+host user-manager scope that delegates only cgroup control. The container gets
+a private cgroup namespace and a private container-local `systemd --user`
+manager; it does not receive the host user bus or the host manager's private
+socket. This avoids turning `systemd-run --user` into a host namespace escape.
+The agent runs with all capabilities dropped and `no-new-privileges`, while
+sudo, root, Docker, and remote-container mode are rejected. The profile adds no
+Jig-specific helper, service, registration, or privileged launcher. It also
+rejects caller-supplied mounts/devices, container API access, KVM, and the
+Nix daemon socket so those channels cannot replace or widen the capability
+proof.
+
 ### 2. Filesystem scope is explicit, not ambient
 
 The runtime does not mount the entire host home directory. Instead, it mounts:

@@ -82,6 +82,25 @@ Practical consequences:
 - Docker is the fallback path when Podman is not available.
 - if the selected runtime does not satisfy its requirements, the launcher fails fast
 
+For a generic delegated rootless-Linux environment, use:
+
+```sh
+AGENT_SANDBOX_PROFILE=rootless-linux ./scripts/codex
+```
+
+This profile requires a pre-existing host `systemd --user` manager, an owned
+`XDG_RUNTIME_DIR`, cgroup-v2 CPU/memory/PID delegation, unprivileged user
+namespaces, and rootless Podman. The launcher enters a delegated host user
+scope, gives the container a private cgroup namespace, and starts a private
+container-local user manager. It never mounts the host user bus into the
+container. The agent stays unprivileged with no effective capabilities, and
+the profile rejects Docker, remote-container mode, root, and
+`AGENT_ALLOW_SUDO=1`. It also rejects caller-supplied mounts/devices, container
+API exposure, KVM, and Nix daemon access. The image provides Bubblewrap 0.12.0
+and verifies the manager, delegated controls, and a nested rootless Bubblewrap
+invocation before starting the agent. A missing predicate is a hard
+unsupported-host error.
+
 For Firecracker host smoke tests, use the explicit host-control profile:
 
 ```sh

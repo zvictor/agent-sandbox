@@ -32,7 +32,7 @@ Existing environment variables always win over file values.
 
 | Variable | Default | Allowed values | Effect |
 | --- | --- | --- | --- |
-| `AGENT_SANDBOX_PROFILE` | `default` | `default`, `firecracker-host` | Selects the sandbox capability profile |
+| `AGENT_SANDBOX_PROFILE` | `default` | `default`, `rootless-linux`, `firecracker-host` | Selects the sandbox capability profile |
 | `AGENT_RUNTIME` | auto-detect | `podman`, `docker` | Selects the outer runtime |
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
@@ -108,6 +108,43 @@ Podman pod per worktree and exposes the sandbox through a Tailscale sidecar.
 | `AGENT_REMOTE_ALLOW_HOST_ENV` | `0` | Allow broad host environment passthrough in remote mode |
 | `AGENT_REMOTE_FORWARD_SSH_AGENT` | `0` | Forward the host SSH agent into the remote runtime |
 | `AGENT_REMOTE_ALLOW_PRIVILEGED_HOST_CONTROL` | unset | Set to `I_UNDERSTAND` to allow non-interactive `firecracker-host` remote startup |
+
+### Rootless Linux Profile
+
+Use `AGENT_SANDBOX_PROFILE=rootless-linux` for workloads that require a real
+unprivileged user service manager and delegated cgroup-v2 controls without any
+privileged launcher.
+
+The host contract is deliberately strict:
+
+- Linux with unified cgroup v2
+- a non-root launcher user
+- an active `systemd --user` manager and owned `XDG_RUNTIME_DIR`
+- delegated `cpu`, `memory`, and `pids` controllers
+- unprivileged user namespaces
+- local rootless Podman
+
+The profile supports only local Podman rootfs mode. It rejects Docker,
+remote-container mode, rootful Podman, root execution, and
+`AGENT_ALLOW_SUDO=1`. It also rejects extra/automatic mounts, extra devices,
+KVM, container API exposure, and the Nix daemon socket. Podman itself runs in a
+transient delegated host user scope with `--cgroups=split`,
+`--cgroupns=private`, and `--systemd=always`.
+Inside the container, a generic private `systemd --user` manager owns the
+agent's transient delegated service. The host user bus and manager sockets are
+never mounted into the container.
+
+The image supplies upstream Bubblewrap 0.12.0. Before the agent starts, the
+private session verifies zero effective capabilities, writable delegated CPU,
+memory, and PID controls, and a nested unprivileged Bubblewrap user namespace.
+Any failure is terminal; this profile has no sudo, rootful, or compatibility
+fallback.
+
+Run the end-to-end capability probe on a candidate host with:
+
+```sh
+AGENT_RUN_ROOTLESS_LINUX_TESTS=1 bash tests/regression.sh
+```
 
 ### Firecracker Host Profile
 
