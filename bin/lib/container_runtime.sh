@@ -225,6 +225,47 @@ runtime_run_label() {
   printf '%s\n' "${RUNTIME:-unknown}"
 }
 
+log_container_run_args() {
+  local arg=""
+  local expect_env_value=0
+  local env_spec=""
+  local -a rendered_args=()
+
+  for arg in "${ARGS[@]}"; do
+    if [ "$expect_env_value" = "1" ]; then
+      case "$arg" in
+        *=*) rendered_args+=( "${arg%%=*}=REDACTED" ) ;;
+        *) rendered_args+=( "REDACTED" ) ;;
+      esac
+      expect_env_value=0
+      continue
+    fi
+
+    case "$arg" in
+      -e|--env)
+        rendered_args+=( "$arg" )
+        expect_env_value=1
+        ;;
+      --env=*)
+        env_spec="${arg#--env=}"
+        case "$env_spec" in
+          *=*) rendered_args+=( "--env=${env_spec%%=*}=REDACTED" ) ;;
+          *) rendered_args+=( "--env=REDACTED" ) ;;
+        esac
+        ;;
+      *)
+        rendered_args+=( "$arg" )
+        ;;
+    esac
+  done
+
+  printf '[agent] running: %s run' "$(runtime_run_label)" >&2
+  for arg in "${rendered_args[@]}"; do
+    printf ' %q' "$arg" >&2
+  done
+  printf '\n' >&2
+}
+
 expand_host_selector_path() {
   local raw_path="$1"
 

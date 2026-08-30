@@ -78,7 +78,7 @@ that cannot provide init fails during container creation.
 | `AGENT_FORCE_REBUILD` | `0` | Rebuild cached runtime artifacts |
 | `AGENT_NIX_EXPERIMENTAL_FEATURES` | `nix-command flakes` | Extra Nix experimental features for launcher commands |
 | `AGENT_HELPER_TMPDIR` | `$AGENT_CACHE_DIR/tmp` | Temp directory for helper runs |
-| `AGENT_DEBUG` | `0` | Print resolved paths and execution details |
+| `AGENT_DEBUG` | `0` | Print resolved paths and execution details with container environment values redacted |
 
 ## Remote Sandboxes
 

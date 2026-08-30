@@ -767,6 +767,23 @@ rootless_runtime_command_for() (
   run_container_runtime
 )
 
+container_run_log_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  RUNTIME="podman"
+  SANDBOX_PROFILE="default"
+  ARGS=(
+    --name test-container
+    -e "VISIBLE_NAME=webhook-secret-value"
+    --env="COMPOSITE_SECRET=first-secret,SECOND_SECRET=second-secret"
+    --probe
+  )
+
+  log_container_run_args
+)
+
 remote_target_args_for() (
   set -euo pipefail
 
@@ -1923,6 +1940,21 @@ test_rootless_linux_runtime_uses_delegated_user_scope() (
   assert_contains "$output" "podman"
   assert_contains "$output" "--probe"
   assert_not_contains "$output" "sudo"
+)
+
+test_container_run_log_redacts_environment_values() (
+  set -euo pipefail
+
+  local output
+  output="$(container_run_log_for 2>&1)"
+
+  assert_contains "$output" "[agent] running: podman run"
+  assert_contains "$output" "VISIBLE_NAME=REDACTED"
+  assert_contains "$output" "--env=COMPOSITE_SECRET=REDACTED"
+  assert_contains "$output" "--probe"
+  assert_not_contains "$output" "webhook-secret-value"
+  assert_not_contains "$output" "first-secret"
+  assert_not_contains "$output" "second-secret"
 )
 
 test_runtime_containers_require_pid1_init() (
@@ -3461,6 +3493,7 @@ main() {
   run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
   run_test "rootless linux target uses private session entrypoint" test_rootless_linux_target_uses_private_session_entrypoint
   run_test "rootless linux runtime uses delegated user scope" test_rootless_linux_runtime_uses_delegated_user_scope
+  run_test "container run log redacts environment values" test_container_run_log_redacts_environment_values
   run_test "runtime containers require PID 1 init" test_runtime_containers_require_pid1_init
   run_test "remote base container uses stable pod" test_remote_base_container_uses_stable_pod
   run_test "remote firecracker base container skips pod" test_remote_firecracker_base_container_skips_pod

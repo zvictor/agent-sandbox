@@ -214,7 +214,7 @@ log_debug_context
 build_container_args
 
 if [ "${AGENT_DEBUG:-0}" = "1" ]; then
-  printf '[agent] running: %s run %q\n' "$(runtime_run_label)" "${ARGS[*]}" >&2
+  log_container_run_args
 fi
 
 set +e
