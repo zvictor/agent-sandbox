@@ -101,6 +101,8 @@
             pkgs.git
             pkgs.docker
             pkgs.podman
+            pkgs.systemdMinimal
+            pkgs.util-linux
           ];
 
           viewerRuntimeInputs = [

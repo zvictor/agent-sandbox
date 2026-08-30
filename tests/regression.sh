@@ -664,11 +664,72 @@ firecracker_preflight_for() (
   printf 'preflight-ok\n'
 )
 
+rootless_linux_preflight_for() (
+  set -euo pipefail
+
+  local fail_case="${1:-none}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  source "$REPO_ROOT/bin/lib/environment.sh"
+
+  systemctl() {
+    [ "$fail_case" != "user-manager" ]
+  }
+
+  systemd-run() {
+    [ "$fail_case" != "delegation" ]
+  }
+
+  unshare() {
+    [ "$fail_case" != "userns" ]
+  }
+
+  podman() {
+    case "$*" in
+      info)
+        return 0
+        ;;
+      "info --format {{.Host.Security.Rootless}}")
+        if [ "$fail_case" = "rootful" ]; then
+          printf 'false\n'
+        else
+          printf 'true\n'
+        fi
+        return 0
+        ;;
+    esac
+    return 0
+  }
+
+  id() {
+    if [ "$fail_case" = "root" ] && [ "${1:-}" = "-u" ]; then
+      printf '0\n'
+      return 0
+    fi
+    command id "$@"
+  }
+
+  OS_NAME="Linux"
+  SANDBOX_PROFILE="rootless-linux"
+  AGENT_SANDBOX_PROFILE="rootless-linux"
+  AGENT_ALLOW_SUDO=0
+  XDG_RUNTIME_DIR="$tmp_dir"
+
+  preflight_rootless_linux_profile
+  printf 'preflight-ok\n'
+)
+
 stdio_target_args_for() (
   set -euo pipefail
 
+  local profile="${1:-default}"
+
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
   MODE="podman-rootfs"
   TOOL="codex"
   ROOTFS_IMAGE_ARG="/tmp/rootfs:O"
@@ -680,6 +741,26 @@ stdio_target_args_for() (
   append_stdio_and_target_args
 
   printf '%s\n' "${ARGS[@]}"
+)
+
+rootless_runtime_command_for() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  run_with_logical_argv0() {
+    printf 'logical-argv0=%s\n' "$1"
+    shift
+    printf '%s\n' "$@"
+  }
+
+  SANDBOX_PROFILE="rootless-linux"
+  AGENT_SANDBOX_PROFILE="rootless-linux"
+  RUNTIME="podman"
+  TOOL="codex"
+  ARGS=(--probe)
+
+  run_container_runtime
 )
 
 remote_target_args_for() (
@@ -1736,6 +1817,20 @@ test_firecracker_profile_rejects_docker_runtime() (
   assert_contains "$output" "AGENT_SANDBOX_PROFILE=firecracker-host supports only podman rootfs mode"
 )
 
+test_rootless_linux_profile_rejects_docker_runtime() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(runtime_mode_for docker "" rootless-linux 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootless-linux profile to reject docker"
+  assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux supports only podman rootfs mode"
+)
+
 test_stream_image_helper_uses_docker_helper_attr() (
   set -euo pipefail
 
@@ -1799,6 +1894,33 @@ test_stdio_target_uses_podman_rootfs() (
   assert_not_contains "$output" "sha256:unused"
 )
 
+test_rootless_linux_target_uses_private_session_entrypoint() (
+  set -euo pipefail
+
+  local output
+  output="$(stdio_target_args_for rootless-linux)"
+
+  assert_contains "$output" "AGENT_ROOTLESS_LINUX_TOOL=/bin/codex"
+  assert_contains "$output" "/bin/agent-rootless-linux-entrypoint"
+  assert_not_contains "$output" "--entrypoint\n/bin/codex"
+)
+
+test_rootless_linux_runtime_uses_delegated_user_scope() (
+  set -euo pipefail
+
+  local output
+  output="$(rootless_runtime_command_for)"
+
+  assert_contains "$output" "logical-argv0=codex"
+  assert_contains "$output" "systemd-run"
+  assert_contains "$output" "--user"
+  assert_contains "$output" "--scope"
+  assert_contains "$output" "Delegate=cpu memory pids"
+  assert_contains "$output" "podman"
+  assert_contains "$output" "--probe"
+  assert_not_contains "$output" "sudo"
+)
+
 test_runtime_containers_require_pid1_init() (
   set -euo pipefail
 
@@ -1809,6 +1931,7 @@ test_runtime_containers_require_pid1_init() (
     "$(base_container_args_for)" \
     "$(base_container_args_for 0 default docker)" \
     "$(base_container_args_for 0 firecracker-host)" \
+    "$(base_container_args_for 0 rootless-linux)" \
     "$(remote_base_container_args_for)" \
     "$(remote_base_container_args_for firecracker-host)"
   do
@@ -1848,6 +1971,20 @@ test_remote_firecracker_base_container_skips_pod() (
   assert_contains "$output" "--security-opt=label=disable"
   assert_not_contains "$output" "--pod"
   assert_not_contains "$output" "--rm"
+)
+
+test_remote_rootless_linux_profile_is_rejected() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(remote_base_container_args_for rootless-linux 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootless-linux remote container mode to fail"
+  assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux does not support remote container mode"
 )
 
 test_remote_target_uses_entrypoint() (
@@ -1930,6 +2067,26 @@ test_base_container_uses_firecracker_host_profile() (
   assert_not_contains "$output" "--pids-limit=512"
 )
 
+test_base_container_uses_rootless_linux_profile() (
+  set -euo pipefail
+
+  local output
+  output="$(base_container_args_for 0 rootless-linux)"
+
+  assert_contains "$output" "--init"
+  assert_contains "$output" "--cgroups=split"
+  assert_contains "$output" "--cgroupns=private"
+  assert_contains "$output" "--systemd=always"
+  assert_contains "$output" "--stop-signal=SIGTERM"
+  assert_contains "$output" "/run/user/$(id -u):rw,nosuid,nodev,size=16m,mode=0700,uid=$(id -u),gid=$(id -g)"
+  assert_contains "$output" "/run/systemd/system:rw,nosuid,nodev,size=1m,mode=0755,uid=$(id -u),gid=$(id -g)"
+  assert_contains "$output" "XDG_RUNTIME_DIR=/run/user/$(id -u)"
+  assert_contains "$output" "--cap-drop=ALL"
+  assert_contains "$output" "--security-opt=no-new-privileges"
+  assert_not_contains "$output" "--privileged"
+  assert_not_contains "$output" "--cap-add"
+)
+
 test_sudo_flag_rejects_invalid_values() (
   set -euo pipefail
 
@@ -1959,6 +2116,20 @@ test_firecracker_profile_requires_sudo() (
 
   [ "$status" -ne 0 ] || fail "expected firecracker-host profile to reject disabled sudo"
   assert_contains "$output" "firecracker-host requires sudo"
+)
+
+test_rootless_linux_profile_rejects_sudo() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(AGENT_SANDBOX_PROFILE=rootless-linux AGENT_ALLOW_SUDO=1 bash -c 'source "$1"; sudo_enabled' bash "$REPO_ROOT/bin/lib/container_runtime.sh" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootless-linux profile to reject sudo"
+  assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux does not permit sudo"
 )
 
 test_firecracker_runtime_identity_uses_rootful_sudo_overlay() (
@@ -2109,6 +2280,106 @@ test_firecracker_preflight_rejects_root_workspace_failure() (
 
   [ "$status" -ne 0 ] || fail "expected workspace preflight to fail"
   assert_contains "$output" "firecracker-host preflight failed: root must be able to write and chown files under the workspace"
+)
+
+test_rootless_linux_preflight_accepts_capable_host() (
+  set -euo pipefail
+
+  local output
+  output="$(rootless_linux_preflight_for)"
+
+  assert_contains "$output" "preflight-ok"
+)
+
+test_rootless_linux_preflight_rejects_missing_user_manager() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for user-manager 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing user manager to fail"
+  assert_contains "$output" "rootless-linux preflight failed: an active systemd user service manager is required"
+)
+
+test_rootless_linux_preflight_rejects_incomplete_delegation() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for delegation 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected incomplete cgroup delegation to fail"
+  assert_contains "$output" "rootless-linux preflight failed: the user manager must delegate writable CPU, memory, and PID cgroup-v2 controls"
+)
+
+test_rootless_linux_preflight_rejects_missing_user_namespaces() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for userns 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected missing user namespaces to fail"
+  assert_contains "$output" "rootless-linux preflight failed: unprivileged user namespaces are unavailable"
+)
+
+test_rootless_linux_preflight_rejects_rootful_podman() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for rootful 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootful podman to fail"
+  assert_contains "$output" "rootless-linux preflight failed: rootless podman is required"
+)
+
+test_rootless_linux_session_contract() (
+  set -euo pipefail
+
+  local script_file image_file flake_file
+  script_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-entrypoint.sh")"
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+  flake_file="$(cat "$REPO_ROOT/flake.nix")"
+
+  assert_contains "$script_file" 'effective_caps="$(awk '\''/^CapEff:/ { print $2; exit }'\'' /proc/self/status)"'
+  assert_contains "$script_file" '[ -z "${effective_caps//0/}" ]'
+  assert_contains "$script_file" '[ "$cgroup_path" = "/" ]'
+  assert_contains "$script_file" "printf '+cpu +memory +pids"
+  assert_contains "$script_file" 'exec /lib/systemd/systemd --user --unit=basic.target'
+  assert_contains "$script_file" 'SYSTEMD_UNIT_PATH=/example/systemd/user'
+  assert_contains "$script_file" 'SYSTEMD_ENVIRONMENT_GENERATOR_PATH='
+  assert_contains "$script_file" "--property='Delegate=cpu memory pids'"
+  assert_contains "$script_file" 'bwrap_version="$(bwrap --version'
+  assert_contains "$script_file" 'bwrap --unshare-user --ro-bind / / -- /bin/true'
+  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/cpu.max\""
+  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
+  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
+  assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
+  assert_not_contains "$script_file" "sudo"
+  assert_not_contains "$script_file" "DBUS_SESSION_BUS_ADDRESS"
+  assert_contains "$image_file" 'pkgs.systemdMinimal'
+  assert_contains "$image_file" 'rootlessLinuxSession'
+  assert_contains "$flake_file" 'pkgs.util-linux'
+
+  local environment_file
+  environment_file="$(cat "$REPO_ROOT/bin/lib/environment.sh")"
+  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/cpu.max\""
+  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
+  assert_contains "$environment_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
 )
 
 test_host_gc_root_registration_uses_final_path() (
@@ -3097,7 +3368,7 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$image_file" "var/tmp"
-  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=6"
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=7"
   assert_contains "$rootfs_file" "run/agent-path-guard"
   assert_contains "$rootfs_file" "run/agent-runtime-receipts"
   assert_contains "$rootfs_file" "var/tmp"
@@ -3171,21 +3442,27 @@ main() {
   run_test "runtime path includes sudo when enabled" test_runtime_path_includes_sudo_when_enabled
   run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
   run_test "firecracker profile rejects docker runtime" test_firecracker_profile_rejects_docker_runtime
+  run_test "rootless linux profile rejects docker runtime" test_rootless_linux_profile_rejects_docker_runtime
   run_test "stream image helper uses docker helper attr" test_stream_image_helper_uses_docker_helper_attr
   run_test "runtime identity masks sudo by default" test_runtime_identity_masks_sudo_by_default
   run_test "runtime identity mounts sudo overlay when enabled" test_runtime_identity_mounts_sudo_overlay_when_enabled
   run_test "stdio target uses podman rootfs" test_stdio_target_uses_podman_rootfs
+  run_test "rootless linux target uses private session entrypoint" test_rootless_linux_target_uses_private_session_entrypoint
+  run_test "rootless linux runtime uses delegated user scope" test_rootless_linux_runtime_uses_delegated_user_scope
   run_test "runtime containers require PID 1 init" test_runtime_containers_require_pid1_init
   run_test "remote base container uses stable pod" test_remote_base_container_uses_stable_pod
   run_test "remote firecracker base container skips pod" test_remote_firecracker_base_container_skips_pod
+  run_test "remote rootless linux profile is rejected" test_remote_rootless_linux_profile_is_rejected
   run_test "remote target uses entrypoint" test_remote_target_uses_entrypoint
   run_test "path guard excludes privileged sudo" test_path_guard_excludes_privileged_sudo
   run_test "firecracker path guard wraps podman" test_firecracker_path_guard_wraps_podman
   run_test "base container disables sudo by default" test_base_container_disables_sudo_by_default
   run_test "base container allows sudo when enabled" test_base_container_allows_sudo_when_enabled
   run_test "base container uses firecracker host profile" test_base_container_uses_firecracker_host_profile
+  run_test "base container uses rootless linux profile" test_base_container_uses_rootless_linux_profile
   run_test "sudo flag rejects invalid values" test_sudo_flag_rejects_invalid_values
   run_test "firecracker profile requires sudo" test_firecracker_profile_requires_sudo
+  run_test "rootless linux profile rejects sudo" test_rootless_linux_profile_rejects_sudo
   run_test "firecracker runtime identity uses rootful sudo overlay" test_firecracker_runtime_identity_uses_rootful_sudo_overlay
   run_test "firecracker runtime identity args use host namespaces" test_firecracker_runtime_identity_args_use_host_namespaces
   run_test "firecracker host devices and cgroup mount" test_firecracker_host_devices_and_cgroup_mount
@@ -3197,6 +3474,12 @@ main() {
   run_test "firecracker preflight rejects missing kvm" test_firecracker_preflight_rejects_missing_kvm
   run_test "firecracker preflight rejects missing tun" test_firecracker_preflight_rejects_missing_tun
   run_test "firecracker preflight rejects root workspace failure" test_firecracker_preflight_rejects_root_workspace_failure
+  run_test "rootless linux preflight accepts capable host" test_rootless_linux_preflight_accepts_capable_host
+  run_test "rootless linux preflight rejects missing user manager" test_rootless_linux_preflight_rejects_missing_user_manager
+  run_test "rootless linux preflight rejects incomplete delegation" test_rootless_linux_preflight_rejects_incomplete_delegation
+  run_test "rootless linux preflight rejects missing user namespaces" test_rootless_linux_preflight_rejects_missing_user_namespaces
+  run_test "rootless linux preflight rejects rootful podman" test_rootless_linux_preflight_rejects_rootful_podman
+  run_test "rootless linux session contract" test_rootless_linux_session_contract
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
   run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
@@ -3232,6 +3515,9 @@ main() {
   fi
   if [ "${AGENT_RUN_PID1_REAPER_TESTS:-0}" = "1" ]; then
     run_test "PID 1 orphan reaping smoke" "$REPO_ROOT/tests/runtime-init-smoke.sh"
+  fi
+  if [ "${AGENT_RUN_ROOTLESS_LINUX_TESTS:-0}" = "1" ]; then
+    run_test "rootless Linux delegated session smoke" "$REPO_ROOT/tests/rootless-linux-smoke.sh"
   fi
 }
 

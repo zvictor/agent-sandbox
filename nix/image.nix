@@ -120,6 +120,10 @@ let
     install -Dm0755 ${../scripts/image/remote-codex.sh} "$out/bin/agent-remote-codex"
   '';
 
+  rootlessLinuxSession = pkgs.runCommand "agent-rootless-linux-session" { } ''
+    install -Dm0755 ${../scripts/image/rootless-linux-entrypoint.sh} "$out/bin/agent-rootless-linux-entrypoint"
+  '';
+
   firecrackerPodmanWrapper = pkgs.writeShellScriptBin "agent-firecracker-podman" ''
     set -eu
 
@@ -351,7 +355,7 @@ EOF
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/var/tmp" "$out/config"
     mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"
-    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/var/run"
+    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/run/systemd/system" "$out/run/user" "$out/var/run"
   '';
 
   imageBasePaths =
@@ -379,12 +383,13 @@ EOF
       pkgs.bun
       pkgs.iproute2
       pkgs.nix-index
+      pkgs.systemdMinimal
     ]
     ++ helpers
     ++ devPackagesImage
     ++ toolLaunchers
     ++ compatWrappers
-    ++ [ needCommand remoteScripts firecrackerPodmanWrapper containersPolicy sudoConfig sudoRuntime ];
+    ++ [ needCommand remoteScripts rootlessLinuxSession firecrackerPodmanWrapper containersPolicy sudoConfig sudoRuntime ];
 
   imageSpec = {
     name = "agent-base";
@@ -437,7 +442,7 @@ rec {
       # Keep common runtime mount destinations as normal directories, not
       # symlink chains.
       for d in \
-        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/secrets var var/run var/tmp \
+        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/secrets run/systemd run/systemd/system run/user var var/run var/tmp \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
         proc sys sys/fs sys/fs/cgroup dev dev/net
       do

@@ -147,10 +147,10 @@ resolve_sandbox_profile() {
     ""|default)
       SANDBOX_PROFILE="default"
       ;;
-    firecracker-host)
+    firecracker-host|rootless-linux)
       ;;
     *)
-      echo "[agent] invalid AGENT_SANDBOX_PROFILE='$SANDBOX_PROFILE' (expected: default or firecracker-host)" >&2
+      echo "[agent] invalid AGENT_SANDBOX_PROFILE='$SANDBOX_PROFILE' (expected: default, rootless-linux, or firecracker-host)" >&2
       exit 1
       ;;
   esac
@@ -174,6 +174,21 @@ resolve_runtime_state() {
     fi
     RUNTIME="unavailable"
     RUNTIME_ERROR="AGENT_SANDBOX_PROFILE=firecracker-host requires podman"
+    return 1
+  fi
+
+  if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "rootless-linux" ]; then
+    if [ -n "$RUNTIME_REQUESTED" ] && [ "$RUNTIME_REQUESTED" != "podman" ]; then
+      RUNTIME="unavailable"
+      RUNTIME_ERROR="AGENT_SANDBOX_PROFILE=rootless-linux supports only AGENT_RUNTIME=podman"
+      return 1
+    fi
+    if command -v podman >/dev/null 2>&1; then
+      RUNTIME="podman"
+      return 0
+    fi
+    RUNTIME="unavailable"
+    RUNTIME_ERROR="AGENT_SANDBOX_PROFILE=rootless-linux requires podman"
     return 1
   fi
 
@@ -271,6 +286,94 @@ preflight_firecracker_host_profile() {
   if ! sudo -n sh -c 'file="$1/.agent-sandbox-root-write-test.$$"; touch "$file" && chown 0:0 "$file" && rm -f "$file"' sh "$workspace_path"; then
     firecracker_host_preflight_fail "root must be able to write and chown files under the workspace"
   fi
+}
+
+rootless_linux_preflight_fail() {
+  echo "[agent] rootless-linux preflight failed: $*" >&2
+  exit 1
+}
+
+preflight_rootless_linux_profile() {
+  local podman_rootless=""
+  local delegated_probe=""
+
+  [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "rootless-linux" ] || return 0
+
+  [ "$OS_NAME" = "Linux" ] || rootless_linux_preflight_fail "Linux is required"
+  [ "$(id -u)" != "0" ] || rootless_linux_preflight_fail "run the launcher as an unprivileged user"
+
+  case "${AGENT_ALLOW_SUDO:-0}" in
+    ""|0) ;;
+    1) rootless_linux_preflight_fail "AGENT_ALLOW_SUDO must remain disabled" ;;
+    *) rootless_linux_preflight_fail "AGENT_ALLOW_SUDO must be 0 or 1" ;;
+  esac
+
+  [ -z "${AGENT_EXTRA_MOUNTS:-}" ] \
+    || rootless_linux_preflight_fail "AGENT_EXTRA_MOUNTS is not supported"
+  [ -z "${AGENT_AUTO_MOUNT_DIRS:-}" ] \
+    || rootless_linux_preflight_fail "AGENT_AUTO_MOUNT_DIRS is not supported"
+  [ -z "${AGENT_EXTRA_DEVICES:-}" ] \
+    || rootless_linux_preflight_fail "AGENT_EXTRA_DEVICES is not supported"
+  [ "${AGENT_ALLOW_KVM:-0}" = "0" ] \
+    || rootless_linux_preflight_fail "AGENT_ALLOW_KVM is not supported"
+  [ "${AGENT_ALLOW_NIX_DAEMON_SOCKET:-0}" = "0" ] \
+    || rootless_linux_preflight_fail "AGENT_ALLOW_NIX_DAEMON_SOCKET is not supported"
+
+  command -v podman >/dev/null 2>&1 || rootless_linux_preflight_fail "podman is not installed"
+  command -v systemctl >/dev/null 2>&1 || rootless_linux_preflight_fail "systemctl is not installed"
+  command -v systemd-run >/dev/null 2>&1 || rootless_linux_preflight_fail "systemd-run is not installed"
+  command -v unshare >/dev/null 2>&1 || rootless_linux_preflight_fail "unshare is not installed"
+
+  [ -n "${XDG_RUNTIME_DIR:-}" ] || rootless_linux_preflight_fail "XDG_RUNTIME_DIR is not set"
+  [ -d "$XDG_RUNTIME_DIR" ] && [ -r "$XDG_RUNTIME_DIR" ] && [ -w "$XDG_RUNTIME_DIR" ] && [ -x "$XDG_RUNTIME_DIR" ] \
+    || rootless_linux_preflight_fail "XDG_RUNTIME_DIR must be a private, usable user runtime directory"
+  [ "$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null || true)" = "$(id -u)" ] \
+    || rootless_linux_preflight_fail "XDG_RUNTIME_DIR must be owned by the launcher user"
+  [ "$(stat -c '%a' "$XDG_RUNTIME_DIR" 2>/dev/null || true)" = "700" ] \
+    || rootless_linux_preflight_fail "XDG_RUNTIME_DIR must have mode 0700"
+
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    rootless_linux_preflight_fail "an active systemd user service manager is required"
+  fi
+
+  if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
+    rootless_linux_preflight_fail "cgroup v2 must be mounted at /sys/fs/cgroup"
+  fi
+
+  delegated_probe='set -eu
+cgroup_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
+[ -n "$cgroup_path" ]
+scope_path="/sys/fs/cgroup$cgroup_path"
+[ -w "$scope_path/cgroup.procs" ]
+controllers="$(cat "$scope_path/cgroup.controllers")"
+for controller in cpu memory pids; do
+  case " $controllers " in
+    *" $controller "*) ;;
+    *) exit 1 ;;
+  esac
+done
+probe_path="$scope_path/rootless-linux-probe.$$"
+mkdir "$probe_path"
+printf 'max\n' > "$probe_path/cpu.max"
+printf 'max\n' > "$probe_path/memory.max"
+printf 'max\n' > "$probe_path/pids.max"
+rmdir "$probe_path"'
+
+  if ! systemd-run --user --scope --quiet --collect \
+    --property='Delegate=cpu memory pids' -- \
+    sh -c "$delegated_probe" >/dev/null 2>&1; then
+    rootless_linux_preflight_fail "the user manager must delegate writable CPU, memory, and PID cgroup-v2 controls"
+  fi
+
+  if ! unshare --user --map-root-user true >/dev/null 2>&1; then
+    rootless_linux_preflight_fail "unprivileged user namespaces are unavailable"
+  fi
+
+  if ! podman info >/dev/null 2>&1; then
+    rootless_linux_preflight_fail "podman info failed for the launcher user"
+  fi
+  podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+  [ "$podman_rootless" = "true" ] || rootless_linux_preflight_fail "rootless podman is required"
 }
 
 resolve_lock_args() {
@@ -534,6 +637,7 @@ bootstrap_environment() {
   resolve_sandbox_profile
   resolve_runtime
   preflight_firecracker_host_profile
+  preflight_rootless_linux_profile
   resolve_sandbox_flake
   resolve_lock_args
   prepare_project_contract_input

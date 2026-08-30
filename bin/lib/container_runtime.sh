@@ -203,6 +203,10 @@ firecracker_host_profile() {
   [ "$(current_sandbox_profile)" = "firecracker-host" ]
 }
 
+rootless_linux_profile() {
+  [ "$(current_sandbox_profile)" = "rootless-linux" ]
+}
+
 podman_runtime_cmd() {
   if firecracker_host_profile; then
     sudo -n podman "$@"
@@ -409,6 +413,10 @@ runtime_env_key_is_reserved() {
   case "$1" in
     AGENT_NEED_HELPER_DIR|AGENT_RUNTIME_LEASE_ID|AGENT_RUNTIME_RECEIPTS_DIR)
       return 0
+      ;;
+    AGENT_ROOTLESS_LINUX_TOOL|XDG_RUNTIME_DIR)
+      rootless_linux_profile
+      return
       ;;
     *)
       return 1
@@ -796,6 +804,22 @@ sudo_enabled() {
     esac
   fi
 
+  if rootless_linux_profile; then
+    case "${AGENT_ALLOW_SUDO:-0}" in
+      ""|0)
+        return 1
+        ;;
+      1)
+        echo "[agent] ERROR: AGENT_SANDBOX_PROFILE=rootless-linux does not permit sudo" >&2
+        exit 1
+        ;;
+      *)
+        echo "[agent] ERROR: AGENT_ALLOW_SUDO must be 0 or 1" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
   case "${AGENT_ALLOW_SUDO:-0}" in
     ""|0)
       return 1
@@ -811,6 +835,11 @@ sudo_enabled() {
 }
 
 build_base_container_args() {
+  if remote_container_mode && rootless_linux_profile; then
+    echo "[agent] ERROR: AGENT_SANDBOX_PROFILE=rootless-linux does not support remote container mode" >&2
+    exit 1
+  fi
+
   if remote_container_mode; then
     if [ -z "${AGENT_REMOTE_RUNTIME_CONTAINER:-}" ]; then
       echo "[agent] ERROR: remote container mode requires AGENT_REMOTE_RUNTIME_CONTAINER" >&2
@@ -830,6 +859,14 @@ build_base_container_args() {
     --name "$CONTAINER_NAME"
     --init
   )
+  if rootless_linux_profile; then
+    ARGS+=(
+      --cgroups=split
+      --cgroupns=private
+      --systemd=always
+      --stop-signal=SIGTERM
+    )
+  fi
   if remote_container_mode; then
     ARGS+=( --replace -d )
     if [ "${AGENT_REMOTE_POD_DISABLED:-0}" != "1" ]; then
@@ -864,6 +901,13 @@ build_base_container_args() {
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
   )
 
+  if rootless_linux_profile; then
+    ARGS+=(
+      --tmpfs "/run/user/$(id -u):rw,nosuid,nodev,size=16m,mode=0700,uid=$(id -u),gid=$(id -g)"
+      --tmpfs "/run/systemd/system:rw,nosuid,nodev,size=1m,mode=0755,uid=$(id -u),gid=$(id -g)"
+    )
+  fi
+
   if ! firecracker_host_profile; then
     ARGS+=(
       --memory="${AGENT_MEMORY_LIMIT:-4g}"
@@ -884,6 +928,10 @@ build_base_container_args() {
     -e AGENT_NEED_TOOLS_DIR="$NEED_TOOLS_PATH"
     -e NIX_CONFIG="$NIX_CONFIG"
   )
+
+  if rootless_linux_profile; then
+    ARGS+=( -e "XDG_RUNTIME_DIR=/run/user/$(id -u)" )
+  fi
 }
 
 append_path_guard_mount_args() {
@@ -1471,7 +1519,14 @@ append_stdio_and_target_args() {
     ARGS+=( -t )
   fi
 
-  ARGS+=( --entrypoint "/bin/$TOOL" )
+  if rootless_linux_profile; then
+    ARGS+=(
+      -e "AGENT_ROOTLESS_LINUX_TOOL=/bin/$TOOL"
+      --entrypoint "/bin/agent-rootless-linux-entrypoint"
+    )
+  else
+    ARGS+=( --entrypoint "/bin/$TOOL" )
+  fi
   if [ "$MODE" = "podman-rootfs" ]; then
     ARGS+=( --rootfs )
     RUN_TARGET="$ROOTFS_IMAGE_ARG"
@@ -1496,6 +1551,14 @@ run_with_logical_argv0() {
 run_container_runtime() {
   if [ "$RUNTIME" = "podman" ] && firecracker_host_profile; then
     run_with_logical_argv0 "$TOOL" sudo -n podman run "${ARGS[@]}"
+    return
+  fi
+
+  if [ "$RUNTIME" = "podman" ] && rootless_linux_profile; then
+    run_with_logical_argv0 "$TOOL" \
+      systemd-run --user --scope --quiet --collect \
+      --property='Delegate=cpu memory pids' -- \
+      podman run "${ARGS[@]}"
     return
   fi
 

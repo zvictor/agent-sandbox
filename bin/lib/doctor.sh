@@ -133,6 +133,8 @@ doctor_runtime_mode() {
     fi
     if [ "${SANDBOX_PROFILE:-default}" = "firecracker-host" ]; then
       runtime_mode="$runtime_mode firecracker-host"
+    elif [ "${SANDBOX_PROFILE:-default}" = "rootless-linux" ]; then
+      runtime_mode="$runtime_mode rootless-linux"
     fi
     printf '%s\n' "$runtime_mode"
     return 0
@@ -338,6 +340,8 @@ print_doctor_suggestions() {
   if [ -n "${RUNTIME_ERROR:-}" ]; then
     if [ "${SANDBOX_PROFILE:-default}" = "firecracker-host" ]; then
       doctor_note "Install and configure rootful podman for AGENT_SANDBOX_PROFILE=firecracker-host."
+    elif [ "${SANDBOX_PROFILE:-default}" = "rootless-linux" ]; then
+      doctor_note "Configure local rootless Podman and a delegated systemd user manager for AGENT_SANDBOX_PROFILE=rootless-linux."
     else
       doctor_note "Install podman for the preferred Linux fast path, or docker for the OCI image fallback path."
     fi
