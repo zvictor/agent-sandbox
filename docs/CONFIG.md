@@ -129,7 +129,9 @@ remote-container mode, rootful Podman, root execution, and
 `AGENT_ALLOW_SUDO=1`. It also rejects extra/automatic mounts, extra devices,
 KVM, container API exposure, and the Nix daemon socket. Podman itself runs in a
 transient delegated host user scope with `--cgroups=split`,
-`--cgroupns=private`, and `--systemd=always`.
+`--cgroupns=private`, the engine-owned PID-1 init, and Podman systemd mode
+disabled. Only `/sys/fs/cgroup` is unmasked inside that private namespace so
+the container-local user manager can manage its delegated subtree.
 Inside the container, a generic private `systemd --user` manager owns the
 agent's transient delegated service. The host user bus and manager sockets are
 never mounted into the container.

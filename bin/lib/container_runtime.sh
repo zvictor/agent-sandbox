@@ -904,7 +904,8 @@ build_base_container_args() {
     ARGS+=(
       --cgroups=split
       --cgroupns=private
-      --systemd=always
+      --systemd=false
+      --security-opt=unmask=/sys/fs/cgroup
       --stop-signal=SIGTERM
     )
   fi

@@ -2112,7 +2112,8 @@ test_base_container_uses_rootless_linux_profile() (
   assert_contains "$output" "--init"
   assert_contains "$output" "--cgroups=split"
   assert_contains "$output" "--cgroupns=private"
-  assert_contains "$output" "--systemd=always"
+  assert_contains "$output" "--systemd=false"
+  assert_contains "$output" "--security-opt=unmask=/sys/fs/cgroup"
   assert_contains "$output" "--stop-signal=SIGTERM"
   assert_contains "$output" "/run/user/$(id -u):rw,nosuid,nodev,size=16m,mode=0700,uid=$(id -u),gid=$(id -g)"
   assert_contains "$output" "/run/systemd/system:rw,nosuid,nodev,size=1m,mode=0755,uid=$(id -u),gid=$(id -g)"
@@ -2121,6 +2122,7 @@ test_base_container_uses_rootless_linux_profile() (
   assert_contains "$output" "--security-opt=no-new-privileges"
   assert_not_contains "$output" "--privileged"
   assert_not_contains "$output" "--cap-add"
+  assert_not_contains "$output" "--systemd=always"
 )
 
 test_sudo_flag_rejects_invalid_values() (
