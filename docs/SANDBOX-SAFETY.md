@@ -70,6 +70,12 @@ rejects caller-supplied mounts/devices, container API access, KVM, and the
 Nix daemon socket so those channels cannot replace or widen the capability
 proof. Networking uses a private rootless namespace through `pasta` or
 `slirp4netns`; the profile rejects host-network fallback.
+To permit Bubblewrap to mount procfs for a nested PID namespace, the profile
+removes only Podman's explicit default `/proc` cover mounts. It does not use
+`unmask=ALL`, a `/proc/*` wildcard, a host procfs bind, additional
+capabilities, or an unconfined seccomp policy. The outer procfs remains tied to
+the container's private PID namespace, and the session preflight must prove a
+fresh nested procfs mount before the agent starts.
 
 ### 2. Filesystem scope is explicit, not ambient
 

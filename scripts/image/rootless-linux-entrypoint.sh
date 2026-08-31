@@ -163,7 +163,7 @@ printf '\''1\n'\'' > "$probe_path/pids.max" \
   || fail "the delegated PID limit is not writable"
 rmdir "$probe_path" \
   || fail "could not remove the empty controlled child cgroup"
-bwrap --unshare-user --ro-bind / / -- /bin/true'
+bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true'
 
 if ! systemd-run --user --scope --collect --quiet \
   --expand-environment=no \

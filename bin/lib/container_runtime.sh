@@ -207,6 +207,15 @@ rootless_linux_profile() {
   [ "$(current_sandbox_profile)" = "rootless-linux" ]
 }
 
+rootless_linux_proc_unmask_paths() {
+  # A nested user namespace may mount a fresh procfs only when the procfs it
+  # inherits has no locked child mounts hiding non-empty entries. Keep this
+  # list explicit so a new Podman default mask fails the private-proc preflight
+  # instead of silently broadening the policy through /proc/* or unmask=ALL.
+  printf '%s\n' \
+    '/proc/acpi:/proc/asound:/proc/bus:/proc/fs:/proc/interrupts:/proc/irq:/proc/kcore:/proc/keys:/proc/latency_stats:/proc/sched_debug:/proc/scsi:/proc/sys:/proc/sysrq-trigger:/proc/timer_list:/proc/timer_stats'
+}
+
 resolve_rootless_network_backend() {
   local helper_path=""
 
@@ -930,6 +939,7 @@ build_base_container_args() {
       --cgroupns=private
       --systemd=false
       --security-opt=unmask=/sys/fs/cgroup
+      --security-opt="unmask=$(rootless_linux_proc_unmask_paths)"
       --stop-signal=SIGTERM
     )
   fi

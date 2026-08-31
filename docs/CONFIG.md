@@ -139,6 +139,10 @@ targets while the overlay upper keeps runtime filesystem changes ephemeral.
 An explicit `AGENT_PODMAN_ROOTFS_MODE=overlay` is rejected. Only
 `/sys/fs/cgroup` is unmasked inside that private namespace so the
 container-local user manager can manage its delegated subtree.
+Podman's exact default `/proc` cover-mount paths are also unmasked so Linux's
+`mount_too_revealing()` guard permits a nested user/PID namespace to mount its
+own procfs. The list is explicit rather than `/proc/*` or `unmask=ALL`, and the
+container still receives a private PID namespace—not a host `/proc` bind.
 The user namespace maps only the invoking host user to its normal container
 UID/GID; container UID/GID 0 remain unmapped. This preserves host-user
 ownership of the delegated cgroup instead of asking the OCI runtime to assign
@@ -158,7 +162,8 @@ into the container.
 
 The image supplies upstream Bubblewrap 0.12.0. Before the agent starts, the
 private session verifies zero effective capabilities, writable delegated CPU,
-memory, and PID controls, and a nested unprivileged Bubblewrap user namespace.
+memory, and PID controls, and a nested unprivileged Bubblewrap user/PID
+namespace with a freshly mounted private procfs.
 Any failure is terminal; this profile has no sudo, rootful, or compatibility
 fallback.
 

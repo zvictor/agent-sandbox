@@ -2261,6 +2261,10 @@ test_base_container_uses_rootless_linux_profile() (
   assert_contains "$output" "--cgroupns=private"
   assert_contains "$output" "--systemd=false"
   assert_contains "$output" "--security-opt=unmask=/sys/fs/cgroup"
+  assert_contains "$output" "--security-opt=unmask=/proc/acpi:/proc/asound:/proc/bus:/proc/fs:/proc/interrupts:/proc/irq:/proc/kcore:/proc/keys:/proc/latency_stats:/proc/sched_debug:/proc/scsi:/proc/sys:/proc/sysrq-trigger:/proc/timer_list:/proc/timer_stats"
+  assert_not_contains "$output" "unmask=/proc/*"
+  assert_not_contains "$output" "unmask=ALL"
+  assert_not_contains "$output" "seccomp=unconfined"
   assert_contains "$output" "--stop-signal=SIGTERM"
   assert_contains "$output" "type=tmpfs,dst=/run/user/$(id -u),tmpfs-size=16m,tmpfs-mode=0700,chown"
   assert_contains "$output" "type=tmpfs,dst=/run/systemd/system,tmpfs-size=1m,tmpfs-mode=0755,chown"
@@ -2602,7 +2606,7 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" '--expand-environment=no'
   assert_contains "$script_file" "--property='Delegate=cpu memory pids'"
   assert_contains "$script_file" 'bwrap_version="$(bwrap --version'
-  assert_contains "$script_file" 'bwrap --unshare-user --ro-bind / / -- /bin/true'
+  assert_contains "$script_file" 'bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true'
   assert_contains "$script_file" "printf '\\''1000 100000\\n'\\'' > \"\$probe_path/cpu.max\""
   assert_contains "$script_file" "printf '\\''1048576\\n'\\'' > \"\$probe_path/memory.max\""
   assert_contains "$script_file" "printf '\\''1\\n'\\'' > \"\$probe_path/pids.max\""
