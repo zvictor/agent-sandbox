@@ -1177,16 +1177,13 @@ test_shell_nix_nix_path_default_receives_explicit_pkgs() (
 
   output="$(
     env -u NIX_CONFIG \
-      NIX_REMOTE="local?root=$tmp_dir/nix-root" \
+      NIX_REMOTE="dummy://" \
       NIX_PATH= \
       AGENT_TEST_PROJECT="$project_dir" \
       AGENT_TEST_REPO_ROOT="$REPO_ROOT" \
       nix --extra-experimental-features 'nix-command flakes' eval --impure --json --expr '
         let
-          projectPkgs = builtins.path {
-            path = builtins.getEnv "AGENT_TEST_PROJECT";
-            name = "agent-shell-contract-test";
-          };
+          projectPkgs = builtins.toPath (builtins.getEnv "AGENT_TEST_PROJECT");
           detector = builtins.toPath ((builtins.getEnv "AGENT_TEST_REPO_ROOT") + "/nix/detect-packages.nix");
         in
         import detector {
