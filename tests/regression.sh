@@ -2,7 +2,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-HOST_BASH_DIR="$(dirname "$(command -v bash)")"
+HOST_BASH_PATH="$(command -v bash)"
+HOST_BASH_DIR="$(dirname "$HOST_BASH_PATH")"
+HOST_BASH_STORE_PATH="$(readlink -f "$HOST_BASH_PATH")"
 TEST_HOST_PATH="$HOST_BASH_DIR:/usr/bin:/bin"
 
 fail() {
@@ -89,7 +91,7 @@ pin_shell_fetchtarball_for() (
   bin_dir="$tmp_dir/bin"
   cache_dir="$tmp_dir/cache"
   project_root="$tmp_dir/source-project"
-  store_path="$(readlink -f /bin/bash)"
+  store_path="$HOST_BASH_STORE_PATH"
   mkdir -p "$target_dir" "$bin_dir" "$cache_dir" "$project_root"
 
   printf '{ pkgs ? import (fetchTarball "%s") {} }: pkgs.mkShell { packages = []; }\n' "$url" > "$target_dir/shell.nix"
@@ -2663,7 +2665,7 @@ test_host_gc_root_registration_uses_final_path() (
   trap 'rm -rf "$tmp_dir"' EXIT
   bin_dir="$tmp_dir/bin"
   root_path="$tmp_dir/roots/runtime"
-  store_path="$(readlink -f /bin/bash)"
+  store_path="$HOST_BASH_STORE_PATH"
   mkdir -p "$bin_dir"
 
   cat > "$bin_dir/nix-store" <<'EOF'
@@ -2709,7 +2711,7 @@ test_runtime_lease_retains_artifact_and_mounts_receipts() (
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
   bin_dir="$tmp_dir/bin"
-  store_path="$(readlink -f /bin/bash)"
+  store_path="$HOST_BASH_STORE_PATH"
   mkdir -p "$bin_dir" "$tmp_dir/project"
 
   cat > "$bin_dir/nix-store" <<'EOF'
@@ -2984,7 +2986,7 @@ test_need_helper_materialization_creates_leased_receipt() (
   receipts_dir="$tmp_dir/receipts"
   root_base="$roots_dir/need-test"
   receipt_file="$receipts_dir/need-test.json"
-  store_path="$(readlink -f /bin/bash)"
+  store_path="$HOST_BASH_STORE_PATH"
   mkdir -p "$bin_dir" "$roots_dir" "$receipts_dir" "$tmp_dir/home"
 
   cat > "$bin_dir/nix" <<'EOF'
