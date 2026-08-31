@@ -1564,19 +1564,21 @@ test_remote_light_bootstrap_skips_firecracker_confirmation() (
   output="$(
     AGENT_WORKSPACE_PATH="$tmp_dir/workspace" bash -c '
       source "$1"
+      fixture_root="$2"
       hash_short() { printf "1234567890abcdef\n"; }
-      prepare_tool_resolution_context() { PROJECT_ROOT="$2/workspace"; }
+      prepare_tool_resolution_context() { PROJECT_ROOT="$fixture_root/workspace"; }
       resolve_sandbox_profile() {
         SANDBOX_PROFILE=firecracker-host
         AGENT_SANDBOX_PROFILE=firecracker-host
       }
       resolve_runtime() { RUNTIME=podman; }
-      prepare_cache_dirs() { CACHE_DIR="$2/cache"; mkdir -p "$CACHE_DIR"; }
+      prepare_cache_dirs() { CACHE_DIR="$fixture_root/cache"; mkdir -p "$CACHE_DIR"; }
       bootstrap_environment() { :; }
       remote_firecracker_confirmation() { printf "confirmed\n"; }
 
       remote_bootstrap_light
       printf "light_workspace=%s\n" "$WORKSPACE_PATH"
+      printf "light_project=%s\n" "$PROJECT_ROOT"
       remote_bootstrap_full
       printf "full_without_confirm_done=1\n"
       remote_bootstrap_full confirm-firecracker
@@ -1584,8 +1586,10 @@ test_remote_light_bootstrap_skips_firecracker_confirmation() (
   )"
 
   assert_contains "$output" "light_workspace=$tmp_dir/workspace"
+  assert_contains "$output" "light_project=$tmp_dir/workspace"
   assert_contains "$output" "full_without_confirm_done=1"
   assert_contains "$output" "confirmed"
+  [ -d "$tmp_dir/cache" ] || fail "expected remote bootstrap fixture cache under its temporary root"
 )
 
 test_remote_requires_tailscale_auth_before_starting() (
