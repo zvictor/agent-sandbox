@@ -2,6 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+HOST_BASH_DIR="$(dirname "$(command -v bash)")"
+TEST_HOST_PATH="$HOST_BASH_DIR:/usr/bin:/bin"
 
 fail() {
   echo "[fail] $*" >&2
@@ -120,7 +122,7 @@ EOF
 
   source "$REPO_ROOT/bin/lib/project_contract.sh"
   set +e
-  output="$(CACHE_DIR="$cache_dir" PROJECT_ROOT="$project_root" PATH="$bin_dir:/usr/bin:/bin" pin_shell_fetchtarball "$target_dir" 2>&1)"
+  output="$(CACHE_DIR="$cache_dir" PROJECT_ROOT="$project_root" PATH="$bin_dir:$TEST_HOST_PATH" pin_shell_fetchtarball "$target_dir" 2>&1)"
   status=$?
   set -e
 
@@ -967,11 +969,11 @@ printf 'argv=%s\n' "$*"
 EOF
   chmod +x "$tmp_dir/bin/agent"
 
-  output="$(env -i PATH="$tmp_dir/bin:/usr/bin:/bin" "$tmp_dir/scripts/opencode" alpha beta)"
+  output="$(env -i PATH="$tmp_dir/bin:$TEST_HOST_PATH" "$tmp_dir/scripts/opencode" alpha beta)"
   assert_contains "$output" "permission=allow"
   assert_contains "$output" "argv=opencode alpha beta"
 
-  output="$(env -i PATH="$tmp_dir/bin:/usr/bin:/bin" OPENCODE_PERMISSION=ask "$tmp_dir/scripts/opencode" alpha)"
+  output="$(env -i PATH="$tmp_dir/bin:$TEST_HOST_PATH" OPENCODE_PERMISSION=ask "$tmp_dir/scripts/opencode" alpha)"
   assert_contains "$output" "permission=ask"
   assert_contains "$output" "argv=opencode alpha"
 )
@@ -2693,7 +2695,7 @@ EOF
   source "$REPO_ROOT/bin/lib/nix_roots.sh"
   FAKE_NIX_STORE_LOG="$tmp_dir/nix-store.log"
   export FAKE_NIX_STORE_LOG
-  PATH="$bin_dir:/usr/bin:/bin" register_host_gc_root "$store_path" "$root_path"
+  PATH="$bin_dir:$TEST_HOST_PATH" register_host_gc_root "$store_path" "$root_path"
 
   output="$(cat "$FAKE_NIX_STORE_LOG")"
   assert_contains "$output" "--add-root $root_path --indirect --realise $store_path"
@@ -2752,7 +2754,7 @@ EOF
   AGENT_COMMAND="run"
   FAKE_STORE_PATH="$store_path"
   export FAKE_STORE_PATH
-  PATH="$bin_dir:/usr/bin:/bin"
+  PATH="$bin_dir:$TEST_HOST_PATH"
   export PATH
 
   mkdir -p "$CACHE_DIR/runtime-leases/sandbox-stale"
@@ -2812,7 +2814,7 @@ EOF
   PROJECT_ROOT="$tmp_dir/project"
   AGENT_COMMAND="run"
   AGENT_BIN_DIR="$REPO_ROOT/bin"
-  PATH="$bin_dir:/usr/bin:/bin"
+  PATH="$bin_dir:$TEST_HOST_PATH"
   export PATH
   state_file="$tmp_dir/container-state"
   printf '1\n' > "$state_file"
@@ -3020,7 +3022,7 @@ EOF
     FAKE_NIX_LOG="$tmp_dir/nix.log" \
     FAKE_STORE_PATH="$store_path" \
     AGENT_HOST_HOME="$tmp_dir/home" \
-    PATH="$bin_dir:/usr/bin:/bin" \
+    PATH="$bin_dir:$TEST_HOST_PATH" \
     bash "$REPO_ROOT/bin/agent-nix-helper" materialize \
       nixpkgs#bash "$root_base" "$receipt_file" \
       /run/agent-runtime-receipts/need-test.json lease-test
@@ -3060,7 +3062,7 @@ test_need_rejects_cache_from_previous_lease() (
     AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
     AGENT_RUNTIME_LEASE_ID="new-lease" \
     AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
-    PATH="/usr/bin:/bin" \
+    PATH="$TEST_HOST_PATH" \
     bash "$REPO_ROOT/scripts/image/need.sh" materialize "$installable" 2>&1
   )"
   status=$?
@@ -3093,7 +3095,7 @@ test_need_inject_creates_lease_checking_launcher() (
   AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
   AGENT_RUNTIME_LEASE_ID="lease-test" \
   AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
-  PATH="/usr/bin:/bin" \
+  PATH="$TEST_HOST_PATH" \
   bash "$REPO_ROOT/scripts/image/need.sh" inject "$installable" >/dev/null
 
   launcher="$tools_dir/jq"
@@ -3178,7 +3180,7 @@ test_need_run_allows_command_side_sandbox_sudo() (
     AGENT_NEED_HELPER_DIR="$tmp_dir/missing-helper" \
     AGENT_RUNTIME_LEASE_ID="$lease_id" \
     AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
-    PATH="$sudo_dir:/usr/bin:/bin" \
+    PATH="$sudo_dir:$TEST_HOST_PATH" \
     bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sudo id
   )"
 
@@ -3211,7 +3213,7 @@ test_need_run_refuses_materialized_sudo_shadow() (
     AGENT_RUNTIME_LEASE_ID="$lease_id" \
     AGENT_RUNTIME_RECEIPTS_DIR="$receipts_dir" \
     AGENT_ALLOW_SUDO=0 \
-    PATH="/usr/bin:/bin" \
+    PATH="$TEST_HOST_PATH" \
     bash "$REPO_ROOT/scripts/image/need.sh" run "$installable" -- sh -c 'sudo id' 2>&1
   )"
   status=$?
