@@ -3862,7 +3862,11 @@ main() {
   run_test "need clear commands" test_need_clear_commands
   run_test "codex config mount omits workspace alias" test_codex_config_mount_omits_workspace_alias
   run_test "codex project config mount uses stable runtime home" test_codex_project_config_mount_uses_stable_runtime_home
-  run_test "codex rollout path migration rewrites state db" test_codex_rollout_path_migration_rewrites_state_db
+  if command -v bun >/dev/null 2>&1; then
+    run_test "codex rollout path migration rewrites state db" test_codex_rollout_path_migration_rewrites_state_db
+  else
+    echo "[skip] codex rollout path migration rewrites state db (Bun is provided by the runtime image)"
+  fi
   run_test "codex project managed config is seeded from host" test_codex_project_managed_config_is_seeded_from_host
   run_test "codex project state migrates cache sessions without clobbering" test_codex_project_state_migrates_cache_sessions_without_clobbering
   run_test "codex project home rejects symlink" test_codex_project_home_rejects_symlink
