@@ -956,6 +956,8 @@ test_opencode_wrapper_default() (
   mkdir -p "$tmp_dir/bin" "$tmp_dir/scripts"
   cp "$REPO_ROOT/scripts/opencode" "$tmp_dir/scripts/opencode"
   chmod +x "$tmp_dir/scripts/opencode"
+  ln -s "$(command -v bash)" "$tmp_dir/bin/bash"
+  ln -s "$(command -v dirname)" "$tmp_dir/bin/dirname"
 
   cat > "$tmp_dir/bin/agent" <<'EOF'
 #!/usr/bin/env bash
@@ -965,11 +967,11 @@ printf 'argv=%s\n' "$*"
 EOF
   chmod +x "$tmp_dir/bin/agent"
 
-  output="$(env -i PATH="/usr/bin:/bin" "$tmp_dir/scripts/opencode" alpha beta)"
+  output="$(env -i PATH="$tmp_dir/bin:/usr/bin:/bin" "$tmp_dir/scripts/opencode" alpha beta)"
   assert_contains "$output" "permission=allow"
   assert_contains "$output" "argv=opencode alpha beta"
 
-  output="$(env -i PATH="/usr/bin:/bin" OPENCODE_PERMISSION=ask "$tmp_dir/scripts/opencode" alpha)"
+  output="$(env -i PATH="$tmp_dir/bin:/usr/bin:/bin" OPENCODE_PERMISSION=ask "$tmp_dir/scripts/opencode" alpha)"
   assert_contains "$output" "permission=ask"
   assert_contains "$output" "argv=opencode alpha"
 )
