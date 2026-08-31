@@ -1626,10 +1626,10 @@ append_stdio_and_target_args() {
     RUN_TARGET="$IMAGE_ID"
   fi
   ARGS+=( "$RUN_TARGET" )
-  append_codex_ssh_sandbox_args
   if rootless_linux_profile; then
     ARGS+=( -- /bin/agent-rootless-linux-entrypoint )
   fi
+  append_codex_ssh_sandbox_args
   if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi

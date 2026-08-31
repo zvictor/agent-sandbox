@@ -766,6 +766,8 @@ stdio_target_args_for() (
   set -euo pipefail
 
   local profile="${1:-default}"
+  local with_ssh_runtime="${2:-0}"
+  local ssh_runtime_dir=""
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
@@ -775,7 +777,13 @@ stdio_target_args_for() (
   TOOL="codex"
   ROOTFS_IMAGE_ARG="/tmp/rootfs:O"
   IMAGE_ID="sha256:unused"
-  SSH_RUNTIME_DIR=""
+  if [ "$with_ssh_runtime" = "1" ]; then
+    ssh_runtime_dir="$(mktemp -d)"
+    trap 'rm -rf "$ssh_runtime_dir"' EXIT
+    SSH_RUNTIME_DIR="$ssh_runtime_dir"
+  else
+    SSH_RUNTIME_DIR=""
+  fi
   REMAINING_ARGS=(--probe)
   ARGS=()
 
@@ -1999,11 +2007,13 @@ test_rootless_linux_target_uses_private_session_entrypoint() (
   set -euo pipefail
 
   local output
-  output="$(stdio_target_args_for rootless-linux)"
+  output="$(stdio_target_args_for rootless-linux 1)"
 
   assert_contains "$output" "AGENT_ROOTLESS_LINUX_TOOL=/bin/codex"
   assert_contains "$output" "/bin/catatonit"
   assert_contains "$output" "/bin/agent-rootless-linux-entrypoint"
+  assert_contains "$output" $'/tmp/rootfs:O\n--\n/bin/agent-rootless-linux-entrypoint\n--add-dir\n/cache/.ssh'
+  assert_contains "$output" "--probe"
   assert_not_contains "$output" "--entrypoint\n/bin/codex"
 )
 
