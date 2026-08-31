@@ -2580,7 +2580,8 @@ test_rootless_linux_preflight_rejects_missing_isolated_network() (
 test_rootless_linux_session_contract() (
   set -euo pipefail
 
-  local environment_file script_file image_file flake_file
+  local cgroup_launch_file environment_file script_file image_file flake_file
+  cgroup_launch_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-cgroup-launch.sh")"
   environment_file="$(cat "$REPO_ROOT/bin/lib/environment.sh")"
   script_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-entrypoint.sh")"
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
@@ -2619,6 +2620,15 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'migrated_path="$(awk -F:'
   assert_contains "$script_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
+  assert_contains "$script_file" '-- /bin/agent-rootless-linux-cgroup-launch "$tool" "$@"'
+  assert_contains "$cgroup_launch_file" 'payload_path="$scope_path/$payload_name"'
+  assert_contains "$cgroup_launch_file" "printf '0\\n' > \"\$payload_path/cgroup.procs\""
+  assert_contains "$cgroup_launch_file" '[ -z "$remaining_pids" ]'
+  assert_contains "$cgroup_launch_file" "printf '+cpu +memory +pids\\n' > \"\$scope_path/cgroup.subtree_control\""
+  assert_contains "$cgroup_launch_file" 'for control_file in cpu.max memory.max pids.max; do'
+  assert_contains "$cgroup_launch_file" 'export AGENT_DELEGATED_CGROUP="$scope_path"'
+  assert_contains "$image_file" 'rootless-linux-cgroup-launch.sh'
+  assert_not_contains "$cgroup_launch_file" "sudo"
   assert_not_contains "$script_file" "sudo"
   assert_not_contains "$script_file" "DBUS_SESSION_BUS_ADDRESS"
   assert_not_contains "$script_file" "--wait"

@@ -147,9 +147,14 @@ The profile refuses to fall back to the host network namespace when neither
 supported rootless network backend is available.
 Inside the container, a generic private `systemd --user` manager owns the
 agent's transient delegated scope. `systemd-run` registers that scope through
-the manager's private socket and then replaces itself with the agent, preserving
-the inherited terminal and exit status without a user message bus. The host
-user bus and manager sockets are never mounted into the container.
+the manager's private socket. A generic launcher then moves itself into an
+agent payload leaf, verifies that the delegated parent is empty, activates the
+`cpu`, `memory`, and `pids` controllers on that parent, and replaces itself with
+the agent. The inherited terminal and exit status are preserved without a user
+message bus. `AGENT_DELEGATED_CGROUP` identifies the empty parent as bounded
+informational metadata; it grants no authority beyond the cgroup filesystem's
+existing ownership. The host user bus and manager sockets are never mounted
+into the container.
 
 The image supplies upstream Bubblewrap 0.12.0. Before the agent starts, the
 private session verifies zero effective capabilities, writable delegated CPU,

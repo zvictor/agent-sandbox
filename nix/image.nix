@@ -122,6 +122,7 @@ let
 
   rootlessLinuxSession = pkgs.runCommand "agent-rootless-linux-session" { } ''
     install -Dm0755 ${../scripts/image/rootless-linux-entrypoint.sh} "$out/bin/agent-rootless-linux-entrypoint"
+    install -Dm0755 ${../scripts/image/rootless-linux-cgroup-launch.sh} "$out/bin/agent-rootless-linux-cgroup-launch"
   '';
 
   firecrackerPodmanWrapper = pkgs.writeShellScriptBin "agent-firecracker-podman" ''

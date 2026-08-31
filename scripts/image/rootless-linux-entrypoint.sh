@@ -183,7 +183,7 @@ systemd-run --user --scope --collect --quiet \
   --expand-environment=no \
   --property='Delegate=cpu memory pids' \
   --working-directory="$PWD" \
-  -- "$tool" "$@"
+  -- /bin/agent-rootless-linux-cgroup-launch "$tool" "$@"
 status=$?
 set -e
 

@@ -51,8 +51,11 @@ profile for rootless cgroup/Bubblewrap proofs. Rootless Podman is launched in a
 host user-manager scope that delegates only cgroup control. The container gets
 a private cgroup namespace and a private container-local `systemd --user`
 manager; its transient scope is registered through the manager's private
-socket, and it does not receive the host user bus or the host manager's private
-socket. This avoids turning `systemd-run --user` into a host namespace escape.
+socket. The agent processes occupy a leaf below an empty, controller-enabled
+delegated parent, identified by the non-authoritative
+`AGENT_DELEGATED_CGROUP` receipt. The container does not receive the host user
+bus or the host manager's private socket. This avoids turning
+`systemd-run --user` into a host namespace escape.
 Its single-ID user namespace maps the invoking host user directly and leaves
 container root unmapped, keeping cgroup ownership with that unprivileged user.
 The profile uses a cached, user-owned rootfs mirror with an ephemeral `:O`
