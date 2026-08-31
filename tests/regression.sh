@@ -2602,15 +2602,18 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" "--property='Delegate=cpu memory pids'"
   assert_contains "$script_file" 'bwrap_version="$(bwrap --version'
   assert_contains "$script_file" 'bwrap --unshare-user --ro-bind / / -- /bin/true'
-  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/cpu.max\""
-  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/memory.max\""
-  assert_contains "$script_file" "printf 'max\\n' > \"\$probe_path/pids.max\""
+  assert_contains "$script_file" "printf '\\''1000 100000\\n'\\'' > \"\$probe_path/cpu.max\""
+  assert_contains "$script_file" "printf '\\''1048576\\n'\\'' > \"\$probe_path/memory.max\""
+  assert_contains "$script_file" "printf '\\''1\\n'\\'' > \"\$probe_path/pids.max\""
   assert_contains "$environment_file" 'payload_path="$scope_path/rootless-linux-payload.$$"'
   assert_contains "$environment_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
   assert_contains "$environment_file" 'migrated_path="$(awk -F:'
   assert_contains "$environment_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$environment_file" 'systemd-run --user --scope --quiet --collect'
   assert_contains "$environment_file" '--expand-environment=no'
+  assert_contains "$environment_file" "printf '\\''1000 100000\\n'\\'' > \"\$probe_path/cpu.max\""
+  assert_contains "$environment_file" "printf '\\''1048576\\n'\\'' > \"\$probe_path/memory.max\""
+  assert_contains "$environment_file" "printf '\\''1\\n'\\'' > \"\$probe_path/pids.max\""
   assert_contains "$script_file" 'payload_path="$scope_path/capability-payload.$$"'
   assert_contains "$script_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
   assert_contains "$script_file" 'migrated_path="$(awk -F:'
@@ -2626,10 +2629,6 @@ test_rootless_linux_session_contract() (
   assert_contains "$image_file" 'pkgs.catatonit'
   assert_contains "$image_file" 'rootlessLinuxSession'
   assert_contains "$flake_file" 'pkgs.util-linux'
-
-  assert_contains "$environment_file" '"$probe_path/cpu.max"'
-  assert_contains "$environment_file" '"$probe_path/memory.max"'
-  assert_contains "$environment_file" '"$probe_path/pids.max"'
 )
 
 test_host_gc_root_registration_uses_final_path() (

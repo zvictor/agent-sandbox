@@ -121,30 +121,48 @@ done
 [ "$manager_ready" = "1" ] || fail "the private systemd user manager did not become ready"
 
 capability_probe='set -eu
+fail() {
+  printf '\''%s\n'\'' "$*" >&2
+  exit 1
+}
 cgroup_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
-[ -n "$cgroup_path" ]
+[ -n "$cgroup_path" ] || fail "could not resolve the transient scope cgroup"
 scope_path="/sys/fs/cgroup$cgroup_path"
-controllers="$(cat "$scope_path/cgroup.controllers")"
+controllers="$(cat "$scope_path/cgroup.controllers")" \
+  || fail "could not read the transient scope controllers"
 for controller in cpu memory pids; do
   case " $controllers " in
     *" $controller "*) ;;
-    *) exit 1 ;;
+    *) fail "$controller is not available to the transient scope (available: ${controllers:-none})" ;;
   esac
 done
-[ -w "$scope_path/cgroup.procs" ]
-[ -w "$scope_path/cgroup.subtree_control" ]
+[ -w "$scope_path/cgroup.procs" ] \
+  || fail "transient scope cgroup.procs is not writable: $scope_path/cgroup.procs"
+[ -w "$scope_path/cgroup.subtree_control" ] \
+  || fail "transient scope cgroup.subtree_control is not writable: $scope_path/cgroup.subtree_control"
 payload_path="$scope_path/capability-payload.$$"
 probe_path="$scope_path/capability-probe.$$"
-mkdir "$payload_path"
-printf '\''0\n'\'' > "$payload_path/cgroup.procs"
+mkdir "$payload_path" \
+  || fail "could not create a payload cgroup below the transient scope"
+printf '\''0\n'\'' > "$payload_path/cgroup.procs" \
+  || fail "could not move the capability probe below the transient scope boundary"
 migrated_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' /proc/self/cgroup)"
-[ "$migrated_path" = "$cgroup_path/capability-payload.$$" ]
-printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control"
-mkdir "$probe_path"
-printf 'max\n' > "$probe_path/cpu.max"
-printf 'max\n' > "$probe_path/memory.max"
-printf 'max\n' > "$probe_path/pids.max"
-rmdir "$probe_path"
+[ "$migrated_path" = "$cgroup_path/capability-payload.$$" ] \
+  || fail "the capability probe did not enter its payload cgroup (found: ${migrated_path:-unknown})"
+printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control" \
+  || fail "could not enable CPU, memory, and PID controllers below the transient scope"
+mkdir "$probe_path" \
+  || fail "could not create a controlled child cgroup below the transient scope"
+# Set finite limits on an empty child. This proves enforcement authority
+# without throttling the probe itself or changing the scope boundary.
+printf '\''1000 100000\n'\'' > "$probe_path/cpu.max" \
+  || fail "the delegated CPU limit is not writable"
+printf '\''1048576\n'\'' > "$probe_path/memory.max" \
+  || fail "the delegated memory limit is not writable"
+printf '\''1\n'\'' > "$probe_path/pids.max" \
+  || fail "the delegated PID limit is not writable"
+rmdir "$probe_path" \
+  || fail "could not remove the empty controlled child cgroup"
 bwrap --unshare-user --ro-bind / / -- /bin/true'
 
 if ! systemd-run --user --scope --collect --quiet \

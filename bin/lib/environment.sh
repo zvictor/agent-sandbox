@@ -378,12 +378,14 @@ printf '\''+cpu +memory +pids\n'\'' > "$scope_path/cgroup.subtree_control" \
   || fail "could not enable CPU, memory, and PID controllers below the transient scope"
 mkdir "$probe_path" \
   || fail "could not create a controlled child cgroup below the transient scope"
-printf '\''max\n'\'' > "$probe_path/cpu.max" \
-  || fail "the delegated CPU controller is not writable"
-printf '\''max\n'\'' > "$probe_path/memory.max" \
-  || fail "the delegated memory controller is not writable"
-printf '\''max\n'\'' > "$probe_path/pids.max" \
-  || fail "the delegated PID controller is not writable"
+# Set finite limits on an empty child. This proves enforcement authority
+# without throttling the probe itself or changing the scope boundary.
+printf '\''1000 100000\n'\'' > "$probe_path/cpu.max" \
+  || fail "the delegated CPU limit is not writable"
+printf '\''1048576\n'\'' > "$probe_path/memory.max" \
+  || fail "the delegated memory limit is not writable"
+printf '\''1\n'\'' > "$probe_path/pids.max" \
+  || fail "the delegated PID limit is not writable"
 rmdir "$probe_path" \
   || fail "could not remove the empty controlled child cgroup"'
 
