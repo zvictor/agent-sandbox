@@ -2,9 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-HOST_BASH_PATH="$(command -v bash)"
-HOST_BASH_DIR="$(dirname "$HOST_BASH_PATH")"
-TEST_HOST_PATH="$HOST_BASH_DIR:/usr/bin:/bin"
+TEST_HOST_PATH="$PATH"
 
 fail() {
   echo "[fail] $*" >&2
