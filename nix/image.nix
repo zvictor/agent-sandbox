@@ -384,6 +384,7 @@ EOF
       pkgs.iproute2
       pkgs.nix-index
       pkgs.systemdMinimal
+      pkgs.catatonit
     ]
     ++ helpers
     ++ devPackagesImage

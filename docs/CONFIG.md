@@ -61,9 +61,11 @@ For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell
 ## Runtime Behavior
 
 The PID-1 reaper is mandatory infrastructure, not a configuration option.
-Every Podman and Docker launch uses the engine's `--init` facility, including
-foreground tools, remote runtime containers, and remote sidecars. A runtime
-that cannot provide init fails during container creation.
+Default, Firecracker, Docker, and remote launches use the engine's `--init`
+facility. The `rootless-linux` profile instead runs the immutable Catatonit
+binary from its rootfs as PID 1. Its root-unmapped user namespace cannot accept
+Podman's injected `/run/podman-init` bind mount. A runtime that cannot provide
+the selected init fails during container creation.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -130,9 +132,10 @@ remote-container mode, rootful Podman, root execution, and
 `AGENT_ALLOW_SUDO=1`. It also rejects extra/automatic mounts, extra devices,
 KVM, container API exposure, and the Nix daemon socket. Podman itself runs in a
 transient delegated host user scope with `--cgroups=split`,
-`--cgroupns=private`, the engine-owned PID-1 init, and Podman systemd mode
-disabled. Only `/sys/fs/cgroup` is unmasked inside that private namespace so
-the container-local user manager can manage its delegated subtree.
+`--cgroupns=private`, an immutable rootfs Catatonit PID-1 reaper, and Podman
+systemd mode disabled. Only `/sys/fs/cgroup` is unmasked inside that private
+namespace so the container-local user manager can manage its delegated
+subtree.
 The user namespace maps only the invoking host user to its normal container
 UID/GID; container UID/GID 0 remain unmapped. This preserves host-user
 ownership of the delegated cgroup instead of asking the OCI runtime to assign

@@ -920,10 +920,10 @@ build_base_container_args() {
     CONTAINER_NAME="${CONTAINER_NAME:0:63}"
   fi
 
-  ARGS=(
-    --name "$CONTAINER_NAME"
-    --init
-  )
+  ARGS=( --name "$CONTAINER_NAME" )
+  if ! rootless_linux_profile; then
+    ARGS+=( --init )
+  fi
   if rootless_linux_profile; then
     ARGS+=(
       --cgroups=split
@@ -1614,7 +1614,7 @@ append_stdio_and_target_args() {
   if rootless_linux_profile; then
     ARGS+=(
       -e "AGENT_ROOTLESS_LINUX_TOOL=/bin/$TOOL"
-      --entrypoint "/bin/agent-rootless-linux-entrypoint"
+      --entrypoint "/bin/catatonit"
     )
   else
     ARGS+=( --entrypoint "/bin/$TOOL" )
@@ -1627,6 +1627,9 @@ append_stdio_and_target_args() {
   fi
   ARGS+=( "$RUN_TARGET" )
   append_codex_ssh_sandbox_args
+  if rootless_linux_profile; then
+    ARGS+=( -- /bin/agent-rootless-linux-entrypoint )
+  fi
   if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi

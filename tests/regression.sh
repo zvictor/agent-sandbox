@@ -1939,6 +1939,7 @@ test_rootless_linux_target_uses_private_session_entrypoint() (
   output="$(stdio_target_args_for rootless-linux)"
 
   assert_contains "$output" "AGENT_ROOTLESS_LINUX_TOOL=/bin/codex"
+  assert_contains "$output" "/bin/catatonit"
   assert_contains "$output" "/bin/agent-rootless-linux-entrypoint"
   assert_not_contains "$output" "--entrypoint\n/bin/codex"
 )
@@ -1974,17 +1975,18 @@ test_container_run_log_redacts_environment_values() (
   assert_not_contains "$output" "second-secret"
 )
 
-test_runtime_containers_require_pid1_init() (
+test_runtime_containers_require_pid1_reaper() (
   set -euo pipefail
 
   local output=""
   local init_count=""
+  local rootless_base=""
+  local rootless_target=""
 
   for output in \
     "$(base_container_args_for)" \
     "$(base_container_args_for 0 default docker)" \
     "$(base_container_args_for 0 firecracker-host)" \
-    "$(base_container_args_for 0 rootless-linux)" \
     "$(remote_base_container_args_for)" \
     "$(remote_base_container_args_for firecracker-host)"
   do
@@ -1992,6 +1994,13 @@ test_runtime_containers_require_pid1_init() (
     [ "$init_count" -eq 1 ] || fail "expected exactly one mandatory --init flag, found $init_count"
     assert_not_contains "$output" "--pid=host"
   done
+
+  rootless_base="$(base_container_args_for 0 rootless-linux)"
+  rootless_target="$(stdio_target_args_for rootless-linux)"
+  assert_not_contains "$rootless_base" "--init"
+  assert_not_contains "$rootless_base" "--pid=host"
+  assert_contains "$rootless_target" "/bin/catatonit"
+  assert_contains "$rootless_target" "/bin/agent-rootless-linux-entrypoint"
 )
 
 test_remote_base_container_uses_stable_pod() (
@@ -2126,7 +2135,7 @@ test_base_container_uses_rootless_linux_profile() (
   local output
   output="$(base_container_args_for 0 rootless-linux)"
 
-  assert_contains "$output" "--init"
+  assert_not_contains "$output" "--init"
   assert_contains "$output" "--cgroups=split"
   assert_contains "$output" "--cgroupns=private"
   assert_contains "$output" "--systemd=false"
@@ -2485,6 +2494,7 @@ test_rootless_linux_session_contract() (
   assert_not_contains "$script_file" "sudo"
   assert_not_contains "$script_file" "DBUS_SESSION_BUS_ADDRESS"
   assert_contains "$image_file" 'pkgs.systemdMinimal'
+  assert_contains "$image_file" 'pkgs.catatonit'
   assert_contains "$image_file" 'rootlessLinuxSession'
   assert_contains "$flake_file" 'pkgs.util-linux'
 
@@ -3561,7 +3571,7 @@ main() {
   run_test "rootless linux target uses private session entrypoint" test_rootless_linux_target_uses_private_session_entrypoint
   run_test "rootless linux runtime uses delegated user scope" test_rootless_linux_runtime_uses_delegated_user_scope
   run_test "container run log redacts environment values" test_container_run_log_redacts_environment_values
-  run_test "runtime containers require PID 1 init" test_runtime_containers_require_pid1_init
+  run_test "runtime containers require PID 1 reaper" test_runtime_containers_require_pid1_reaper
   run_test "remote base container uses stable pod" test_remote_base_container_uses_stable_pod
   run_test "remote firecracker base container skips pod" test_remote_firecracker_base_container_skips_pod
   run_test "remote rootless linux profile is rejected" test_remote_rootless_linux_profile_is_rejected
