@@ -118,15 +118,21 @@ Cache strategy:
 
 Every sandbox also receives a host-owned runtime lease. The launcher roots the
 selected runtime artifact under the lease before starting the container and
-removes the lease after foreground sandbox teardown. Remote leases remain under
-the remote state directory until `agent remote down`. Roots are never mounted
-into the sandbox.
+binds a foreground Podman lease to the generated container identity. Cleanup
+and stale pruning remove it only after Podman confirms that container is gone,
+so launcher or coordinator termination cannot collect a still-running
+sandbox's base runtime. A detached host guard releases the bounded lease after
+an orphaned foreground launcher and its container are both gone. Remote leases
+remain under the remote state directory until `agent remote down`. Roots are
+never mounted into the sandbox.
 
 The launcher publishes bounded JSON receipts at
 `/run/agent-runtime-receipts` through a read-only mount. A receipt identifies
 the lease, its top-level output paths, and every path in the retained Nix
 closure with its NAR hash, size, and references. Foreground launch also prunes
-leases whose owning launcher process no longer exists.
+leases whose owning launcher process no longer exists and whose bound runtime
+container is confirmed absent. An unavailable runtime is not treated as proof
+of teardown.
 
 Podman path:
 - requires Linux, a local `/nix/store`, and no `CONTAINER_HOST`

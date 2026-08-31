@@ -212,6 +212,10 @@ prepare_need_helper
 log_debug_context
 
 build_container_args
+if [ "$MODE" = "podman-rootfs" ]; then
+  bind_runtime_lease_to_container "$RUNTIME" "$(current_sandbox_profile)" "$CONTAINER_NAME"
+  prepare_runtime_lease_guard
+fi
 
 if [ "${AGENT_DEBUG:-0}" = "1" ]; then
   log_container_run_args

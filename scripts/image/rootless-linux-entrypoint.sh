@@ -16,6 +16,69 @@ has_controller() {
   esac
 }
 
+verify_runtime_lease() {
+  local receipt_dir="${AGENT_RUNTIME_RECEIPTS_DIR:-}"
+  local lease_id="${AGENT_RUNTIME_LEASE_ID:-}"
+  local mount_options=""
+  local store_path=""
+  local closure_count="0"
+
+  [ "$receipt_dir" = "/run/agent-runtime-receipts" ] \
+    || fail "the runtime receipt directory is not the managed mount"
+  [ -n "$lease_id" ] || fail "the runtime lease identity is missing"
+  [ -r "$receipt_dir/lease.json" ] \
+    || fail "the runtime lease receipt is missing"
+  [ -r "$receipt_dir/runtime-rootfs.json" ] \
+    || fail "the retained rootfs receipt is missing"
+
+  mount_options="$(
+    awk -v target="$receipt_dir" \
+      '$5 == target { options = $6 } END { print options }' \
+      /proc/self/mountinfo
+  )"
+  case ",$mount_options," in
+    *,ro,*) ;;
+    *) fail "the runtime receipt directory is not mounted read-only" ;;
+  esac
+
+  jq -e \
+    --arg lease_id "$lease_id" \
+    'select(
+      .schema_version == 1 and
+      .lease_id == $lease_id and
+      .owner == "agent-sandbox" and
+      .scope == "foreground-sandbox" and
+      .retention == "until-sandbox-teardown"
+    )' "$receipt_dir/lease.json" >/dev/null \
+    || fail "the runtime lease receipt is invalid"
+
+  jq -e \
+    --arg lease_id "$lease_id" \
+    'select(
+      .schema_version == 1 and
+      .lease_id == $lease_id and
+      .kind == "runtime-artifact" and
+      .artifact == "rootfs" and
+      (.output_paths | type) == "array" and
+      (.output_paths | length) == 1 and
+      (.closure | type) == "array" and
+      (.closure | length) > 0 and
+      (.output_paths[0] as $output | .closure | any(.path == $output))
+    )' "$receipt_dir/runtime-rootfs.json" >/dev/null \
+    || fail "the retained rootfs receipt is invalid"
+
+  while IFS= read -r store_path; do
+    case "$store_path" in
+      /nix/store/*) ;;
+      *) fail "the retained rootfs receipt contains a non-store path" ;;
+    esac
+    [ -e "$store_path" ] \
+      || fail "the retained rootfs closure is incomplete: $store_path"
+    closure_count=$((closure_count + 1))
+  done < <(jq -er '.closure[].path' "$receipt_dir/runtime-rootfs.json")
+  [ "$closure_count" -gt 0 ] || fail "the retained rootfs closure is empty"
+}
+
 tool="${AGENT_ROOTLESS_LINUX_TOOL:-}"
 [ -n "$tool" ] || fail "AGENT_ROOTLESS_LINUX_TOOL is not set"
 [ -x "$tool" ] || fail "tool launcher is not executable: $tool"
@@ -24,11 +87,13 @@ tool="${AGENT_ROOTLESS_LINUX_TOOL:-}"
 [ -d "$XDG_RUNTIME_DIR" ] && [ -r "$XDG_RUNTIME_DIR" ] && [ -w "$XDG_RUNTIME_DIR" ] && [ -x "$XDG_RUNTIME_DIR" ] \
   || fail "XDG_RUNTIME_DIR is not usable"
 
-for command_name in bwrap systemctl systemd-run; do
+for command_name in bwrap jq systemctl systemd-run; do
   command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is not installed"
 done
 [ -x /lib/systemd/systemd ] || fail "the systemd user manager is not installed"
 [ -d /example/systemd/user ] || fail "the immutable systemd user units are not installed"
+
+verify_runtime_lease
 
 # Keep this private manager independent from writable, persistent user unit
 # state. The profile needs only systemd's immutable core user targets and

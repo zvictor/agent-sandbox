@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[ "$#" -eq 2 ] || {
+  echo "usage: agent-runtime-lease-guard <lease-dir> <cache-dir>" >&2
+  exit 1
+}
+
+AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$AGENT_BIN_DIR/lib/runtime_lease.sh"
+
+RUNTIME_LEASE_DIR="$1"
+CACHE_DIR="$2"
+RUNTIME_LEASE_PERSIST="0"
+
+runtime_lease_dir_is_managed "$RUNTIME_LEASE_DIR" || {
+  echo "[agent] runtime lease guard refused unmanaged path: $RUNTIME_LEASE_DIR" >&2
+  exit 1
+}
+
+seen_container="0"
+owner_missing_since="0"
+
+# Container creation follows this guard's launch. If the launcher dies during
+# Podman startup, allow a short bounded race for the named container to appear.
+while [ -d "$RUNTIME_LEASE_DIR" ]; do
+  if runtime_lease_bound_container_exists "$RUNTIME_LEASE_DIR"; then
+    seen_container="1"
+    break
+  else
+    container_state="$?"
+  fi
+
+  if [ "$container_state" -eq 2 ] || runtime_lease_owner_running "$RUNTIME_LEASE_DIR"; then
+    owner_missing_since="0"
+    sleep 1
+    continue
+  fi
+
+  now="$(date +%s)"
+  if [ "$owner_missing_since" -eq 0 ]; then
+    owner_missing_since="$now"
+  elif [ $((now - owner_missing_since)) -ge 30 ]; then
+    remove_runtime_lease "$RUNTIME_LEASE_DIR"
+    exit 0
+  fi
+  sleep 1
+done
+
+[ "$seen_container" = "1" ] || exit 0
+
+while [ -d "$RUNTIME_LEASE_DIR" ]; do
+  if runtime_lease_bound_container_exists "$RUNTIME_LEASE_DIR"; then
+    sleep 1
+    continue
+  else
+    container_state="$?"
+  fi
+
+  if [ "$container_state" -eq 1 ]; then
+    remove_runtime_lease "$RUNTIME_LEASE_DIR"
+    exit 0
+  fi
+
+  # A runtime error is not proof that the sandbox has been torn down.
+  sleep 1
+done

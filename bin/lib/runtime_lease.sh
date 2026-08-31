@@ -66,23 +66,183 @@ runtime_lease_owner_running() {
   local owner_file="$lease_dir/owner.env"
   local owner_pid=""
   local owner_identity=""
+  local container_state=""
   local key=""
   local value=""
 
-  [ -f "$owner_file" ] || return 1
+  if [ -f "$owner_file" ]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        pid) owner_pid="$value" ;;
+        identity) owner_identity="$value" ;;
+      esac
+    done < "$owner_file"
+
+    case "$owner_pid" in
+      ''|*[!0-9]*) ;;
+      *)
+        if [ -n "$owner_identity" ] \
+          && kill -0 "$owner_pid" 2>/dev/null \
+          && [ "$(runtime_process_identity "$owner_pid")" = "$owner_identity" ]; then
+          return 0
+        fi
+        ;;
+    esac
+  fi
+
+  if runtime_lease_bound_container_exists "$lease_dir"; then
+    return 0
+  else
+    container_state="$?"
+  fi
+
+  # An unavailable runtime cannot prove teardown. Retaining a stale bounded
+  # lease is safer than collecting a possibly live sandbox's runtime.
+  [ "$container_state" -eq 2 ]
+}
+
+runtime_lease_bound_container_exists() {
+  local lease_dir="$1"
+  local binding_file="$lease_dir/container.env"
+  local runtime=""
+  local profile=""
+  local container_name=""
+  local key=""
+  local value=""
+  local status=""
+
+  [ -f "$binding_file" ] || return 1
   while IFS='=' read -r key value; do
     case "$key" in
-      pid) owner_pid="$value" ;;
-      identity) owner_identity="$value" ;;
+      runtime) runtime="$value" ;;
+      profile) profile="$value" ;;
+      container) container_name="$value" ;;
     esac
-  done < "$owner_file"
+  done < "$binding_file"
 
-  case "$owner_pid" in
-    ''|*[!0-9]*) return 1 ;;
+  [ "$runtime" = "podman" ] || return 1
+  case "$profile" in
+    default|rootless-linux|firecracker-host) ;;
+    *) return 1 ;;
   esac
-  [ -n "$owner_identity" ] || return 1
-  kill -0 "$owner_pid" 2>/dev/null || return 1
-  [ "$(runtime_process_identity "$owner_pid")" = "$owner_identity" ]
+  case "$container_name" in
+    agent-*) ;;
+    *) return 1 ;;
+  esac
+  case "$container_name" in
+    *[!A-Za-z0-9_.-]*) return 1 ;;
+  esac
+
+  if [ "$profile" = "firecracker-host" ]; then
+    command -v sudo >/dev/null 2>&1 || return 2
+    sudo -n podman --version >/dev/null 2>&1 || return 2
+    if sudo -n podman container exists "$container_name" >/dev/null 2>&1; then
+      return 0
+    else
+      status="$?"
+    fi
+  else
+    command -v podman >/dev/null 2>&1 || return 2
+    if env -u CONTAINER_HOST -u CONTAINER_CONNECTION -u DOCKER_HOST \
+      podman container exists "$container_name" >/dev/null 2>&1; then
+      return 0
+    else
+      status="$?"
+    fi
+  fi
+
+  [ "$status" -eq 1 ] && return 1
+  return 2
+}
+
+bind_runtime_lease_to_container() {
+  local runtime="$1"
+  local profile="$2"
+  local container_name="$3"
+  local pending=""
+
+  [ -n "$RUNTIME_LEASE_DIR" ] || {
+    echo "[agent] ERROR: cannot bind an unavailable runtime lease" >&2
+    return 1
+  }
+  runtime_lease_dir_is_managed "$RUNTIME_LEASE_DIR" || {
+    echo "[agent] ERROR: refusing unmanaged runtime lease path: $RUNTIME_LEASE_DIR" >&2
+    return 1
+  }
+  [ "$runtime" = "podman" ] || {
+    echo "[agent] ERROR: runtime lease container binding requires podman" >&2
+    return 1
+  }
+  case "$profile" in
+    default|rootless-linux|firecracker-host) ;;
+    *)
+      echo "[agent] ERROR: invalid runtime lease container profile: $profile" >&2
+      return 1
+      ;;
+  esac
+  case "$container_name" in
+    agent-*) ;;
+    *)
+      echo "[agent] ERROR: invalid runtime lease container name: $container_name" >&2
+      return 1
+      ;;
+  esac
+  case "$container_name" in
+    *[!A-Za-z0-9_.-]*)
+      echo "[agent] ERROR: invalid runtime lease container name: $container_name" >&2
+      return 1
+      ;;
+  esac
+
+  pending="$(mktemp "$RUNTIME_LEASE_DIR/.container.env.XXXXXX")"
+  {
+    printf 'runtime=%s\n' "$runtime"
+    printf 'profile=%s\n' "$profile"
+    printf 'container=%s\n' "$container_name"
+  } > "$pending"
+  chmod 0600 "$pending"
+  mv -f "$pending" "$RUNTIME_LEASE_DIR/container.env"
+}
+
+prepare_runtime_lease_guard() {
+  local guard_pid=""
+  local ready_attempt="0"
+
+  [ -f "$RUNTIME_LEASE_DIR/container.env" ] || {
+    echo "[agent] ERROR: runtime lease guard requires a bound container" >&2
+    return 1
+  }
+  command -v nohup >/dev/null 2>&1 || {
+    echo "[agent] ERROR: runtime lease guard requires nohup" >&2
+    return 1
+  }
+  [ -x "$AGENT_BIN_DIR/agent-runtime-lease-guard" ] || {
+    echo "[agent] ERROR: runtime lease guard is not executable" >&2
+    return 1
+  }
+
+  (
+    umask 077
+    exec nohup "$AGENT_BIN_DIR/agent-runtime-lease-guard" \
+      "$RUNTIME_LEASE_DIR" "$CACHE_DIR" \
+      </dev/null >"$RUNTIME_LEASE_DIR/guard.log" 2>&1
+  ) &
+  guard_pid="$!"
+  printf '%s\n' "$guard_pid" > "$RUNTIME_LEASE_DIR/guard.pid"
+
+  while [ "$ready_attempt" -lt 20 ]; do
+    if kill -0 "$guard_pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    ready_attempt=$((ready_attempt + 1))
+  done
+
+  echo "[agent] ERROR: runtime lease guard failed to start" >&2
+  if [ -s "$RUNTIME_LEASE_DIR/guard.log" ]; then
+    sed 's/^/[agent] runtime lease guard: /' "$RUNTIME_LEASE_DIR/guard.log" >&2
+  fi
+  return 1
 }
 
 runtime_lease_helper_process_matches() {
@@ -324,7 +484,20 @@ remove_runtime_lease() {
 }
 
 cleanup_runtime_lease() {
+  local container_state=""
+
   [ -n "$RUNTIME_LEASE_DIR" ] || return 0
   [ "$RUNTIME_LEASE_PERSIST" = "0" ] || return 0
+
+  if runtime_lease_bound_container_exists "$RUNTIME_LEASE_DIR"; then
+    return 0
+  else
+    container_state="$?"
+  fi
+  if [ "$container_state" -eq 2 ]; then
+    echo "[agent] warning: retaining runtime lease because container teardown could not be confirmed" >&2
+    return 0
+  fi
+
   remove_runtime_lease "$RUNTIME_LEASE_DIR"
 }

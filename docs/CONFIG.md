@@ -338,6 +338,13 @@ container; `/run/agent-runtime-receipts` is mounted read-only and contains the
 lease manifest plus closure receipts. `AGENT_RUNTIME_LEASE_ID`,
 `AGENT_RUNTIME_RECEIPTS_DIR`, and `AGENT_NEED_HELPER_DIR` are runtime-owned and
 cannot be overridden through `AGENT_EXTRA_ENV` or host passthrough.
+For foreground Podman sessions, the lease is bound to the generated container
+identity before launch. Launcher or coordinator exit cannot release the lease
+while that container still exists; cleanup and stale pruning require Podman to
+confirm teardown. A detached host guard performs that confirmation and releases
+the lease after an orphaned foreground launcher is gone. The `rootless-linux`
+entrypoint additionally verifies the read-only mount and every rootfs closure
+path before it starts the agent.
 
 Materialization succeeds only after Nix has created a permanent root at its
 final pathname and the helper has published a receipt. Cache entries from a

@@ -2584,7 +2584,8 @@ test_rootless_linux_preflight_rejects_missing_isolated_network() (
 test_rootless_linux_session_contract() (
   set -euo pipefail
 
-  local cgroup_launch_file environment_file script_file image_file flake_file
+  local agent_file cgroup_launch_file environment_file script_file image_file flake_file
+  agent_file="$(cat "$REPO_ROOT/bin/agent")"
   cgroup_launch_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-cgroup-launch.sh")"
   environment_file="$(cat "$REPO_ROOT/bin/lib/environment.sh")"
   script_file="$(cat "$REPO_ROOT/scripts/image/rootless-linux-entrypoint.sh")"
@@ -2624,6 +2625,11 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'migrated_path="$(awk -F:'
   assert_contains "$script_file" '"$scope_path/cgroup.subtree_control"'
   assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
+  assert_contains "$script_file" 'verify_runtime_lease'
+  assert_contains "$script_file" 'the runtime receipt directory is not mounted read-only'
+  assert_contains "$script_file" 'the retained rootfs closure is incomplete:'
+  assert_contains "$agent_file" 'bind_runtime_lease_to_container "$RUNTIME" "$(current_sandbox_profile)" "$CONTAINER_NAME"'
+  assert_contains "$agent_file" 'prepare_runtime_lease_guard'
   assert_contains "$script_file" '-- /bin/agent-rootless-linux-cgroup-launch "$tool" "$@"'
   assert_contains "$cgroup_launch_file" 'payload_path="$scope_path/$payload_name"'
   assert_contains "$cgroup_launch_file" "printf '0\\n' > \"\$payload_path/cgroup.procs\""
@@ -2776,6 +2782,65 @@ EOF
 
   cleanup_runtime_lease
   [ ! -e "$lease_dir" ] || fail "expected foreground runtime lease cleanup"
+)
+
+test_foreground_runtime_lease_follows_bound_container() (
+  set -euo pipefail
+
+  local tmp_dir bin_dir lease_dir state_file guard_wait
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+  bin_dir="$tmp_dir/bin"
+  mkdir -p "$bin_dir" "$tmp_dir/project"
+
+  cat > "$bin_dir/podman" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = "container exists agent-lease-test" ] || exit 125
+[ "$(cat "$FAKE_CONTAINER_STATE_FILE")" = "1" ]
+EOF
+  chmod +x "$bin_dir/podman"
+
+  hash_short() {
+    printf '%s' "$1" | sha256sum | awk '{print substr($1,1,16)}'
+  }
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+
+  CACHE_DIR="$tmp_dir/cache"
+  PROJECT_ROOT="$tmp_dir/project"
+  AGENT_COMMAND="run"
+  AGENT_BIN_DIR="$REPO_ROOT/bin"
+  PATH="$bin_dir:/usr/bin:/bin"
+  export PATH
+  state_file="$tmp_dir/container-state"
+  printf '1\n' > "$state_file"
+  FAKE_CONTAINER_STATE_FILE="$state_file"
+  export FAKE_CONTAINER_STATE_FILE
+
+  prepare_runtime_lease
+  lease_dir="$RUNTIME_LEASE_DIR"
+  bind_runtime_lease_to_container podman rootless-linux agent-lease-test
+  prepare_runtime_lease_guard
+  [ -f "$lease_dir/container.env" ] || fail "expected runtime lease container binding"
+  [ -f "$lease_dir/guard.pid" ] || fail "expected runtime lease guard pid"
+
+  cleanup_runtime_lease
+  [ -d "$lease_dir" ] || fail "expected live container to retain foreground lease"
+
+  {
+    printf 'pid=999999999\n'
+    printf 'identity=missing\n'
+  } > "$lease_dir/owner.env"
+  prune_stale_runtime_leases
+  [ -d "$lease_dir" ] || fail "expected live container to protect lease from stale pruning"
+
+  printf '0\n' > "$state_file"
+  guard_wait=0
+  while [ -d "$lease_dir" ] && [ "$guard_wait" -lt 50 ]; do
+    sleep 0.1
+    guard_wait=$((guard_wait + 1))
+  done
+  [ ! -e "$lease_dir" ] || fail "expected confirmed container teardown to release lease"
 )
 
 test_remote_runtime_lease_persists_until_explicit_removal() (
@@ -3752,6 +3817,7 @@ main() {
   run_test "rootless linux session contract" test_rootless_linux_session_contract
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
+  run_test "foreground runtime lease follows bound container" test_foreground_runtime_lease_follows_bound_container
   run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
   run_test "need helper lifetime follows runtime lease" test_need_helper_lifetime_follows_runtime_lease
   run_test "need helper startup failure is fatal" test_need_helper_startup_failure_is_fatal

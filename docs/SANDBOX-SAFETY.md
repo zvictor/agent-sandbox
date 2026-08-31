@@ -132,8 +132,14 @@ bridge.
 
 The sandbox receives neither the root directory nor a retention operation.
 Helper or coordinator exit does not release admitted paths; foreground teardown
-does, while remote retention ends at `agent remote down`. Materialization fails
-if permanent rooting or receipt publication fails.
+does, while remote retention ends at `agent remote down`. Foreground Podman
+leases are bound to their generated container identity, and neither cleanup nor
+stale pruning releases one until Podman confirms that container is gone. An
+unavailable runtime is not accepted as teardown proof. A detached host guard
+releases an orphaned foreground lease after confirmed container teardown.
+Materialization fails if permanent rooting or receipt publication fails, and
+`rootless-linux` refuses to start unless the read-only rootfs closure receipt is
+complete and all listed store paths exist.
 
 ## What Our Sandbox Does Not Enforce
 
