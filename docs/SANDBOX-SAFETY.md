@@ -54,7 +54,9 @@ manager; it does not receive the host user bus or the host manager's private
 socket. This avoids turning `systemd-run --user` into a host namespace escape.
 Its single-ID user namespace maps the invoking host user directly and leaves
 container root unmapped, keeping cgroup ownership with that unprivileged user.
-An immutable Catatonit binary in the rootfs runs as PID 1 to reap orphans;
+The profile uses a cached, user-owned rootfs mirror with an ephemeral `:O`
+overlay so crun can create dynamic mount targets without mapped container root.
+A rootfs-supplied Catatonit binary runs as PID 1 to reap orphans;
 Podman's injected init is not used because its bind-mount target cannot be
 created when container root is deliberately unmapped.
 The agent runs with all capabilities dropped and `no-new-privileges`, while

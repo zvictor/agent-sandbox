@@ -72,6 +72,7 @@ The runtime paths are intentionally minimal.
 
 - `podman` uses the local Linux `--rootfs` fast path
   - default: `--rootfs ...:O`
+  - `rootless-linux` always uses a cached local writable rootfs mirror with an ephemeral `:O` upper layer so unmapped container root is not needed to create mount targets
   - on rootless native overlay hosts that break `:O`, the launcher uses a cached local writable rootfs mirror and still runs `podman --rootfs ...:O`
 - `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`
 
@@ -294,6 +295,7 @@ The full threat model is in [docs/SANDBOX-SAFETY.md](docs/SANDBOX-SAFETY.md).
 
 The runtime paths are intentionally narrow:
 - `podman` uses the local Linux `--rootfs` fast path.
+- The `rootless-linux` profile always uses a cached local writable rootfs mirror with an ephemeral `:O` upper layer so unmapped container root is not needed to create mount targets.
 - On rootless native overlay hosts that break `:O`, the launcher uses a cached local writable rootfs mirror and still runs Podman `--rootfs ...:O`.
 - `docker` uses one path only: build `streamImage`, then load it with `streamImage.copyToDockerDaemon`.
 
@@ -539,7 +541,7 @@ AGENT_FORCE_REBUILD=1
 - `AGENT_CPU_LIMIT`: container CPU limit; default `2`
 - `AGENT_PIDS_LIMIT`: container PID limit; default `512`
 - `AGENT_WORKSPACE_PATH`: workspace directory mounted at the same absolute path inside the sandbox; defaults to current directory
-- `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`
+- `AGENT_PODMAN_ROOTFS_MODE`: `auto`, `overlay`, or `mirror`; default `auto`; `rootless-linux` requires `auto` or `mirror` and always selects the mirror
 - `AGENT_DEV_ENV`: `host-helper` or `none`; default `host-helper`
 - `AGENT_ALLOW_SUDO`: set to `1` to enable container-local sudo; default `0`
 

@@ -350,6 +350,26 @@ runtime_mode_for() (
   printf '%s\n' "$MODE"
 )
 
+podman_rootfs_mode_for() (
+  set -euo pipefail
+
+  local profile="${1:-default}"
+  local override="${2:-auto}"
+  local podman_info="${3:-false overlay false}"
+
+  source "$REPO_ROOT/bin/lib/rootfs.sh"
+
+  podman() {
+    printf '%s\n' "$podman_info"
+  }
+
+  SANDBOX_PROFILE="$profile"
+  AGENT_SANDBOX_PROFILE="$profile"
+  AGENT_PODMAN_ROOTFS_MODE="$override"
+
+  detect_podman_rootfs_mode
+)
+
 stream_image_helper_invocation_for() (
   set -euo pipefail
 
@@ -1839,6 +1859,49 @@ test_runtime_modes_preserve_podman_rootfs() (
 
   [ "$status" -ne 0 ] || fail "expected remote podman runtime mode to fail"
   assert_contains "$output" "podman mode requires local Linux with /nix/store and no CONTAINER_HOST"
+)
+
+test_rootless_linux_requires_writable_rootfs_mirror() (
+  set -euo pipefail
+
+  local output status
+
+  output="$(podman_rootfs_mode_for rootless-linux auto)"
+  [ "$output" = "mirror" ] || fail "expected rootless-linux auto mode to select mirror, got: $output"
+
+  output="$(podman_rootfs_mode_for rootless-linux mirror)"
+  [ "$output" = "mirror" ] || fail "expected rootless-linux mirror override to remain mirror, got: $output"
+
+  set +e
+  output="$(podman_rootfs_mode_for rootless-linux overlay 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected rootless-linux overlay override to fail"
+  assert_contains "$output" "AGENT_SANDBOX_PROFILE=rootless-linux requires AGENT_PODMAN_ROOTFS_MODE=mirror"
+  assert_contains "$output" "container root unmapped"
+)
+
+test_rootless_linux_mirror_prepares_dynamic_mount_targets() (
+  set -euo pipefail
+
+  local tmp_dir source_rootfs target_rootfs
+  tmp_dir="$(mktemp -d)"
+  trap 'find "$tmp_dir" -type d -exec chmod u+rwx {} + 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
+  source_rootfs="$tmp_dir/source"
+  mkdir -p "$source_rootfs/etc"
+  chmod 0555 "$source_rootfs" "$source_rootfs/etc"
+
+  source "$REPO_ROOT/bin/lib/rootfs.sh"
+  CACHE_DIR="$tmp_dir/cache"
+  target_rootfs="$(prepare_writable_rootfs_mirror "$source_rootfs" rootless-test)"
+
+  mkdir -p \
+    "$target_rootfs/etc/codex" \
+    "$target_rootfs/home/agenttest/workspace" \
+    "$target_rootfs/run/host-services" \
+    "$target_rootfs/run/user/1000"
+  : > "$target_rootfs/run/host-services/ssh-auth.sock"
 )
 
 test_firecracker_profile_rejects_docker_runtime() (
@@ -3489,7 +3552,7 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$image_file" "var/tmp"
-  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=7"
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=8"
   assert_contains "$rootfs_file" "run/agent-path-guard"
   assert_contains "$rootfs_file" "run/agent-runtime-receipts"
   assert_contains "$rootfs_file" "var/tmp"
@@ -3562,6 +3625,8 @@ main() {
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
   run_test "runtime path includes sudo when enabled" test_runtime_path_includes_sudo_when_enabled
   run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
+  run_test "rootless linux requires writable rootfs mirror" test_rootless_linux_requires_writable_rootfs_mirror
+  run_test "rootless linux mirror prepares dynamic mount targets" test_rootless_linux_mirror_prepares_dynamic_mount_targets
   run_test "firecracker profile rejects docker runtime" test_firecracker_profile_rejects_docker_runtime
   run_test "rootless linux profile rejects docker runtime" test_rootless_linux_profile_rejects_docker_runtime
   run_test "stream image helper uses docker helper attr" test_stream_image_helper_uses_docker_helper_attr

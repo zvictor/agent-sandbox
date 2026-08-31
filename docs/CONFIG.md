@@ -74,7 +74,7 @@ the selected init fails during container creation.
 | `AGENT_CPU_LIMIT` | `2` | Container CPU limit |
 | `AGENT_PIDS_LIMIT` | `512` | Container PID limit |
 | `AGENT_WORKSPACE_PATH` | current directory | Workspace mounted at the same absolute path inside the sandbox |
-| `AGENT_PODMAN_ROOTFS_MODE` | `auto` | Podman rootfs mode: `auto`, `overlay`, or `mirror` |
+| `AGENT_PODMAN_ROOTFS_MODE` | `auto` | Podman rootfs mode: `auto`, `overlay`, or `mirror`; `rootless-linux` requires `auto` or `mirror` and always selects the mirror |
 | `AGENT_ALLOW_SUDO` | `0` | Enables container-local sudo when set to `1` |
 | `AGENT_PERF_LOG` | `1` | Enable or disable timing logs |
 | `AGENT_FORCE_REBUILD` | `0` | Rebuild cached runtime artifacts |
@@ -132,10 +132,13 @@ remote-container mode, rootful Podman, root execution, and
 `AGENT_ALLOW_SUDO=1`. It also rejects extra/automatic mounts, extra devices,
 KVM, container API exposure, and the Nix daemon socket. Podman itself runs in a
 transient delegated host user scope with `--cgroups=split`,
-`--cgroupns=private`, an immutable rootfs Catatonit PID-1 reaper, and Podman
-systemd mode disabled. Only `/sys/fs/cgroup` is unmasked inside that private
-namespace so the container-local user manager can manage its delegated
-subtree.
+`--cgroupns=private`, a rootfs-supplied Catatonit PID-1 reaper, and Podman
+systemd mode disabled. The profile always prepares a cached local rootfs mirror
+and runs it with `:O`: the user-owned baseline lets crun create generic mount
+targets while the overlay upper keeps runtime filesystem changes ephemeral.
+An explicit `AGENT_PODMAN_ROOTFS_MODE=overlay` is rejected. Only
+`/sys/fs/cgroup` is unmasked inside that private namespace so the
+container-local user manager can manage its delegated subtree.
 The user namespace maps only the invoking host user to its normal container
 UID/GID; container UID/GID 0 remain unmapped. This preserves host-user
 ownership of the delegated cgroup instead of asking the OCI runtime to assign

@@ -1,4 +1,4 @@
-ROOTFS_MIRROR_FORMAT=7
+ROOTFS_MIRROR_FORMAT=8
 ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/agent-runtime-receipts\nrun/podman\nrun/secrets\nrun/systemd\nrun/systemd/system\nrun/user\nvar\nvar/run\nvar/tmp\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp\nproc\nsys\nsys/fs\nsys/fs/cgroup\ndev\ndev/net'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
 ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gitconfig\nrun/.containerenv\nvar/run/docker.sock\nrun/podman/podman.sock\nnix/var/nix/daemon-socket/socket'
@@ -6,11 +6,7 @@ ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gi
 detect_podman_rootfs_mode() {
   local override="${AGENT_PODMAN_ROOTFS_MODE:-auto}"
   local info
-
-  if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = "firecracker-host" ]; then
-    printf 'overlay\n'
-    return
-  fi
+  local profile="${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}"
 
   case "$override" in
     auto|overlay|mirror) ;;
@@ -19,6 +15,20 @@ detect_podman_rootfs_mode() {
       exit 1
       ;;
   esac
+
+  if [ "$profile" = "firecracker-host" ]; then
+    printf 'overlay\n'
+    return
+  fi
+
+  if [ "$profile" = "rootless-linux" ]; then
+    if [ "$override" = "overlay" ]; then
+      echo "[agent] AGENT_SANDBOX_PROFILE=rootless-linux requires AGENT_PODMAN_ROOTFS_MODE=mirror; overlay cannot prepare mount targets with container root unmapped" >&2
+      exit 1
+    fi
+    printf 'mirror\n'
+    return
+  fi
 
   if [ "$override" != "auto" ]; then
     printf '%s\n' "$override"
@@ -54,8 +64,11 @@ prepare_runtime_rootfs_state() {
 
   while IFS= read -r rel_path; do
     [ -n "$rel_path" ] || continue
-    mkdir -p "$target_rootfs/$rel_path"
-    chmod u+rwx "$target_rootfs/$rel_path" >/dev/null 2>&1 || true
+    if ! mkdir -p "$target_rootfs/$rel_path" \
+      || ! chmod u+rwx "$target_rootfs/$rel_path"; then
+      echo "[agent] failed to prepare rootfs runtime directory: /$rel_path" >&2
+      return 1
+    fi
   done < <(printf '%s\n' "$ROOTFS_RUNTIME_DIRS")
 
   while IFS= read -r rel_path; do
@@ -66,13 +79,19 @@ prepare_runtime_rootfs_state() {
     chmod u+rw "$target_rootfs/$rel_path" >/dev/null 2>&1 || true
   done < <(printf '%s\n' "$ROOTFS_RUNTIME_COPY_FILES")
 
-  rm -f "$target_rootfs/etc/mtab"
-  ln -s /proc/mounts "$target_rootfs/etc/mtab"
+  if ! rm -f "$target_rootfs/etc/mtab" \
+    || ! ln -s /proc/mounts "$target_rootfs/etc/mtab"; then
+    echo "[agent] failed to prepare rootfs /etc/mtab" >&2
+    return 1
+  fi
 
   while IFS= read -r rel_path; do
     [ -n "$rel_path" ] || continue
-    : > "$target_rootfs/$rel_path"
-    chmod 0644 "$target_rootfs/$rel_path"
+    if ! : > "$target_rootfs/$rel_path" \
+      || ! chmod 0644 "$target_rootfs/$rel_path"; then
+      echo "[agent] failed to prepare rootfs runtime file: /$rel_path" >&2
+      return 1
+    fi
   done < <(printf '%s\n' "$ROOTFS_RUNTIME_EMPTY_FILES")
 }
 
@@ -85,7 +104,10 @@ prepare_writable_rootfs_mirror() {
   local ready_file=""
   local tmp_dir=""
 
-  mkdir -p "$runs_dir"
+  if ! mkdir -p "$runs_dir"; then
+    echo "[agent] failed to create rootfs mirror cache: $runs_dir" >&2
+    return 1
+  fi
   cleanup_stale_rootfs_mirror_temps "$runs_dir"
   target_dir="$runs_dir/$cache_key"
   ready_file="$runs_dir/$cache_key.ready"
@@ -96,23 +118,38 @@ prepare_writable_rootfs_mirror() {
     return
   fi
 
-  tmp_dir="$(mktemp -d "$runs_dir/${cache_key}.tmp.XXXXXX")"
-
-  if ! cp -a --reflink=auto --no-preserve=ownership "$source_rootfs/." "$tmp_dir/" 2>/dev/null; then
-    cp -a --no-preserve=ownership "$source_rootfs/." "$tmp_dir/"
+  if ! tmp_dir="$(mktemp -d "$runs_dir/${cache_key}.tmp.XXXXXX")"; then
+    echo "[agent] failed to create temporary rootfs mirror under: $runs_dir" >&2
+    return 1
   fi
 
-  prepare_runtime_rootfs_state "$source_rootfs" "$tmp_dir"
-  chmod u+rwx "$tmp_dir" >/dev/null 2>&1 || true
+  if ! cp -a --reflink=auto --no-preserve=ownership "$source_rootfs/." "$tmp_dir/" 2>/dev/null; then
+    if ! cp -a --no-preserve=ownership "$source_rootfs/." "$tmp_dir/"; then
+      echo "[agent] failed to copy rootfs mirror from: $source_rootfs" >&2
+      return 1
+    fi
+  fi
+
+  if ! chmod u+rwx "$tmp_dir" \
+    || ! prepare_runtime_rootfs_state "$source_rootfs" "$tmp_dir"; then
+    echo "[agent] failed to prepare writable rootfs mirror" >&2
+    return 1
+  fi
 
   if [ ! -d "$target_dir" ]; then
-    mv "$tmp_dir" "$target_dir"
+    if ! mv "$tmp_dir" "$target_dir"; then
+      echo "[agent] failed to publish rootfs mirror: $target_dir" >&2
+      return 1
+    fi
   else
     find "$tmp_dir" -type d -exec chmod u+rwx {} + >/dev/null 2>&1 || true
     rm -rf "$tmp_dir" >/dev/null 2>&1 || true
   fi
 
-  : > "$ready_file"
+  if ! : > "$ready_file"; then
+    echo "[agent] failed to mark rootfs mirror ready: $ready_file" >&2
+    return 1
+  fi
 
   printf '%s\n' "$target_dir"
 }
