@@ -111,18 +111,47 @@ stage_project_contract_allowlist() {
   fi
 }
 
+retain_fetchtarball_store_path() {
+  local store_path="$1"
+  local gcroot_path="$2"
+  local lock_file="$3"
+
+  case "$store_path" in
+    /nix/store/*) ;;
+    *)
+      echo "[agent] ERROR: fetchTarball lock has no retained store path; remove $lock_file and retry" >&2
+      return 1
+      ;;
+  esac
+
+  if [ ! -e "$store_path" ]; then
+    echo "[agent] ERROR: retained fetchTarball store path is unavailable; remove $lock_file and retry" >&2
+    return 1
+  fi
+
+  if ! register_host_gc_root "$store_path" "$gcroot_path"; then
+    echo "[agent] ERROR: could not retain fetchTarball store path for lock: $lock_file" >&2
+    return 1
+  fi
+}
+
 pin_shell_fetchtarball() {
   local target_dir="$1"
   local shell_file="$target_dir/shell.nix"
   local content=""
   local url=""
   local hash=""
+  local store_path=""
+  local prefetch_output=""
   local project_key=""
   local url_key=""
   local lock_file=""
+  local gcroot_path=""
   local lock_tmp=""
+  local locked_schema=""
   local locked_url=""
   local locked_hash=""
+  local locked_store_path=""
   local pinned_file="$target_dir/.agent-sandbox-pinned-nixpkgs.json"
 
   content="$(cat "$shell_file")"
@@ -140,30 +169,45 @@ pin_shell_fetchtarball() {
   project_key="$(printf '%s' "$PROJECT_ROOT" | sha256sum | awk '{print $1}')"
   url_key="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
   lock_file="$CACHE_DIR/project-contracts/$project_key/pinned-nixpkgs-$url_key.json"
+  gcroot_path="$CACHE_DIR/gcroots/project-fetchtarball-$project_key-$url_key"
 
   if [ -f "$lock_file" ]; then
+    locked_schema="$(sed -n 's/.*"schemaVersion":\([0-9][0-9]*\).*/\1/p' "$lock_file")"
     locked_url="$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$lock_file")"
     locked_hash="$(sed -n 's/.*"sha256":"\([^"]*\)".*/\1/p' "$lock_file")"
+    locked_store_path="$(sed -n 's/.*"storePath":"\([^"]*\)".*/\1/p' "$lock_file")"
     if [ "$locked_url" != "$url" ] || [ -z "$locked_hash" ]; then
       echo "[agent] ERROR: invalid fetchTarball lock; remove $lock_file and retry" >&2
       return 1
     fi
+    if [ "$locked_schema" != "1" ] || [ -z "$locked_store_path" ]; then
+      echo "[agent] ERROR: fetchTarball lock has no retained store path; remove $lock_file and retry" >&2
+      return 1
+    fi
+    retain_fetchtarball_store_path "$locked_store_path" "$gcroot_path" "$lock_file" || return 1
 
     cp "$lock_file" "$pinned_file"
-    echo "[agent] pinned fetchTarball for shell.nix (locked; remove $lock_file to refresh): $url" >&2
+    echo "[agent] pinned fetchTarball for shell.nix (retained; remove $lock_file to refresh): $url" >&2
     return 0
   fi
 
-  hash="$(nix-prefetch-url --option tarball-ttl 0 --unpack "$url" 2>/dev/null)"
-
-  if [ -z "$hash" ]; then
+  if ! prefetch_output="$(nix-prefetch-url --option tarball-ttl 0 --unpack --print-path "$url" 2>/dev/null)"; then
     echo "[agent] ERROR: could not create fetchTarball lock for $url" >&2
     return 1
   fi
+  hash="$(printf '%s\n' "$prefetch_output" | sed -n '1p')"
+  store_path="$(printf '%s\n' "$prefetch_output" | sed -n '2p')"
+
+  if [ -z "$hash" ] || [ -z "$store_path" ]; then
+    echo "[agent] ERROR: could not create fetchTarball lock for $url" >&2
+    return 1
+  fi
+  retain_fetchtarball_store_path "$store_path" "$gcroot_path" "$lock_file" || return 1
 
   mkdir -p "$(dirname "$lock_file")"
   lock_tmp="$(mktemp "${lock_file}.tmp.XXXXXX")"
-  if ! printf '{"url":"%s","sha256":"%s"}\n' "$url" "$hash" > "$lock_tmp"; then
+  if ! printf '{"schemaVersion":1,"url":"%s","sha256":"%s","storePath":"%s"}\n' \
+    "$url" "$hash" "$store_path" > "$lock_tmp"; then
     rm -f "$lock_tmp"
     echo "[agent] ERROR: could not write fetchTarball lock at $lock_file" >&2
     return 1

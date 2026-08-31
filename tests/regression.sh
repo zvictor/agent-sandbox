@@ -77,7 +77,8 @@ pin_shell_fetchtarball_for() (
   local url="$1"
   local locked_hash="$2"
   local fresh_hash="$3"
-  local tmp_dir target_dir bin_dir cache_dir project_root project_key url_key lock_file output calls
+  local lock_format="${4:-retained}"
+  local tmp_dir target_dir bin_dir cache_dir project_root project_key url_key lock_file output calls store_path root_calls status
 
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
@@ -86,6 +87,7 @@ pin_shell_fetchtarball_for() (
   bin_dir="$tmp_dir/bin"
   cache_dir="$tmp_dir/cache"
   project_root="$tmp_dir/source-project"
+  store_path="$(readlink -f /bin/bash)"
   mkdir -p "$target_dir" "$bin_dir" "$cache_dir" "$project_root"
 
   printf '{ pkgs ? import (fetchTarball "%s") {} }: pkgs.mkShell { packages = []; }\n' "$url" > "$target_dir/shell.nix"
@@ -95,7 +97,12 @@ pin_shell_fetchtarball_for() (
   lock_file="$cache_dir/project-contracts/$project_key/pinned-nixpkgs-$url_key.json"
   if [ -n "$locked_hash" ]; then
     mkdir -p "$(dirname "$lock_file")"
-    printf '{"url":"%s","sha256":"%s"}\n' "$url" "$locked_hash" > "$lock_file"
+    if [ "$lock_format" = "legacy" ]; then
+      printf '{"url":"%s","sha256":"%s"}\n' "$url" "$locked_hash" > "$lock_file"
+    else
+      printf '{"schemaVersion":1,"url":"%s","sha256":"%s","storePath":"%s"}\n' \
+        "$url" "$locked_hash" "$store_path" > "$lock_file"
+    fi
   fi
 
   cat > "$bin_dir/nix-prefetch-url" <<EOF
@@ -103,11 +110,19 @@ pin_shell_fetchtarball_for() (
 set -euo pipefail
 printf 'called %s\n' "\$*" >> "$tmp_dir/prefetch.log"
 printf '%s\n' "$fresh_hash"
+printf '%s\n' "$store_path"
 EOF
   chmod +x "$bin_dir/nix-prefetch-url"
 
+  register_host_gc_root() {
+    printf '%s -> %s\n' "$2" "$1" >> "$tmp_dir/roots.log"
+  }
+
   source "$REPO_ROOT/bin/lib/project_contract.sh"
+  set +e
   output="$(CACHE_DIR="$cache_dir" PROJECT_ROOT="$project_root" PATH="$bin_dir:/usr/bin:/bin" pin_shell_fetchtarball "$target_dir" 2>&1)"
+  status=$?
+  set -e
 
   if [ -f "$tmp_dir/prefetch.log" ]; then
     calls="$(wc -l < "$tmp_dir/prefetch.log")"
@@ -115,10 +130,22 @@ EOF
   else
     calls="0"
   fi
+  if [ -f "$tmp_dir/roots.log" ]; then
+    root_calls="$(wc -l < "$tmp_dir/roots.log")"
+  else
+    root_calls="0"
+  fi
 
   printf 'output=%s\n' "$output"
-  printf 'pinned=%s\n' "$(cat "$target_dir/.agent-sandbox-pinned-nixpkgs.json")"
+  if [ -f "$target_dir/.agent-sandbox-pinned-nixpkgs.json" ]; then
+    printf 'pinned=%s\n' "$(cat "$target_dir/.agent-sandbox-pinned-nixpkgs.json")"
+  else
+    printf 'pinned=missing\n'
+  fi
+  printf 'status=%s\n' "$status"
   printf 'calls=%s\n' "$calls"
+  printf 'root_calls=%s\n' "$root_calls"
+  printf 'store_path=%s\n' "$store_path"
   printf 'lock_path=%s\n' "$lock_file"
   if [ -f "$lock_file" ]; then
     printf 'lock=%s\n' "$(cat "$lock_file")"
@@ -1074,10 +1101,12 @@ test_stable_fetchtarball_uses_lock() (
   local output
   output="$(pin_shell_fetchtarball_for "https://example.com/nixpkgs-abc123.tar.gz" "cachedhash" "freshhash")"
 
-  assert_contains "$output" "pinned={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
-  assert_contains "$output" "lock={\"url\":\"https://example.com/nixpkgs-abc123.tar.gz\",\"sha256\":\"cachedhash\"}"
+  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://example.com/nixpkgs-abc123.tar.gz","sha256":"cachedhash","storePath":"/nix/store/'
+  assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://example.com/nixpkgs-abc123.tar.gz","sha256":"cachedhash","storePath":"/nix/store/'
+  assert_contains "$output" "status=0"
   assert_contains "$output" "calls=0"
-  assert_contains "$output" "(locked; remove "
+  assert_contains "$output" "root_calls=1"
+  assert_contains "$output" "(retained; remove "
   assert_contains "$output" " to refresh)"
 )
 
@@ -1087,10 +1116,12 @@ test_mutable_channel_fetchtarball_uses_lock() (
   local output
   output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "stalehash" "freshhash")"
 
-  assert_contains "$output" "pinned={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
-  assert_contains "$output" "lock={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"stalehash\"}"
+  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"stalehash","storePath":"/nix/store/'
+  assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"stalehash","storePath":"/nix/store/'
+  assert_contains "$output" "status=0"
   assert_contains "$output" "calls=0"
-  assert_contains "$output" "(locked; remove "
+  assert_contains "$output" "root_calls=1"
+  assert_contains "$output" "(retained; remove "
   assert_not_contains "$output" "freshhash"
 )
 
@@ -1100,11 +1131,28 @@ test_missing_fetchtarball_lock_is_created() (
   local output
   output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "" "freshhash")"
 
-  assert_contains "$output" "pinned={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"freshhash\"}"
-  assert_contains "$output" "lock={\"url\":\"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz\",\"sha256\":\"freshhash\"}"
+  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"freshhash","storePath":"/nix/store/'
+  assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"freshhash","storePath":"/nix/store/'
+  assert_contains "$output" "status=0"
   assert_contains "$output" "calls=1"
-  assert_contains "$output" "prefetch=called --option tarball-ttl 0 --unpack https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz"
+  assert_contains "$output" "root_calls=1"
+  assert_contains "$output" "prefetch=called --option tarball-ttl 0 --unpack --print-path https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz"
   assert_contains "$output" "(created lock "
+)
+
+test_legacy_fetchtarball_lock_is_rejected() (
+  set -euo pipefail
+
+  local output
+  output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "stalehash" "freshhash" legacy)"
+
+  assert_contains "$output" "status=1"
+  assert_contains "$output" "fetchTarball lock has no retained store path; remove "
+  assert_contains "$output" " and retry"
+  assert_contains "$output" "pinned=missing"
+  assert_contains "$output" "calls=0"
+  assert_contains "$output" "root_calls=0"
+  assert_not_contains "$output" "freshhash"
 )
 
 test_shell_nix_nix_path_default_receives_explicit_pkgs() (
@@ -3605,6 +3653,7 @@ main() {
   run_test "stable fetchTarball uses lock" test_stable_fetchtarball_uses_lock
   run_test "mutable channel fetchTarball uses lock" test_mutable_channel_fetchtarball_uses_lock
   run_test "missing fetchTarball lock is created" test_missing_fetchtarball_lock_is_created
+  run_test "legacy fetchTarball lock is rejected" test_legacy_fetchtarball_lock_is_rejected
   run_test "shell.nix NIX_PATH default receives explicit pkgs" test_shell_nix_nix_path_default_receives_explicit_pkgs
   run_test "symlinked shell stages resolved nix contract" test_symlinked_shell_stages_resolved_nix_contract
   run_test "image uses standard git" test_image_uses_standard_git

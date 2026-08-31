@@ -203,7 +203,7 @@ When the launcher stages project package inputs for Nix evaluation, it copies on
 
 Changes outside that set do not invalidate the sandbox package input.
 
-When `shell.nix` uses the string form `fetchTarball "..."` and no `flake.lock` is present, the launcher resolves it once and stores a project-scoped pin under `AGENT_CACHE_DIR/project-contracts`. Later starts reuse that pin without checking the URL, including mutable Nix channel URLs. The startup log prints the exact pin path; remove that file when you want to update the tarball.
+When `shell.nix` uses the string form `fetchTarball "..."` and no `flake.lock` is present, the launcher resolves it once and stores a project-scoped pin under `AGENT_CACHE_DIR/project-contracts`. The unpacked store path is retained under a host GC root, so later starts reuse that pin without checking the URL, including mutable Nix channel URLs. The startup log prints the exact pin path; remove that file when you want to update the tarball.
 
 If your Nix contract depends on files outside the selected `nix/` directory, list them explicitly in `nix/agent-sandbox.paths`:
 

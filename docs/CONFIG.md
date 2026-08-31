@@ -56,7 +56,7 @@ Existing environment variables always win over file values.
 | `AGENT_HOST_HOME` | host home fallback | Used for discovering config roots, `.gitconfig`, and auth bases |
 | `AGENT_PROJECT_CONTRACT_FILES` | unset | Extra project-relative files or directories staged for package evaluation |
 
-For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell.nix` is pinned once under `AGENT_CACHE_DIR/project-contracts`. The pin is reused without a network check on later launches. Remove the exact pin file reported in the startup log to resolve the URL again.
+For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell.nix` is pinned once under `AGENT_CACHE_DIR/project-contracts`. Its unpacked Nix store path is held by a project-scoped host GC root, and the pin is reused without a network check on later launches. Remove the exact pin file reported in the startup log to resolve the URL again. Locks created by older launchers without a retained store path must be removed once before reuse.
 
 ## Runtime Behavior
 

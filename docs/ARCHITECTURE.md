@@ -97,7 +97,7 @@ Staged inputs include:
 - extra allowlisted paths from `nix/agent-sandbox.paths`
 - extra allowlisted paths from `AGENT_PROJECT_CONTRACT_FILES`
 
-For `shell.nix` without `flake.lock`, string-form `fetchTarball` inputs are resolved into project-scoped pins under `AGENT_CACHE_DIR/project-contracts`. Those pins are stable inputs until explicitly removed, so mutable channel URLs do not trigger network checks or package-graph churn during normal startup.
+For `shell.nix` without `flake.lock`, string-form `fetchTarball` inputs are resolved into project-scoped pins under `AGENT_CACHE_DIR/project-contracts`. The launcher retains each unpacked store path under a project-scoped host GC root before publishing the lock. Those pins are stable inputs until explicitly removed, so mutable channel URLs do not trigger network checks or package-graph churn during normal startup.
 
 When evaluating `shell.nix`, the detector always injects the resolved `pkgs` package set. This keeps defaults such as `import <nixpkgs> {}` out of pure flake evaluation while preserving them for direct project tooling.
 
