@@ -4,13 +4,28 @@ set -euo pipefail
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 HOST_BASH_PATH="$(command -v bash)"
 HOST_BASH_DIR="$(dirname "$HOST_BASH_PATH")"
-HOST_BASH_STORE_PATH="$(readlink -f "$HOST_BASH_PATH")"
 TEST_HOST_PATH="$HOST_BASH_DIR:/usr/bin:/bin"
 
 fail() {
   echo "[fail] $*" >&2
   exit 1
 }
+
+resolve_test_store_path() {
+  local nix_path resolved_path store_item
+
+  nix_path="$(command -v nix)" || fail "nix is required by the regression suite"
+  resolved_path="$(readlink -f "$nix_path")"
+  case "$resolved_path" in
+    /nix/store/*/*) ;;
+    *) fail "nix did not resolve into /nix/store: $resolved_path" ;;
+  esac
+
+  store_item="${resolved_path#/nix/store/}"
+  printf '/nix/store/%s\n' "${store_item%%/*}"
+}
+
+TEST_RETAINED_STORE_PATH="$(resolve_test_store_path)"
 
 assert_contains() {
   local haystack="$1"
@@ -19,6 +34,19 @@ assert_contains() {
   case "$haystack" in
     *"$needle"*) ;;
     *)
+      fail "expected output to contain: $needle"
+      ;;
+  esac
+}
+
+assert_contains_with_output() {
+  local haystack="$1"
+  local needle="$2"
+
+  case "$haystack" in
+    *"$needle"*) ;;
+    *)
+      printf '[fail] actual output:\n%s\n' "$haystack" >&2
       fail "expected output to contain: $needle"
       ;;
   esac
@@ -91,7 +119,7 @@ pin_shell_fetchtarball_for() (
   bin_dir="$tmp_dir/bin"
   cache_dir="$tmp_dir/cache"
   project_root="$tmp_dir/source-project"
-  store_path="$HOST_BASH_STORE_PATH"
+  store_path="$TEST_RETAINED_STORE_PATH"
   mkdir -p "$target_dir" "$bin_dir" "$cache_dir" "$project_root"
 
   printf '{ pkgs ? import (fetchTarball "%s") {} }: pkgs.mkShell { packages = []; }\n' "$url" > "$target_dir/shell.nix"
@@ -1107,7 +1135,7 @@ test_stable_fetchtarball_uses_lock() (
   local output
   output="$(pin_shell_fetchtarball_for "https://example.com/nixpkgs-abc123.tar.gz" "cachedhash" "freshhash")"
 
-  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://example.com/nixpkgs-abc123.tar.gz","sha256":"cachedhash","storePath":"/nix/store/'
+  assert_contains_with_output "$output" 'pinned={"schemaVersion":1,"url":"https://example.com/nixpkgs-abc123.tar.gz","sha256":"cachedhash","storePath":"/nix/store/'
   assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://example.com/nixpkgs-abc123.tar.gz","sha256":"cachedhash","storePath":"/nix/store/'
   assert_contains "$output" "status=0"
   assert_contains "$output" "calls=0"
@@ -1122,7 +1150,7 @@ test_mutable_channel_fetchtarball_uses_lock() (
   local output
   output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "stalehash" "freshhash")"
 
-  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"stalehash","storePath":"/nix/store/'
+  assert_contains_with_output "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"stalehash","storePath":"/nix/store/'
   assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"stalehash","storePath":"/nix/store/'
   assert_contains "$output" "status=0"
   assert_contains "$output" "calls=0"
@@ -1137,7 +1165,7 @@ test_missing_fetchtarball_lock_is_created() (
   local output
   output="$(pin_shell_fetchtarball_for "https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz" "" "freshhash")"
 
-  assert_contains "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"freshhash","storePath":"/nix/store/'
+  assert_contains_with_output "$output" 'pinned={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"freshhash","storePath":"/nix/store/'
   assert_contains "$output" 'lock={"schemaVersion":1,"url":"https://nixos.org/channels/nixpkgs-unstable/nixexprs.tar.xz","sha256":"freshhash","storePath":"/nix/store/'
   assert_contains "$output" "status=0"
   assert_contains "$output" "calls=1"
@@ -2662,7 +2690,7 @@ test_host_gc_root_registration_uses_final_path() (
   trap 'rm -rf "$tmp_dir"' EXIT
   bin_dir="$tmp_dir/bin"
   root_path="$tmp_dir/roots/runtime"
-  store_path="$HOST_BASH_STORE_PATH"
+  store_path="$TEST_RETAINED_STORE_PATH"
   mkdir -p "$bin_dir"
 
   cat > "$bin_dir/nix-store" <<'EOF'
@@ -2708,7 +2736,7 @@ test_runtime_lease_retains_artifact_and_mounts_receipts() (
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
   bin_dir="$tmp_dir/bin"
-  store_path="$HOST_BASH_STORE_PATH"
+  store_path="$TEST_RETAINED_STORE_PATH"
   mkdir -p "$bin_dir" "$tmp_dir/project"
 
   cat > "$bin_dir/nix-store" <<'EOF'
@@ -2983,7 +3011,7 @@ test_need_helper_materialization_creates_leased_receipt() (
   receipts_dir="$tmp_dir/receipts"
   root_base="$roots_dir/need-test"
   receipt_file="$receipts_dir/need-test.json"
-  store_path="$HOST_BASH_STORE_PATH"
+  store_path="$TEST_RETAINED_STORE_PATH"
   mkdir -p "$bin_dir" "$roots_dir" "$receipts_dir" "$tmp_dir/home"
 
   cat > "$bin_dir/nix" <<'EOF'
