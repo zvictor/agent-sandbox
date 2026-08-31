@@ -388,6 +388,7 @@ rmdir "$probe_path" \
   || fail "could not remove the empty controlled child cgroup"'
 
   if ! delegation_output="$(systemd-run --user --scope --quiet --collect \
+    --expand-environment=no \
     --property='Delegate=cpu memory pids' -- \
     sh -c "$delegated_probe" 2>&1)"; then
     if [ -n "$delegation_output" ]; then

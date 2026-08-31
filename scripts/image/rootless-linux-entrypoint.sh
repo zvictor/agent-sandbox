@@ -147,11 +147,10 @@ printf 'max\n' > "$probe_path/pids.max"
 rmdir "$probe_path"
 bwrap --unshare-user --ro-bind / / -- /bin/true'
 
-if ! systemd-run --user --wait --collect --quiet \
-  --service-type=exec \
+if ! systemd-run --user --scope --collect --quiet \
+  --expand-environment=no \
   --property='Delegate=cpu memory pids' \
-  --pipe -- \
-  /bin/bash -c "$capability_probe"; then
+  -- /bin/bash -c "$capability_probe"; then
   fail "the private user manager, delegated cgroup, or nested user namespace probe failed"
 fi
 
@@ -161,18 +160,12 @@ case "${AGENT_ROOTLESS_LINUX_PROBE_ONLY:-0}" in
   *) fail "AGENT_ROOTLESS_LINUX_PROBE_ONLY must be 0 or 1" ;;
 esac
 
-stdio_flag=--pipe
-if [ -t 0 ] && [ -t 1 ]; then
-  stdio_flag=--pty
-fi
-
 set +e
-systemd-run --user --wait --collect --quiet \
-  --service-type=exec \
+systemd-run --user --scope --collect --quiet \
+  --expand-environment=no \
   --property='Delegate=cpu memory pids' \
   --working-directory="$PWD" \
-  "$stdio_flag" -- \
-  "$tool" "$@"
+  -- "$tool" "$@"
 status=$?
 set -e
 

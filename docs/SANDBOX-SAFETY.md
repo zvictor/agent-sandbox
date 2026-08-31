@@ -50,7 +50,8 @@ lifecycle when split-phase inspection is required.
 profile for rootless cgroup/Bubblewrap proofs. Rootless Podman is launched in a
 host user-manager scope that delegates only cgroup control. The container gets
 a private cgroup namespace and a private container-local `systemd --user`
-manager; it does not receive the host user bus or the host manager's private
+manager; its transient scope is registered through the manager's private
+socket, and it does not receive the host user bus or the host manager's private
 socket. This avoids turning `systemd-run --user` into a host namespace escape.
 Its single-ID user namespace maps the invoking host user directly and leaves
 container root unmapped, keeping cgroup ownership with that unprivileged user.

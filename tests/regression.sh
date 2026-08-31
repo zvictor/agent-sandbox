@@ -2597,6 +2597,8 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'exec /lib/systemd/systemd --user --unit=basic.target'
   assert_contains "$script_file" 'SYSTEMD_UNIT_PATH=/example/systemd/user'
   assert_contains "$script_file" 'SYSTEMD_ENVIRONMENT_GENERATOR_PATH='
+  assert_contains "$script_file" 'systemd-run --user --scope --collect --quiet'
+  assert_contains "$script_file" '--expand-environment=no'
   assert_contains "$script_file" "--property='Delegate=cpu memory pids'"
   assert_contains "$script_file" 'bwrap_version="$(bwrap --version'
   assert_contains "$script_file" 'bwrap --unshare-user --ro-bind / / -- /bin/true'
@@ -2607,6 +2609,8 @@ test_rootless_linux_session_contract() (
   assert_contains "$environment_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
   assert_contains "$environment_file" 'migrated_path="$(awk -F:'
   assert_contains "$environment_file" '"$scope_path/cgroup.subtree_control"'
+  assert_contains "$environment_file" 'systemd-run --user --scope --quiet --collect'
+  assert_contains "$environment_file" '--expand-environment=no'
   assert_contains "$script_file" 'payload_path="$scope_path/capability-payload.$$"'
   assert_contains "$script_file" "printf '\\''0\\n'\\'' > \"\$payload_path/cgroup.procs\""
   assert_contains "$script_file" 'migrated_path="$(awk -F:'
@@ -2614,6 +2618,10 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'AGENT_ROOTLESS_LINUX_PROBE_ONLY'
   assert_not_contains "$script_file" "sudo"
   assert_not_contains "$script_file" "DBUS_SESSION_BUS_ADDRESS"
+  assert_not_contains "$script_file" "--wait"
+  assert_not_contains "$script_file" "--pipe"
+  assert_not_contains "$script_file" "--pty"
+  assert_not_contains "$script_file" "--service-type"
   assert_contains "$image_file" 'pkgs.systemdMinimal'
   assert_contains "$image_file" 'pkgs.catatonit'
   assert_contains "$image_file" 'rootlessLinuxSession'
