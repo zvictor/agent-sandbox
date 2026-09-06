@@ -222,13 +222,22 @@ it changes host auth/config and cache ownership semantics.
 ## Tool Config Roots And Auth
 
 Tool config mounts:
-- `codex`: every selected home mounts at `/cache/.codex`; project mode backs it with `$AGENT_PROJECT_ROOT/.codex` and seeds settings under `.agent-sandbox/codex/managed_config.toml`, mounted at `/etc/codex`
+- `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and seeds managed settings under `.agent-sandbox/codex/managed_config.toml`, mounted at `/etc/codex`
 - `opencode`: host config root to container `~/.config/opencode`
 - `claude`: host config root to container `~/.claude`
 - `omp`: host `~/.omp` to container `~/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together
 
-Project-mode `.codex` and `.agent-sandbox/codex` paths must be real directories, not symlinks, so the launcher can bind the selected Codex home to its stable runtime path unambiguously.
+The project `.codex` may be a symlink to an existing directory, including a shared parent directory such as `main/.codex -> ../.codex`. The launcher exposes the resolved config directory and any required symlink lookup path inside the container; it does not mount the entire parent directory. The host symlink stays intact. Sessions remain accessible at `$AGENT_PROJECT_ROOT/.codex/sessions`, and writes follow the link into the shared directory. `CODEX_SQLITE_HOME` continues to use the project `.codex` path.
+
+Broken or looping links, non-directory targets, and user/project config layers that refer to the same directory are rejected before config preparation. The `sessions` entries within the user and project `.codex` directories and `.agent-sandbox/codex` must still be real directories.
+
+Codex hooks follow the standard configuration layers:
+
+- user hook: host `~/.codex/hooks.json`, mounted at `/cache/.codex/hooks.json`
+- project hook: `$AGENT_PROJECT_ROOT/.codex/hooks.json`, available after the project is trusted
+
+Both matching hook layers run once in project mode.
 
 Config selectors:
 

@@ -3338,7 +3338,7 @@ codex_project_mount_args_for() (
 
   local workspace_path="$1"
   local cache_dir="$2"
-  local host_home="${3:-$workspace_path}"
+  local host_home="${3:-$cache_dir/host-home}"
 
   split_csv_or_lines() {
     local value="$1"
@@ -3362,7 +3362,10 @@ codex_project_mount_args_for() (
   Z_SUFFIX=""
   ARGS=()
 
+  mkdir -p "$host_home"
+
   resolve_tool_config_roots
+  append_workspace_mount_args
   printf 'config_root=%s
 ' "$CODEX_HOST_CONFIG"
   mount_standard_engine codex
@@ -3398,40 +3401,54 @@ test_codex_config_mount_omits_workspace_alias() (
 test_codex_project_config_mount_uses_stable_runtime_home() (
   set -euo pipefail
 
-  local tmp_dir workspace cache_dir output config_root
+  local tmp_dir workspace host_home cache_dir output config_root
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
   workspace="$tmp_dir/workspace"
+  host_home="$tmp_dir/host"
   cache_dir="$tmp_dir/cache"
-  mkdir -p "$workspace" "$cache_dir"
+  mkdir -p "$workspace/.codex" "$host_home/.codex" "$cache_dir"
+  printf '{"hooks":{"user":[]}}\n' > "$host_home/.codex/hooks.json"
+  printf '{"hooks":{"project":[]}}\n' > "$workspace/.codex/hooks.json"
 
-  output="$(codex_project_mount_args_for "$workspace" "$cache_dir")"
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$host_home")"
   config_root="$(printf '%s
 ' "$output" | awk -F= '/^config_root=/{print $2; exit}')"
 
-  assert_contains "$output" "config_root=$workspace/.codex"
+  assert_contains "$output" "config_root=$host_home/.codex"
   assert_contains "$output" "CODEX_HOME=/cache/.codex"
+  assert_contains "$output" "CODEX_SQLITE_HOME=$workspace/.codex"
   assert_contains "$output" "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$workspace/.codex"
-  assert_contains "$output" "$workspace/.codex:/cache/.codex:rw"
+  assert_contains "$output" "$host_home/.codex:/cache/.codex:rw"
+  assert_contains "$output" "$workspace/.codex/sessions:/cache/.codex/sessions:rw"
+  assert_not_contains "$output" "$workspace/.codex:/cache/.codex"
+  assert_not_contains "$output" ":$workspace/.codex:"
   assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
-  [ -d "$config_root/sessions" ] || mkdir -p "$config_root/sessions"
-  [ -d "$config_root" ] || fail "expected project-local Codex home to be created"
-  [ -f "$config_root/config.toml" ] || fail "expected writable Codex runtime config mountpoint"
+  [ -d "$config_root" ] || fail "expected user Codex home to be available"
+  [ -f "$config_root/config.toml" ] || fail "expected writable user Codex config"
   [ -f "$workspace/.agent-sandbox/codex/managed_config.toml" ] || fail "expected project managed config to be created"
+  [ -f "$host_home/.codex/hooks.json" ] || fail "expected user Codex hooks to remain in the user home"
+  [ -f "$workspace/.codex/hooks.json" ] || fail "expected project Codex hooks to remain in the project layer"
+  [ -d "$workspace/.codex/sessions" ] || fail "expected project Codex sessions to remain under .codex"
 )
 
 test_codex_rollout_path_migration_rewrites_state_db() (
   set -euo pipefail
 
-  local tmp_dir source_home codex_home state_db output rows
+  local tmp_dir source_home codex_home sqlite_home state_db output rows
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
   source_home="$tmp_dir/source %_ home"
   codex_home="$tmp_dir/canonical home"
-  state_db="$codex_home/state_5.sqlite"
-  mkdir -p "$source_home" "$codex_home"
+  sqlite_home="$tmp_dir/sqlite home"
+  state_db="$sqlite_home/state_5.sqlite"
+  if [ "${1:-}" = "symlink" ]; then
+    mkdir -p "$tmp_dir/shared sqlite home"
+    ln -s "shared sqlite home" "$sqlite_home"
+  fi
+  mkdir -p "$source_home" "$codex_home" "$sqlite_home"
 
   CODEX_TEST_DB="$state_db" \
     CODEX_TEST_SOURCE_HOME="$source_home" \
@@ -3449,6 +3466,7 @@ test_codex_rollout_path_migration_rewrites_state_db() (
   output="$(
     AGENT_CODEX_ROLLOUT_SOURCE_HOME="$source_home" \
       CODEX_HOME="$codex_home" \
+      CODEX_SQLITE_HOME="$sqlite_home" \
       bun "$REPO_ROOT/scripts/image/codex-state-migrate.ts" 2>&1
   )"
   assert_contains "$output" "migrated 2 Codex rollout paths from $source_home to $codex_home"
@@ -3469,6 +3487,7 @@ test_codex_rollout_path_migration_rewrites_state_db() (
   output="$(
     AGENT_CODEX_ROLLOUT_SOURCE_HOME="$source_home" \
       CODEX_HOME="$codex_home" \
+      CODEX_SQLITE_HOME="$sqlite_home" \
       bun "$REPO_ROOT/scripts/image/codex-state-migrate.ts" 2>&1
   )"
   [ -z "$output" ] || fail "expected an idempotent Codex rollout path migration"
@@ -3489,13 +3508,13 @@ test_codex_project_managed_config_is_seeded_from_host() (
 
   output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$host_home")"
   managed_config="$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")"
-  runtime_config="$(cat "$workspace/.codex/config.toml")"
+  runtime_config="$(cat "$host_home/.codex/config.toml")"
 
   assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
   assert_contains "$managed_config" 'mcp_oauth_credentials_store = "file"'
   assert_contains "$managed_config" 'model = "host-model"'
-  assert_contains "$runtime_config" 'mcp_oauth_credentials_store = "file"'
-  assert_not_contains "$runtime_config" 'model = "host-model"'
+  assert_contains "$runtime_config" 'model = "host-model"'
+  [ ! -e "$workspace/.codex/config.toml" ] || fail "expected project config to remain absent when only a user config exists"
 )
 
 test_codex_project_state_migrates_cache_sessions_without_clobbering() (
@@ -3535,7 +3554,167 @@ test_codex_project_state_migrates_cache_sessions_without_clobbering() (
   assert_not_contains "$output" "migrated "
 )
 
-test_codex_project_home_rejects_symlink() (
+test_codex_project_home_accepts_symlinks() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir shared_home link_target output link_kind session_rows
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  source "$REPO_ROOT/bin/lib/sessions.sh"
+  SESSIONS_CONFIG_MODE=project
+  for link_kind in relative absolute chained internal parent-alias; do
+    workspace="$tmp_dir/$link_kind/main"
+    cache_dir="$tmp_dir/$link_kind/cache"
+    shared_home="$tmp_dir/$link_kind/.codex"
+    mkdir -p "$workspace" "$cache_dir" "$shared_home/sessions"
+    git -C "$workspace" init -q
+    printf 'model = "project-model"\n' > "$shared_home/config.toml"
+    printf '{"hooks":{"project":[]}}\n' > "$shared_home/hooks.json"
+    jq -n --arg cwd "$workspace" '{type:"session_meta",payload:{id:"shared-session",cwd:$cwd,timestamp:"2026-09-06T00:00:00Z"}}' > "$shared_home/sessions/existing.jsonl"
+    case "$link_kind" in
+      relative) link_target=../.codex ;;
+      absolute) link_target="$shared_home" ;;
+      chained)
+        ln -s .codex "$tmp_dir/$link_kind/shared-alias"
+        link_target=../shared-alias
+        ;;
+      internal)
+        ln -s ../.codex "$workspace/shared-alias"
+        link_target=shared-alias
+        ;;
+      parent-alias)
+        ln -s .. "$workspace/parent-alias"
+        link_target=parent-alias/.codex
+        ;;
+    esac
+    ln -s "$link_target" "$workspace/.codex"
+
+    output="$(codex_project_mount_args_for "$workspace" "$cache_dir")"
+
+    assert_contains "$output" "$shared_home:$shared_home:rw"
+    assert_not_contains "$output" "$tmp_dir/$link_kind:$tmp_dir/$link_kind:rw"
+    assert_not_contains "$output" ":$workspace/.codex:"
+    assert_not_contains "$output" "$shared_home:/cache/.codex:"
+    assert_contains "$output" "$workspace/.codex/sessions:/cache/.codex/sessions:rw"
+    assert_contains "$output" "CODEX_SQLITE_HOME=$workspace/.codex"
+    assert_contains "$output" 'config_root='
+    assert_contains "$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")" 'model = "project-model"'
+    [ "$(readlink "$workspace/.codex")" = "$link_target" ] || fail "expected project symlink to remain intact"
+    session_rows="$(collect_codex_sessions "$workspace/.codex/sessions")"
+    assert_contains "$session_rows" 'shared-session'
+    assert_contains "$session_rows" "$workspace/.codex/sessions/existing.jsonl"
+    [ -f "$workspace/.codex/hooks.json" ] || fail "expected project hooks through symlink"
+    if [ "$link_kind" = "chained" ]; then
+      assert_contains "$output" "$shared_home:$tmp_dir/$link_kind/shared-alias:rw"
+    fi
+    if [ "${AGENT_RUN_CODEX_SYMLINK_TESTS:-0}" = "1" ]; then
+      verify_codex_project_mounts "$tmp_dir" "$workspace" "$output"
+      [ -f "$shared_home/sessions/container-probe" ] || fail "expected sandbox transcript in shared sessions"
+      [ -f "$shared_home/sqlite-home-probe" ] || fail "expected writable sandbox SQLite home"
+    fi
+  done
+)
+
+verify_codex_project_mounts() (
+  set -euo pipefail
+
+  local fixture_root="$1" workspace="$2" mount_args="$3"
+  local arg spec source_path target_path value
+  local -a sandbox_args=(--ro-bind / / --tmpfs "$fixture_root")
+
+  command -v bwrap >/dev/null || fail "AGENT_RUN_CODEX_SYMLINK_TESTS=1 requires working rootless Bubblewrap"
+  while IFS= read -r arg; do
+    case "$arg" in
+      -v)
+        IFS= read -r spec
+        source_path="${spec%%:*}"
+        value="${spec#*:}"
+        target_path="${value%:*}"
+        case "${spec##*:}" in
+          ro*) sandbox_args+=(--ro-bind "$source_path" "$target_path") ;;
+          *) sandbox_args+=(--bind "$source_path" "$target_path") ;;
+        esac
+        ;;
+      -e)
+        IFS= read -r spec
+        sandbox_args+=(--setenv "${spec%%=*}" "${spec#*=}")
+        ;;
+    esac
+  done <<< "$mount_args"
+
+  # The fixture's parent is hidden, so the workspace symlink can only resolve
+  # through the bind mounts actually generated by the launcher.
+  bwrap "${sandbox_args[@]}" --chdir "$workspace" -- /bin/bash -eu -c '
+    test -L .codex
+    test -f .codex/hooks.json
+    test -f .codex/config.toml
+    test -f "$CODEX_HOME/sessions/existing.jsonl"
+    test "$CODEX_HOME/sessions" -ef "$PWD/.codex/sessions"
+    test "$CODEX_SQLITE_HOME" -ef "$PWD/.codex"
+    touch "$CODEX_HOME/sessions/container-probe"
+    touch "$CODEX_SQLITE_HOME/sqlite-home-probe"
+  '
+)
+
+test_codex_project_home_rejects_invalid_targets() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir output status target_kind
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  for target_kind in dangling loop file file-link; do
+    workspace="$tmp_dir/$target_kind/main"
+    cache_dir="$tmp_dir/$target_kind/cache"
+    mkdir -p "$workspace" "$cache_dir"
+    case "$target_kind" in
+      dangling) ln -s ../missing "$workspace/.codex" ;;
+      loop) ln -s .codex "$workspace/.codex" ;;
+      file) : > "$workspace/.codex" ;;
+      file-link)
+        : > "$tmp_dir/$target_kind/target-file"
+        ln -s ../target-file "$workspace/.codex"
+        ;;
+    esac
+
+    set +e
+    output="$(codex_project_mount_args_for "$workspace" "$cache_dir" 2>&1)"
+    status=$?
+    set -e
+
+    [ "$status" -ne 0 ] || fail "expected invalid project Codex target ($target_kind) to fail"
+    assert_contains "$output" "project Codex config path must resolve to an existing directory: $workspace/.codex"
+    [ ! -e "$workspace/.agent-sandbox/codex" ] || fail "expected rejection before config preparation"
+    [ ! -e "$tmp_dir/$target_kind/missing" ] || fail "expected dangling target not to be created"
+  done
+)
+
+test_codex_project_home_rejects_user_symlink_alias() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir host_home output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/main"
+  cache_dir="$tmp_dir/cache"
+  host_home="$tmp_dir/host"
+  mkdir -p "$workspace" "$cache_dir" "$host_home/.codex"
+  ln -s "$host_home/.codex" "$workspace/.codex"
+
+  set +e
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$host_home" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected user/project symlink alias to fail"
+  assert_contains "$output" "user and project Codex config layers resolve to the same directory: $host_home/.codex"
+  [ ! -e "$host_home/.codex/config.toml" ] || fail "expected user config not to be initialized"
+  [ ! -e "$workspace/.agent-sandbox/codex" ] || fail "expected rejection before config preparation"
+)
+
+test_codex_project_sessions_rejects_symlink() (
   set -euo pipefail
 
   local tmp_dir workspace cache_dir output status
@@ -3544,16 +3723,36 @@ test_codex_project_home_rejects_symlink() (
 
   workspace="$tmp_dir/workspace"
   cache_dir="$tmp_dir/cache"
-  mkdir -p "$workspace" "$cache_dir" "$tmp_dir/shared-codex"
-  ln -s "$tmp_dir/shared-codex" "$workspace/.codex"
+  mkdir -p "$workspace/.codex" "$cache_dir" "$tmp_dir/shared-sessions"
+  ln -s "$tmp_dir/shared-sessions" "$workspace/.codex/sessions"
 
   set +e
   output="$(codex_project_mount_args_for "$workspace" "$cache_dir" 2>&1)"
   status=$?
   set -e
 
-  [ "$status" -ne 0 ] || fail "expected symlinked project Codex home to fail"
-  assert_contains "$output" "project Codex home must be a real directory, not a symlink: $workspace/.codex"
+  [ "$status" -ne 0 ] || fail "expected symlinked project Codex sessions to fail"
+  assert_contains "$output" "project Codex sessions path must be a real directory: $workspace/.codex/sessions"
+)
+
+test_codex_project_user_home_rejects_layer_alias() (
+  set -euo pipefail
+
+  local tmp_dir workspace cache_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  cache_dir="$tmp_dir/cache"
+  mkdir -p "$workspace/.codex" "$cache_dir"
+
+  set +e
+  output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$workspace" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected aliased user and project Codex layers to fail"
+  assert_contains "$output" "user and project Codex config layers resolve to the same directory: $workspace/.codex"
 )
 
 test_codex_config_mount_handles_explicit_workspace_config_root() (
@@ -3868,12 +4067,17 @@ main() {
   run_test "codex project config mount uses stable runtime home" test_codex_project_config_mount_uses_stable_runtime_home
   if command -v bun >/dev/null 2>&1; then
     run_test "codex rollout path migration rewrites state db" test_codex_rollout_path_migration_rewrites_state_db
+    run_test "codex rollout path migration follows symlinked SQLite home" test_codex_rollout_path_migration_rewrites_state_db symlink
   else
     echo "[skip] codex rollout path migration rewrites state db (Bun is provided by the runtime image)"
   fi
   run_test "codex project managed config is seeded from host" test_codex_project_managed_config_is_seeded_from_host
   run_test "codex project state migrates cache sessions without clobbering" test_codex_project_state_migrates_cache_sessions_without_clobbering
-  run_test "codex project home rejects symlink" test_codex_project_home_rejects_symlink
+  run_test "codex project home accepts symlinks" test_codex_project_home_accepts_symlinks
+  run_test "codex project home rejects invalid targets" test_codex_project_home_rejects_invalid_targets
+  run_test "codex project home rejects user symlink alias" test_codex_project_home_rejects_user_symlink_alias
+  run_test "codex project sessions rejects symlink" test_codex_project_sessions_rejects_symlink
+  run_test "codex project user home rejects layer alias" test_codex_project_user_home_rejects_layer_alias
   run_test "codex config mount handles explicit workspace config root" test_codex_config_mount_handles_explicit_workspace_config_root
   run_test "codex config mount ignores workspace symlink alias" test_codex_config_mount_ignores_workspace_symlink_alias
   run_test "codex config dir requires write access" test_codex_config_dir_requires_write_access

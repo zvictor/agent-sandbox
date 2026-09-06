@@ -162,7 +162,7 @@ So this runtime is not equivalent to the built-in network restrictions offered b
 
 ### 3. Tool config mounts are writable
 
-For project-scoped `codex`, the workspace's `.codex` is the writable Codex home and `.agent-sandbox/codex` supplies the managed settings for later launches. Host, explicit, and fresh Codex roots, plus the `claude` and `opencode` roots, are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
+For project-scoped `codex`, host `~/.codex` is the writable user home at `/cache/.codex`, the workspace's `.codex` remains the writable project layer, and `.agent-sandbox/codex` supplies the managed settings for later launches. A nested read-write mount maps the workspace's `.codex/sessions` onto `/cache/.codex/sessions`, preserving the project transcript path without mounting the whole project layer a second time. This exposes user-level Codex config, hooks, credentials, and non-session state to the sandbox; use a named `CODEX_AUTH` selector when the default user credential is too broad. Host, explicit, and fresh Codex roots, plus the `claude` and `opencode` roots, are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
 
 This is convenient, but it means tokens, auth files, and tool settings are inside the blast radius of the agent.
 

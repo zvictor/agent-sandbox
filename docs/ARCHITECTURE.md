@@ -192,7 +192,7 @@ This is safer than raw host engine sockets, but it is still a capability bridge.
 
 The final container typically receives:
 - the workspace at the same absolute path, read-write
-- Codex always sees the selected home at `/cache/.codex`, preserving the stable absolute rollout paths stored in its thread inventory; project-scoped state is backed by `$PROJECT_ROOT/.codex`, and project launches transactionally rewrite inventory paths left by the former absolute workspace-home layout
+- Codex sees the host user's `~/.codex` at `/cache/.codex`; in project mode the repository's `.codex` remains the distinct project layer, `$PROJECT_ROOT/.codex/sessions` is overlaid at `/cache/.codex/sessions`, and `CODEX_SQLITE_HOME` points at the project `.codex` to preserve project-local transcripts and resume inventory without loading either hook layer twice; project launches transactionally rewrite inventory paths left by the former absolute workspace-home layout
 - project-scoped Codex settings are stored under `.agent-sandbox/codex` and mounted read-only at `/etc/codex`
 - for Codex SSH, `/cache/.ssh` and `/run/host-services` are exposed to Codex's native sandbox with `--add-dir`, avoiding workspace mountpoints
 - when the workspace is inside a git repository, the git top-level plus any separate git metadata directories (`--git-common-dir` and `--absolute-git-dir`) needed to make linked worktrees resolve correctly

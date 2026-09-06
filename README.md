@@ -422,11 +422,13 @@ This is the fastest way to confirm what `codex resume <session>` will be able to
 - `CODEX_CONFIG=fresh`: no prior sessions are visible
 - `CODEX_CONFIG=/path/to/.codex`: sessions from that exact config root
 
-For `CODEX_CONFIG=project`, `agent sessions codex` treats the config root itself as the scope and lists all sessions stored there.
+For `CODEX_CONFIG=project`, `agent sessions codex` treats the project session root as the scope and lists all sessions stored there.
 
 ## Tool Configuration Mounts
 
-The launcher mounts tool config directories into the container at the tools' normal home-relative locations. Codex always sees its selected home at `/cache/.codex`, including when `CODEX_CONFIG=project`; keeping that runtime path stable preserves the absolute rollout paths in Codex's thread inventory. Project-mode state remains stored on the host under `$PROJECT_ROOT/.codex`, while settings live in `.agent-sandbox/codex/managed_config.toml` and are mounted read-only at `/etc/codex`. `.codex/config.toml` remains writable for Codex runtime metadata such as project trust. On first use, the managed config is seeded from the temporary cache-backed project config, an existing project config, or the host config, in that order. Project launches also repair thread-inventory paths written by the short-lived absolute workspace-home layout, allowing those sessions to be forked as well as resumed.
+The launcher mounts tool config directories into the container at the tools' normal home-relative locations. In `CODEX_CONFIG=project` mode, the host user's `~/.codex` is mounted as the Codex home at `/cache/.codex`, while the repository's `.codex` remains visible at its normal workspace path as the project configuration layer. The launcher overlays `$PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions` and points `CODEX_SQLITE_HOME` at the project `.codex`, so transcripts and their resume inventory keep project-local host paths without making the entire project `.codex` directory double as the user home. This means a user hook belongs in host `~/.codex/hooks.json`, a project hook belongs in `$PROJECT_ROOT/.codex/hooks.json`, and Codex discovers each layer once. Project hooks run only after the project is trusted. A launcher-managed settings layer lives in `.agent-sandbox/codex/managed_config.toml` and is mounted read-only at `/etc/codex`; on first use it is seeded from the temporary cache-backed project config, an existing project config, or the host config, in that order. Project launches also repair thread-inventory paths written by the short-lived absolute workspace-home layout, allowing those sessions to be forked as well as resumed.
+
+The project `.codex` can be a directory symlink, for example `main/.codex -> ../.codex` to share config and sessions across checkouts. The launcher mounts the target directory as needed, preserves the symlink, and keeps sessions at `$PROJECT_ROOT/.codex/sessions`. The project and user config directories must resolve to different directories. See [Tool Config Roots And Auth](docs/CONFIG.md#tool-config-roots-and-auth) for validation rules.
 
 - `codex`: selected host config root to `/cache/.codex`
 - `opencode`: host config root to container `~/.config/opencode`
@@ -441,7 +443,7 @@ Tool-specific auth selection:
 
 Tool-specific config selection:
 - `CODEX_CONFIG=host`: use the host default `~/.codex`
-- `CODEX_CONFIG=project`: use `$PROJECT_ROOT/.codex`, with sessions at `$PROJECT_ROOT/.codex/sessions`
+- `CODEX_CONFIG=project`: use host `~/.codex` as the user layer, keep `$PROJECT_ROOT/.codex` as the project layer, and store sessions at `$PROJECT_ROOT/.codex/sessions`
 - `CODEX_CONFIG=fresh`: create a clean temporary config dir for this run
 - `CODEX_CONFIG=/path/to/.codex`: use that exact host directory
 - `CLAUDE_CONFIG` and `OPENCODE_CONFIG` follow the same `host|project|fresh|<path>` model

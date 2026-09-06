@@ -125,7 +125,7 @@ prepare_codex_auth_mount_target() {
 prepare_codex_project_managed_config() {
   local managed_dir="$CODEX_MANAGED_CONFIG_PROJECT_DIR"
   local managed_file="$managed_dir/managed_config.toml"
-  local project_config="$CODEX_HOST_CONFIG/config.toml"
+  local project_config="$CODEX_CONFIG_PROJECT_PATH/config.toml"
   local host_config="$HOST_HOME/.codex/config.toml"
   local legacy_config="$CODEX_CONFIG_LEGACY_PROJECT_PATH/config.toml"
   local source_config=""
@@ -521,6 +521,7 @@ mount_standard_engine() {
   case "$engine" in
     codex)
       if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+        ensure_runtime_config_dir "codex" "project" "$CODEX_CONFIG_PROJECT_PATH" >/dev/null
         migrate_legacy_codex_project_state
         prepare_codex_project_managed_config
       fi
@@ -528,6 +529,9 @@ mount_standard_engine() {
         "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
         "CODEX_AUTH" "$CODEX_AUTH_BASE" "auth.json"
       if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+        mount_codex_project_config_target
+        mount_codex_project_sessions
+        ARGS+=( -e "CODEX_SQLITE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
         ARGS+=( -e "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
         ARGS+=( -v "$CODEX_MANAGED_CONFIG_PROJECT_DIR:/etc/codex:ro${Z_SUFFIX}" )
       fi
@@ -670,6 +674,90 @@ migrate_legacy_codex_project_state() {
     echo "[agent] migrated $CODEX_MIGRATED_FILE_COUNT Codex state files into $project_root" >&2
     echo "[agent] preserved the previous state at $legacy_root" >&2
   fi
+}
+
+mount_codex_project_config_target() {
+  local physical_home lookup_path prefix remaining component target mounted_dir
+  local expanded covered hops=0
+
+  physical_home="$(resolve_mount_dir "$CODEX_CONFIG_PROJECT_PATH")"
+  append_same_path_mount_arg "$physical_home"
+
+  # Keep the workspace symlink intact. Its canonical target needs a mount,
+  # and chains may also pass through aliases outside the mounted workspace.
+  # Expose only the selected config directory at those lookup paths.
+  lookup_path="$CODEX_CONFIG_PROJECT_PATH"
+  while :; do
+    prefix=""
+    remaining="${lookup_path#/}"
+    expanded=0
+    while [ -n "$remaining" ]; do
+      component="${remaining%%/*}"
+      if [ "$component" = "$remaining" ]; then
+        remaining=""
+      else
+        remaining="${remaining#*/}"
+      fi
+      prefix="$prefix/$component"
+      if [ -L "$prefix" ]; then
+        target="$(readlink "$prefix")"
+        case "$target" in
+          /*) ;;
+          *) target="$(dirname "$prefix")/$target" ;;
+        esac
+        lookup_path="$(realpath -ms -- "$target${remaining:+/$remaining}")"
+        expanded=1
+        break
+      fi
+    done
+    [ "$expanded" = "1" ] || return 0
+    hops=$((hops + 1))
+    if [ "$hops" -gt 40 ]; then
+      echo "[agent] ERROR: could not resolve project Codex symlink lookup path: $CODEX_CONFIG_PROJECT_PATH" >&2
+      exit 1
+    fi
+
+    covered=0
+    for mounted_dir in "${SAME_PATH_MOUNT_DIRS[@]}"; do
+      if path_is_same_or_child "$lookup_path" "$mounted_dir"; then
+        covered=1
+        break
+      fi
+    done
+    if [ "$covered" = "0" ]; then
+      ARGS+=( -v "$physical_home:$lookup_path:rw${Z_SUFFIX}" )
+      return 0
+    fi
+  done
+}
+
+mount_codex_project_sessions() {
+  local project_sessions="$CODEX_CONFIG_PROJECT_PATH/sessions"
+  local user_sessions="$CODEX_HOST_CONFIG/sessions"
+  local project_home_physical=""
+  local user_home_physical=""
+
+  if [ -L "$project_sessions" ] || { [ -e "$project_sessions" ] && [ ! -d "$project_sessions" ]; }; then
+    echo "[agent] ERROR: project Codex sessions path must be a real directory: $project_sessions" >&2
+    exit 1
+  fi
+  if [ -L "$user_sessions" ] || { [ -e "$user_sessions" ] && [ ! -d "$user_sessions" ]; }; then
+    echo "[agent] ERROR: user Codex sessions mountpoint must be a real directory: $user_sessions" >&2
+    exit 1
+  fi
+  if ! mkdir -p "$project_sessions" "$user_sessions"; then
+    echo "[agent] ERROR: could not prepare Codex project sessions mount" >&2
+    exit 1
+  fi
+
+  project_home_physical="$(resolve_mount_dir "$CODEX_CONFIG_PROJECT_PATH")"
+  user_home_physical="$(resolve_mount_dir "$CODEX_HOST_CONFIG")"
+  if [ "$project_home_physical" = "$user_home_physical" ]; then
+    echo "[agent] ERROR: user and project Codex config layers resolve to the same directory: $project_home_physical" >&2
+    exit 1
+  fi
+
+  ARGS+=( -v "$project_sessions:/cache/.codex/sessions:rw${Z_SUFFIX}" )
 }
 
 compose_runtime_path() {
@@ -1572,7 +1660,7 @@ resolve_tool_config_roots() {
   COMMANDCODE_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.commandcode"
 
   IFS='|' read -r CODEX_CONFIG_MODE CODEX_CONFIG_SELECTOR CODEX_HOST_CONFIG <<EOF
-$(resolve_config_root "${CODEX_CONFIG:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_PROJECT_PATH")
+$(resolve_config_root "${CODEX_CONFIG:-}" "$CODEX_CONFIG_DEFAULT_HOST" "$CODEX_CONFIG_DEFAULT_HOST")
 EOF
   IFS='|' read -r OPENCODE_CONFIG_MODE OPENCODE_CONFIG_SELECTOR OPENCODE_HOST_CONFIG <<EOF
 $(resolve_config_root "${OPENCODE_CONFIG:-}" "$OPENCODE_CONFIG_DEFAULT_HOST" "$OPENCODE_CONFIG_PROJECT_PATH")
@@ -1584,9 +1672,18 @@ EOF
 $(resolve_config_root "${COMMANDCODE_CONFIG:-}" "$COMMANDCODE_CONFIG_DEFAULT_HOST" "$COMMANDCODE_CONFIG_PROJECT_PATH")
 EOF
 
+  CODEX_SESSION_ROOT="$CODEX_HOST_CONFIG"
   if [ "$CODEX_CONFIG_MODE" = "project" ]; then
-    if [ -L "$CODEX_CONFIG_PROJECT_PATH" ]; then
-      echo "[agent] ERROR: project Codex home must be a real directory, not a symlink: $CODEX_CONFIG_PROJECT_PATH" >&2
+    CODEX_SESSION_ROOT="$CODEX_CONFIG_PROJECT_PATH"
+  fi
+
+  if [ "$CODEX_CONFIG_MODE" = "project" ]; then
+    if { [ -L "$CODEX_CONFIG_PROJECT_PATH" ] || [ -e "$CODEX_CONFIG_PROJECT_PATH" ]; } && [ ! -d "$CODEX_CONFIG_PROJECT_PATH" ]; then
+      echo "[agent] ERROR: project Codex config path must resolve to an existing directory: $CODEX_CONFIG_PROJECT_PATH" >&2
+      exit 1
+    fi
+    if [ "$CODEX_CONFIG_PROJECT_PATH" -ef "$CODEX_HOST_CONFIG" ]; then
+      echo "[agent] ERROR: user and project Codex config layers resolve to the same directory: $(resolve_mount_dir "$CODEX_CONFIG_PROJECT_PATH")" >&2
       exit 1
     fi
   fi

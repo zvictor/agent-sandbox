@@ -131,9 +131,11 @@ CODEX_CONFIG=project ./scripts/agent remote codex
 
 `CODEX_CONFIG=project` keeps visible Codex transcripts under the worktree's
 `.codex/sessions`, so they remain attached to the worktree when it is moved or
-copied. Set `CODEX_CONFIG=host` explicitly only when the remote sandbox should
-share host `~/.codex`; that exposes broader history and config state to the
-remotely reachable sandbox.
+copied. The runtime mounts host `~/.codex` as the user layer and leaves the
+worktree's `.codex` visible as the project layer, so user and project hooks can
+coexist without either path being loaded twice. Set `CODEX_CONFIG=host`
+explicitly when the remote sandbox should also use the host session store;
+that exposes broader transcript history to the remotely reachable sandbox.
 
 ## Required inputs
 

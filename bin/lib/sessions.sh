@@ -239,8 +239,8 @@ print_sessions_and_exit() {
     codex)
       config_mode="$CODEX_CONFIG_MODE"
       config_selector="$CODEX_CONFIG_SELECTOR"
-      config_root="$CODEX_HOST_CONFIG"
-      sessions_dir="$CODEX_HOST_CONFIG/sessions"
+      config_root="$CODEX_SESSION_ROOT"
+      sessions_dir="$CODEX_SESSION_ROOT/sessions"
       ;;
   esac
   SESSIONS_CONFIG_MODE="$config_mode"
@@ -257,7 +257,7 @@ print_sessions_and_exit() {
   if [ "$SESSIONS_ALL" = "1" ]; then
     scope_summary="all sessions in config root"
   elif [ "$config_mode" = "project" ]; then
-    scope_summary="all sessions in project Codex home"
+    scope_summary="all sessions in project Codex session root"
   else
     scope_summary="sessions visible from current cwd"
   fi

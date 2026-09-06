@@ -237,7 +237,7 @@ prepare_viewer_home() {
   mkdir -p "$VIEWER_HOME/.claude-history-viewer" "$VIEWER_HOME/.cache" "$VIEWER_HOME/.local/share"
 
   VIEWER_CLAUDE_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_CLAUDE_HOME:-$CLAUDE_HOST_CONFIG}")"
-  VIEWER_CODEX_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_CODEX_HOME:-$CODEX_HOST_CONFIG}")"
+  VIEWER_CODEX_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_CODEX_HOME:-$CODEX_SESSION_ROOT}")"
   VIEWER_OPENCODE_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_OPENCODE_HOME:-${OPENCODE_HOME:-$HOST_HOME/.local/share/opencode}}")"
 
   VIEWER_CLAUDE_TARGET="$VIEWER_HOME/.claude"

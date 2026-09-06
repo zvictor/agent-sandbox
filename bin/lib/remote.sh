@@ -605,7 +605,7 @@ remote_transcript_rows() {
   case "$SESSIONS_TOOL" in
     codex)
       config_mode="$CODEX_CONFIG_MODE"
-      sessions_dir="$CODEX_HOST_CONFIG/sessions"
+      sessions_dir="$CODEX_SESSION_ROOT/sessions"
       ;;
   esac
 

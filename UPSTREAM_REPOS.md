@@ -9,5 +9,6 @@
 | Catatonit | openSUSE/catatonit | Minimal container PID-1 signal forwarding and orphan reaping |
 | Docker Engine | moby/moby | Docker runtime and daemon-managed init behavior |
 | Bubblewrap | containers/bubblewrap | Rootless sandbox behavior and release baseline |
+| Codex | openai/codex | Project config discovery, hook loading, and symlink behavior |
 | systemd | systemd/systemd | User-manager and cgroup-v2 delegation behavior |
 | Linux kernel | torvalds/linux | cgroup-v2 migration, delegation, and namespace behavior |

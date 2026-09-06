@@ -63,13 +63,17 @@ function main(): void {
     process.env.AGENT_CODEX_ROLLOUT_SOURCE_HOME,
   );
   const targetHome = normalizedHome("CODEX_HOME", process.env.CODEX_HOME);
+  const sqliteHome = normalizedHome(
+    "CODEX_SQLITE_HOME",
+    process.env.CODEX_SQLITE_HOME ?? targetHome,
+  );
   if (sourceHome === targetHome) {
     return;
   }
 
   const sourcePrefix = `${sourceHome}/`;
   const targetPrefix = `${targetHome}/`;
-  const databaseNames = readdirSync(targetHome, { withFileTypes: true })
+  const databaseNames = readdirSync(sqliteHome, { withFileTypes: true })
     .filter(
       (entry) => entry.isFile() && /^state_[0-9]+\.sqlite$/.test(entry.name),
     )
@@ -79,7 +83,7 @@ function main(): void {
   let migratedPathCount = 0;
   for (const databaseName of databaseNames) {
     migratedPathCount += migrateDatabase(
-      join(targetHome, databaseName),
+      join(sqliteHome, databaseName),
       sourcePrefix,
       targetPrefix,
     );
