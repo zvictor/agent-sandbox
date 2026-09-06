@@ -151,10 +151,23 @@ prepare_login_state() {
   REMAINING_ARGS=( "${LOGIN_TOOL_ARGS[@]}" )
 }
 
+# Called by read_project_config with the update state scoped by upsert below.
+write_updated_project_config_entry() {
+  if [ "$1" = "$config_update_key" ]; then
+    if [ "$config_update_done" = "0" ]; then
+      printf '%s=%s\n' "$config_update_key" "$config_update_value" || return 1
+      config_update_done=1
+    fi
+  else
+    printf '%s\n' "$3"
+  fi
+}
+
 upsert_project_config_value() {
   local target_file="$1"
-  local key="$2"
-  local value="$3"
+  local config_update_key="$2"
+  local config_update_value="$3"
+  local config_update_done=0
   local tmp_file=""
 
   mkdir -p "$(dirname "$target_file")"
@@ -164,23 +177,13 @@ upsert_project_config_value() {
     render_project_config_template > "$target_file"
   fi
 
-  awk -v key="$key" -v value="$value" '
-    BEGIN { done = 0 }
-    $0 ~ "^[[:space:]]*" key "=" {
-      if (!done) {
-        print key "=" value
-        done = 1
-      }
-      next
-    }
-    { print }
-    END {
-      if (!done) {
-        print ""
-        print key "=" value
-      }
-    }
-  ' "$target_file" > "$tmp_file"
+  if ! read_project_config "$target_file" write_updated_project_config_entry > "$tmp_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if [ "$config_update_done" = "0" ]; then
+    printf '\n%s=%s\n' "$config_update_key" "$config_update_value" >> "$tmp_file"
+  fi
 
   mv "$tmp_file" "$target_file"
 }

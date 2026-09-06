@@ -3964,6 +3964,7 @@ run_test() {
 }
 
 main() {
+  run_test "project config parsing and environment forwarding" bash "$REPO_ROOT/tests/project-config.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0

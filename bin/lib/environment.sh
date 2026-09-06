@@ -22,49 +22,34 @@ is_project_config_key_allowed() {
   esac
 }
 
-# Expand $VAR and ${VAR} patterns in a string using current environment
+# Expand references once, treating environment values as data, including newlines.
+# The second argument names the caller's output variable (no newline-stripping
+# command substitution). Unknown references stay literal, as before.
 expand_config_variables() {
-  local value="$1"
-  local result="$value"
-  local tmpfile
-  local iteration=0
+  local config_remaining="$1" config_result=""
+  local config_entry config_name config_token
+  local -A config_environment=()
 
-  tmpfile=$(mktemp)
+  while IFS= read -r -d '' config_entry; do
+    config_name="${config_entry%%=*}"
+    [[ "$config_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    config_environment["$config_name"]="${config_entry#*=}"
+  done < <(env -0)
 
-  while [ $iteration -lt 10 ]; do
-    local prev="$result"
-    iteration=$((iteration + 1))
-
-    > "$tmpfile"
-
-    env | awk -F= 'NF >= 1 {print length($1), $1}' | sort -rn | while read -r len var_name; do
-      case "$var_name" in
-        "" | [0-9]* | *[!a-zA-Z0-9_]* ) continue ;;
-      esac
-
-      local var_val
-      var_val=$(eval printf '%s' "\$$var_name" 2>/dev/null) || continue
-
-      case "$var_val" in
-        *"\$$var_name"* | *"\${$var_name}"* ) continue ;;
-      esac
-
-      # Escape sed RHS metacharacters: backslash, ampersand, and the delimiter (|).
-      # Order: backslash first to prevent double-escaping.
-      var_val=$(printf '%s' "$var_val" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g')
-
-      printf 's|\\${%s}|%s|g\n' "$var_name" "$var_val"
-      printf 's|\\$%s$|%s|\n' "$var_name" "$var_val"
-      printf 's|\\$%s\\([^(a-zA-Z0-9_]\\)|%s\\1|g\n' "$var_name" "$var_val"
-    done > "$tmpfile"
-
-    result=$(printf '%s' "$result" | sed -f "$tmpfile")
-
-    [ "$result" = "$prev" ] && break
+  while [[ "$config_remaining" == *'$'* ]]; do
+    config_result+="${config_remaining%%\$*}"
+    config_remaining="${config_remaining#*\$}"
+    if [[ "$config_remaining" =~ ^\{([A-Za-z_][A-Za-z0-9_]*)\} ]] ||
+       [[ "$config_remaining" =~ ^([A-Za-z_][A-Za-z0-9_]*) ]]; then
+      config_token="${BASH_REMATCH[0]}"
+      config_name="${BASH_REMATCH[1]}"
+      config_result+="${config_environment[$config_name]-\$$config_token}"
+      config_remaining="${config_remaining:${#config_token}}"
+    else
+      config_result+='$'
+    fi
   done
-
-  rm -f "$tmpfile"
-  printf '%s' "$result"
+  printf -v "$2" '%s' "$config_result$config_remaining"
 }
 
 resolve_project_config_file() {
@@ -81,57 +66,103 @@ resolve_project_config_file() {
   fi
 }
 
-load_project_config() {
-  local raw_line=""
-  local line=""
-  local key=""
-  local value=""
+# Read logical assignments, preserving raw records for config-file updates.
+# The callback receives key, value, raw record, and starting line number.
+# Blank/comment records have an empty key. This parser never evaluates shell.
+read_project_config() {
+  local config_file="$1" callback="$2"
+  local raw_line line key value record quote remainder char next_char
+  local line_number=0 start_line index
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    line_number=$((line_number + 1))
+    start_line="$line_number"
+    record="$raw_line"
+    line="$(trim_whitespace "$raw_line")"
+    case "$line" in
+      ""|\#*)
+        "$callback" "" "" "$record" "$start_line" || return 1
+        continue
+        ;;
+      *=*) ;;
+      *)
+        echo "[agent] ERROR: $config_file:$start_line: expected KEY=VALUE" >&2
+        return 1
+        ;;
+    esac
+    key="$(trim_whitespace "${line%%=*}")"
+    value="${raw_line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%$'\r'}"
+    if ! [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "[agent] ERROR: $config_file:$start_line: invalid config key" >&2
+      return 1
+    fi
 
+    quote="${value:0:1}"
+    if [ "$quote" = '"' ] || [ "$quote" = "'" ]; then
+      remainder="${value:1}"
+      value=""
+      while :; do
+        for ((index=0; index<${#remainder}; index++)); do
+          char="${remainder:index:1}"
+          next_char="${remainder:index+1:1}"
+          if [ "$char" = '\' ] && { [ "$next_char" = "$quote" ] || [ "$next_char" = '\' ]; }; then
+            value+="$next_char"
+            index=$((index + 1))
+          elif [ "$char" = "$quote" ]; then
+            if [ -n "$(trim_whitespace "${remainder:index+1}")" ]; then
+              echo "[agent] ERROR: $config_file:$line_number: unexpected text after closing quote" >&2
+              return 1
+            fi
+            quote=""
+            break
+          else
+            value+="$char"
+          fi
+        done
+        [ -n "$quote" ] || break
+        if ! IFS= read -r raw_line && [ -z "$raw_line" ]; then
+          echo "[agent] ERROR: $config_file:$start_line: unterminated quoted value" >&2
+          return 1
+        fi
+        line_number=$((line_number + 1))
+        record+=$'\n'"$raw_line"
+        value+=$'\n'
+        remainder="${raw_line%$'\r'}"
+      done
+    else
+      value="$(trim_whitespace "$value")"
+    fi
+
+    case "$value" in
+      *'$('*|*'`'*)
+        echo "[agent] ERROR: $config_file:$start_line: command substitution is not supported; use a quoted value" >&2
+        return 1
+        ;;
+    esac
+    "$callback" "$key" "$value" "$record" "$start_line" || return 1
+  done < "$config_file"
+}
+
+load_project_config_entry() {
+  local key="$1" value="$2"
+  [ -n "$key" ] || return 0
+  if ! is_project_config_key_allowed "$key"; then
+    echo "[agent] ignoring unsupported project config key '$key' in $PROJECT_CONFIG_FILE" >&2
+    return 0
+  fi
+  if [ -z "${!key+x}" ]; then
+    expand_config_variables "$value" value
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  fi
+}
+
+load_project_config() {
   resolve_project_config_file
   [ -n "$PROJECT_CONFIG_FILE" ] || return 0
   [ -f "$PROJECT_CONFIG_FILE" ] || return 0
-
-  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-    line="$(trim_whitespace "$raw_line")"
-    [ -n "$line" ] || continue
-    case "$line" in
-      \#*) continue ;;
-      *=*) ;;
-      *)
-        echo "[agent] ignoring invalid config line in $PROJECT_CONFIG_FILE: $raw_line" >&2
-        continue
-        ;;
-    esac
-
-    key="$(trim_whitespace "${line%%=*}")"
-    value="$(trim_whitespace "${line#*=}")"
-
-    if ! printf '%s\n' "$key" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
-      echo "[agent] ignoring invalid config key '$key' in $PROJECT_CONFIG_FILE" >&2
-      continue
-    fi
-
-    if ! is_project_config_key_allowed "$key"; then
-      echo "[agent] ignoring unsupported project config key '$key' in $PROJECT_CONFIG_FILE" >&2
-      continue
-    fi
-
-    if [ "${value#\"}" != "$value" ] && [ "${value%\"}" != "$value" ] && [ "${#value}" -ge 2 ]; then
-      value="${value#\"}"
-      value="${value%\"}"
-    elif [ "${value#\'}" != "$value" ] && [ "${value%\'}" != "$value" ] && [ "${#value}" -ge 2 ]; then
-      value="${value#\'}"
-      value="${value%\'}"
-    fi
-
-    # Expand variable references like $VAR and ${VAR}
-    value=$(expand_config_variables "$value")
-
-    if [ -z "${!key+x}" ]; then
-      printf -v "$key" '%s' "$value"
-      export "$key"
-    fi
-  done < "$PROJECT_CONFIG_FILE"
+  read_project_config "$PROJECT_CONFIG_FILE" load_project_config_entry
 }
 
 resolve_runtime() {

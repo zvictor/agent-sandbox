@@ -378,11 +378,28 @@ The sandbox also prefers compatibility shims over sandbox-specific instructions 
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `AGENT_EXTRA_ENV` | unset | Extra `KEY=VALUE` pairs injected into the container |
+| `AGENT_EXTRA_ENV` | unset | Extra container `KEY=VALUE` pairs; use one per line in a quoted multiline value, or commas in a single-line value |
 | `AGENT_AUTO_MOUNT_DIRS` | unset | Auto-mount ancestor directories by name |
 | `AGENT_EXTRA_MOUNTS` | unset | Raw mount specs in `host:container[:options]` format |
 | `AGENT_EXTRA_DEVICES` | unset | Raw device specs passed through as `--device` |
 | `AGENT_PASS_ENV_PREFIXES` | built-in list | Prefixes forwarded from the host environment |
+
+For several variables, use a multiline block in `.agent-sandbox.env`:
+
+```dotenv
+AGENT_EXTRA_ENV="
+    TMPDIR=$PWD/.tmp
+    CODEX_DISCORD_WEBHOOK_URL=<DISCORD_WEBHOOK_URL>
+    OPENROUTER_API_KEY=<OPENROUTER_KEY>
+    MISTRAL_API_KEY=<MISTRAL_KEY>
+"
+```
+
+Each nonblank line must contain `KEY=VALUE`, with a shell-style variable name (`[A-Za-z_][A-Za-z0-9_]*`). Indentation before the key is ignored; spaces after `=` are part of the value. Empty values and additional `=` characters are supported. The entries are injected into the container, not loaded as host settings. Creating directories such as `$PWD/.tmp` remains your responsibility.
+
+In a multiline value, commas are literal data: `LABELS=one,two` is one assignment. A single-line value instead uses commas as separators, for example `AGENT_EXTRA_ENV="FIRST=one,SECOND=two"`. Do not mix comma-separated assignments with newline-separated assignments in the same value. Repeated `AGENT_EXTRA_ENV=` assignments do not append: the first file value wins unless the variable is already set in the environment.
+
+Malformed entries and attempts to override runtime-owned variables stop the launch without printing their values. In remote mode, this setting still requires `AGENT_REMOTE_ALLOW_EXTRA_ENV=1`.
 
 Compatibility alias:
 - `AGENT_ALLOW_KVM=1`: appends `--device /dev/kvm`
@@ -413,7 +430,7 @@ Keep these narrow. They are escape hatches.
 
 ## Project Defaults File
 
-The project defaults file accepts plain `KEY=VALUE` lines. Blank lines and `#` comments are ignored. Only sandbox-related keys are loaded, such as:
+The project defaults file accepts `KEY=VALUE` assignments. Values may be unquoted, single-quoted, or double-quoted. Both quote styles support multiple lines. Blank lines and `#` comments outside quoted values are ignored. Only sandbox-related keys are loaded, such as:
 - `AGENT_*`
 - `CODEX_*`
 - `CLAUDE_*`
@@ -429,6 +446,24 @@ AGENT_CONTAINER_API=auto
 AGENT_NEED_HELPER=1
 CODEX_CONFIG=project
 CODEX_AUTH=work
+```
+
+Parsing rules:
+
+- Existing environment values, including empty values, override the file. Otherwise, the first assignment to a key wins.
+- `$VAR` and `${VAR}` expand in all three value forms using exported environment variables and earlier loaded settings. Unknown references stay literal. Expansion happens once: dollar signs and shell-looking text inside substituted environment values remain data.
+- Quotes delimit a whole value, not individual entries in `AGENT_EXTRA_ENV`. To include the enclosing quote or a backslash in a quoted value, escape it with a backslash. Other backslash sequences, including `\n`, stay literal; use actual line breaks for multiline values.
+- A closing quote can appear at the end of the final value line or on its own line. Only whitespace may follow it. Line breaks and whitespace inside quotes are preserved; the extra-environment list separately ignores blank lines and indentation before keys.
+- This file is not sourced as a shell script. Command substitution (`$(...)` or backticks), heredocs, `export`, and append assignments (`KEY+=...`) are unsupported. Use quoted multiline values instead of `$(cat <<EOF ...)`.
+- Invalid assignment syntax, unterminated quotes, and command substitution stop parsing with a file and line number, without printing values. Unsupported but syntactically valid top-level keys are skipped with a warning; their quoted contents are never interpreted as separate settings.
+
+Keep config files containing credentials out of version control. For literal double quotes in an extra-environment value, single quotes around the block avoid escaping:
+
+```dotenv
+AGENT_EXTRA_ENV='
+    LABELS=one,two
+    METADATA={"source":"sandbox","enabled":true}
+'
 ```
 
 ## Ambient Host Environment

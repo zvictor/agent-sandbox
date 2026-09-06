@@ -226,7 +226,7 @@ Instead of exporting a long list of environment variables before every run, you 
 1. `AGENT_PROJECT_CONFIG_FILE`
 2. `.agent-sandbox.env`
 
-The format is plain `KEY=VALUE` lines. Blank lines and `#` comments are ignored. Existing environment variables still take precedence over file values.
+The format is `KEY=VALUE` assignments, with quoted values allowed to span multiple lines. Blank lines and `#` comments outside quoted values are ignored. Existing environment variables still take precedence over file values.
 
 Example:
 
@@ -238,6 +238,18 @@ CODEX_AUTH=work
 ```
 
 Only sandbox-related keys are loaded from the file, such as `AGENT_*`, tool auth/config keys, and `TESTCONTAINERS_*`.
+
+Use a quoted `AGENT_EXTRA_ENV` block to inject several container variables:
+
+```dotenv
+AGENT_EXTRA_ENV="
+    TMPDIR=$PWD/.tmp
+    OPENROUTER_API_KEY=<OPENROUTER_KEY>
+    MISTRAL_API_KEY=<MISTRAL_KEY>
+"
+```
+
+Each nonblank line is one `KEY=VALUE`; indentation before the key is ignored. `$VAR` and `${VAR}` references expand from the launcher's environment. The file is data, not a shell script: command substitution such as `$(cat <<EOF ...)` is rejected. Keep files containing credentials out of version control. See [the configuration reference](docs/CONFIG.md#project-defaults-file) for quoting and validation rules.
 
 Bootstrap the file with:
 

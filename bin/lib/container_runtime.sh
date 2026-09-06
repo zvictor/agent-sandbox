@@ -502,17 +502,31 @@ append_extra_env_args() {
   local specs="${AGENT_EXTRA_ENV:-}"
   local entry=""
   local key=""
+  local entry_number=0
 
   [ -n "$specs" ] || return 0
+  # Multiline lists use one assignment per line, so commas remain value data.
+  # A single-line list retains the existing comma-separated syntax.
+  case "$specs" in
+    *$'\n'*) ;;
+    *) specs="${specs//,/$'\n'}" ;;
+  esac
   while IFS= read -r entry; do
+    entry_number=$((entry_number + 1))
+    entry="${entry%$'\r'}"
+    entry="${entry#"${entry%%[![:space:]]*}"}"
     [ -n "$entry" ] || continue
     key="${entry%%=*}"
+    if [[ "$entry" != *=* ]] || ! [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "[agent] ERROR: AGENT_EXTRA_ENV entry $entry_number: expected KEY=VALUE with a valid variable name" >&2
+      exit 1
+    fi
     if runtime_env_key_is_reserved "$key"; then
       echo "[agent] ERROR: AGENT_EXTRA_ENV cannot override runtime-owned variable: $key" >&2
       exit 1
     fi
     ARGS+=( -e "$entry" )
-  done < <(split_csv_or_lines "$specs")
+  done <<< "$specs"
 }
 
 mount_standard_engine() {
@@ -1590,7 +1604,7 @@ append_auto_mount_dir_args() {
 }
 
 append_passthrough_env_args() {
-  local key value prefix
+  local key value prefix entry
 
   if remote_container_mode && [ "${AGENT_REMOTE_ALLOW_HOST_ENV:-0}" != "1" ]; then
     DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED'
@@ -1599,7 +1613,10 @@ append_passthrough_env_args() {
   fi
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
-  while IFS='=' read -r key value; do
+  while IFS= read -r -d '' entry; do
+    key="${entry%%=*}"
+    value="${entry#*=}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     case "$key" in
       CODEX_CONFIG|OPENCODE_CONFIG|CLAUDE_CONFIG|COMMANDCODE_CONFIG|CODEX_AUTH|OPENCODE_AUTH|CLAUDE_AUTH|COMMANDCODE_AUTH|SSH_AUTH_SOCK)
         # These are launcher selectors. Once resolved to mounted config/auth
@@ -1625,7 +1642,7 @@ append_passthrough_env_args() {
           ;;
       esac
     done < <(split_csv_or_lines "$PASS_ENV_PREFIXES")
-  done < <(env)
+  done < <(env -0)
 }
 
 append_extra_device_args() {
