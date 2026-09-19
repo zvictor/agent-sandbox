@@ -469,6 +469,7 @@ remote_start_runtime_container() {
   fi
 
   build_container_args
+  bind_runtime_lease_to_container "$RUNTIME" "$(current_sandbox_profile)" "$CONTAINER_NAME"
   run_container_runtime >/dev/null
 }
 
@@ -767,7 +768,17 @@ remote_run_down() {
   else
     podman_runtime_cmd rm -f "$REMOTE_RUNTIME_CONTAINER" "$REMOTE_TS_CONTAINER" >/dev/null 2>&1 || true
   fi
-  remove_runtime_lease "$REMOTE_STATE_DIR/runtime-lease"
+  if podman_runtime_cmd container exists "$REMOTE_RUNTIME_CONTAINER"; then
+    echo "[agent] ERROR: remote container still exists; retaining runtime lease and temporary storage" >&2
+    return 1
+  else
+    local container_state="$?"
+    if [ "$container_state" -ne 1 ]; then
+      echo "[agent] ERROR: cannot confirm remote container teardown; retaining runtime lease and temporary storage" >&2
+      return 1
+    fi
+  fi
+  remove_runtime_lease "$REMOTE_STATE_DIR/runtime-lease" || return 1
   if [ "$REMOTE_DELETE_STATE" = "1" ]; then
     rm -rf "$REMOTE_STATE_DIR"
   fi

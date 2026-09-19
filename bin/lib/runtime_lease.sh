@@ -3,6 +3,58 @@ RUNTIME_LEASE_DIR=""
 RUNTIME_LEASE_ROOTS_DIR=""
 RUNTIME_LEASE_RECEIPTS_DIR=""
 RUNTIME_LEASE_PERSIST="0"
+SANDBOX_TMP_DIR=""
+
+sandbox_tmp_parent() {
+  local lease_dir="$1" name="" parent=""
+  runtime_lease_dir_is_managed "$lease_dir" || return 1
+  case "$lease_dir" in
+    "$CACHE_DIR/runtime-leases/"*) name="local-${lease_dir#"$CACHE_DIR/runtime-leases/"}" ;;
+    "$CACHE_DIR/remote/"*/runtime-lease)
+      parent="${lease_dir%/runtime-lease}"
+      name="remote-${parent#"$CACHE_DIR/remote/"}"
+      ;;
+    *) return 1 ;;
+  esac
+  case "$name" in *[!A-Za-z0-9_.-]*) return 1 ;; esac
+  printf '%s/tmp/sandboxes/%s\n' "$CACHE_DIR" "$name"
+}
+
+prepare_sandbox_tmp() {
+  local parent="" base="$CACHE_DIR/tmp/sandboxes"
+  parent="$(sandbox_tmp_parent "$RUNTIME_LEASE_DIR")" || return 1
+  SANDBOX_TMP_DIR="$parent/data"
+  if [ -L "$base" ] || [ -L "$parent" ] || [ -L "$SANDBOX_TMP_DIR" ]; then
+    echo "[agent] ERROR: sandbox temporary storage must use real directories: $parent" >&2
+    return 1
+  fi
+  mkdir -p -m 0700 "$base" "$parent" || return 1
+  chmod 0700 "$base" "$parent" || return 1
+  mkdir -p -m 1777 "$SANDBOX_TMP_DIR" || return 1
+  chmod 1777 "$SANDBOX_TMP_DIR" || return 1
+}
+
+remove_sandbox_tmp() {
+  local parent="" base="$CACHE_DIR/tmp/sandboxes"
+  parent="$(sandbox_tmp_parent "$1")" || return 1
+  if [ -L "$base" ] || [ -L "$parent" ]; then
+    echo "[agent] warning: refusing symlinked sandbox temporary storage: $parent" >&2
+    return 1
+  fi
+  [ -e "$parent" ] || return 0
+  # Materialized packages may deliberately contain read-only directories.
+  # Change directories only (never hard-linked files), do not follow symlinks,
+  # and do not cross filesystem boundaries. This runs only after teardown.
+  if [ -d "$parent" ] && ! find -P "$parent" -xdev -type d -user "$(id -u)" \
+    -exec chmod u+rwx -- {} \; ; then
+    echo "[agent] warning: could not prepare sandbox temporary directories for cleanup: $parent" >&2
+    return 1
+  fi
+  if ! rm -rf --one-file-system -- "$parent"; then
+    echo "[agent] warning: could not remove sandbox temporary storage; retaining lease: $parent" >&2
+    return 1
+  fi
+}
 
 runtime_lease_dir_is_managed() {
   local lease_dir="$1"
@@ -480,6 +532,7 @@ remove_runtime_lease() {
   }
 
   stop_runtime_lease_helper "$lease_dir"
+  remove_sandbox_tmp "$lease_dir" || return 1
   rm -rf -- "$lease_dir"
 }
 

@@ -1079,9 +1079,15 @@ build_base_container_args() {
     ARGS+=( --security-opt=no-new-privileges )
   fi
 
-  ARGS+=(
-    --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
-  )
+  if [ "$RUNTIME" = "podman" ]; then
+    if [ -z "${SANDBOX_TMP_DIR:-}" ] || [ ! -d "$SANDBOX_TMP_DIR" ]; then
+      echo "[agent] ERROR: sandbox temporary storage is unavailable" >&2
+      exit 1
+    fi
+    ARGS+=( -v "$SANDBOX_TMP_DIR:/tmp:rw,exec,nosuid,nodev${Z_SUFFIX}" )
+  else
+    ARGS+=( --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777 )
+  fi
 
   if rootless_linux_profile; then
     ARGS+=(
@@ -1796,6 +1802,9 @@ build_container_args() {
   prepare_path_guard_dir
   build_nix_config
   resolve_tool_config_roots
+  if [ "$RUNTIME" = "podman" ]; then
+    prepare_sandbox_tmp || return 1
+  fi
   build_base_container_args
   append_path_guard_mount_args
   append_nix_mount_args
