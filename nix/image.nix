@@ -126,6 +126,7 @@ let
   rootlessLinuxSession = pkgs.runCommand "agent-rootless-linux-session" { } ''
     install -Dm0755 ${../scripts/image/rootless-linux-entrypoint.sh} "$out/bin/agent-rootless-linux-entrypoint"
     install -Dm0755 ${../scripts/image/rootless-linux-cgroup-launch.sh} "$out/bin/agent-rootless-linux-cgroup-launch"
+    install -Dm0644 ${../scripts/image/rootless-linux-lifecycle.sh} "$out/bin/agent-rootless-linux-lifecycle"
   '';
 
   firecrackerPodmanWrapper = pkgs.writeShellScriptBin "agent-firecracker-podman" ''
@@ -337,6 +338,17 @@ EOF
       if [ ! -e "$bin_path" ]; then
         echo "Expected launcher missing after install: $bin_path" >&2
         exit 1
+      fi
+
+      if [ "${name}" = "codex" ]; then
+        # Resolve the installed platform package, then replace this shell with
+        # native Codex. No Bun process remains between Codex and its supervisor.
+        native_codex="$(${pkgs.bun}/bin/bun ${../scripts/image/codex-native-path.cjs} "$pkg_json")"
+        [ -x "$native_codex" ] || { echo "Codex native executable is unavailable: $native_codex" >&2; exit 1; }
+        unset CODEX_MANAGED_BY_NPM CODEX_MANAGED_BY_PNPM CODEX_MANAGED_BY_VITE_PLUS
+        export CODEX_MANAGED_BY_BUN=1
+        export CODEX_MANAGED_PACKAGE_ROOT="$(dirname "$(readlink -f "$pkg_json")")"
+        exec "$native_codex" "$@"
       fi
 
       # Prefer the package's own executable entrypoint when it is a shell or

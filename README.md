@@ -103,6 +103,12 @@ and verifies the manager, delegated controls, and a nested rootless Bubblewrap
 invocation before starting the agent. A missing predicate is a hard
 unsupported-host error.
 
+The supported local path is inherited cgroup delegation through a delegated
+scope, not a complete user-session bus. Transient services with waiting and
+stdio forwarding (`systemd-run --user --wait --pipe`) are not supported by this
+profile. Run full service/acquisition conformance gates on a separate disposable
+CI host; see the [Rootless Linux profile contract](docs/CONFIG.md#rootless-linux-profile).
+
 For Firecracker host smoke tests, use the explicit host-control profile:
 
 ```sh

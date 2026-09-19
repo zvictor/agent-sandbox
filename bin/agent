@@ -175,6 +175,11 @@ PATH_GUARD_HOST_DIR=""
 RUNTIME_IDENTITY_HOST_DIR=""
 CODEX_AUTH_PLACEHOLDER=""
 cleanup() {
+  local agent_status=$?
+  trap - EXIT
+  # A cleanup failure must not replace the payload status or skip the other
+  # independent launcher resources. Failed leases remain available for retry.
+  set +e
   cleanup_runtime_lease
   if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
@@ -194,6 +199,7 @@ cleanup() {
   if [ -n "$LOGIN_STATE_DIR" ] && [ -d "$LOGIN_STATE_DIR" ]; then
     rm -rf "$LOGIN_STATE_DIR"
   fi
+  exit "$agent_status"
 }
 trap cleanup EXIT
 

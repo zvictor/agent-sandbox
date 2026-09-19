@@ -474,6 +474,8 @@ base_container_args_for() (
   local runtime="${3:-podman}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
+  SANDBOX_TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$SANDBOX_TMP_DIR"' EXIT
 
   SANDBOX_PROFILE="$profile"
   AGENT_SANDBOX_PROFILE="$profile"
@@ -504,6 +506,9 @@ remote_base_container_args_for() (
   local profile="${1:-default}"
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
+  RUNTIME="podman"
+  SANDBOX_TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$SANDBOX_TMP_DIR"' EXIT
 
   SANDBOX_PROFILE="$profile"
   AGENT_SANDBOX_PROFILE="$profile"
@@ -2636,6 +2641,12 @@ test_rootless_linux_session_contract() (
   assert_contains "$script_file" 'exec /lib/systemd/systemd --user --unit=basic.target'
   assert_contains "$script_file" 'SYSTEMD_UNIT_PATH=/example/systemd/user'
   assert_contains "$script_file" 'SYSTEMD_ENVIRONMENT_GENERATOR_PATH='
+  assert_contains "$script_file" 'source /bin/agent-rootless-linux-lifecycle'
+  assert_contains "$script_file" 'verify_rootless_shutdown_unit_files'
+  assert_contains "$script_file" 'verify_rootless_shutdown_units_loaded'
+  assert_contains "$script_file" 'exec {manager_kill_fd}> "$manager_cgroup/cgroup.kill"'
+  assert_contains "$script_file" 'install_private_manager_cleanup'
+  assert_contains "$image_file" 'rootless-linux-lifecycle.sh'
   assert_contains "$script_file" 'systemd-run --user --scope --collect --quiet'
   assert_contains "$script_file" '--expand-environment=no'
   assert_contains "$script_file" "--property='Delegate=cpu memory pids'"
@@ -2817,6 +2828,149 @@ EOF
   [ ! -e "$lease_dir" ] || fail "expected foreground runtime lease cleanup"
 )
 
+test_launcher_cleanup_preserves_status() (
+  set -euo pipefail
+  local fixture expected status
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  for expected in 0 23 130; do
+    mkdir -p "$fixture/guard" "$fixture/identity" "$fixture/helper"
+    set +e
+    bash -c '
+      set -eu
+      eval "$(sed -n '\''/^cleanup() {/,/^trap cleanup EXIT/p'\'' "$1/bin/agent")"
+      cleanup_runtime_lease() { return 1; }
+      PATH_GUARD_HOST_DIR="$2/guard"
+      RUNTIME_IDENTITY_HOST_DIR="$2/identity"
+      HELPER_STATE_DIR="$2/helper"
+      CODEX_AUTH_PLACEHOLDER="" TMP_DIR="" LOGIN_STATE_DIR=""
+      exit "$3"
+    ' test-cleanup "$REPO_ROOT" "$fixture" "$expected"
+    status=$?
+    set -e
+    [ "$status" = "$expected" ] || fail "cleanup replaced agent exit status"
+    [ ! -e "$fixture/guard" ] && [ ! -e "$fixture/identity" ] && [ ! -e "$fixture/helper" ] \
+      || fail "lease cleanup failure skipped independent resources"
+  done
+)
+
+test_codex_native_resolution() (
+  set -euo pipefail
+  local fixture arch target package resolved
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  arch="$(bun -p process.arch)"
+  case "$arch" in
+    x64) target=x86_64-unknown-linux-musl; package=codex-linux-x64 ;;
+    arm64) target=aarch64-unknown-linux-musl; package=codex-linux-arm64 ;;
+    *) fail "unsupported test architecture" ;;
+  esac
+  mkdir -p "$fixture/node_modules/@openai/codex"
+  printf '{}\n' > "$fixture/node_modules/@openai/codex/package.json"
+  resolved="$(bun "$REPO_ROOT/scripts/image/codex-native-path.cjs" "$fixture/node_modules/@openai/codex/package.json")"
+  [ "$resolved" = "$fixture/node_modules/@openai/codex/vendor/$target/bin/codex" ] || fail "bundled native path mismatch"
+  mkdir -p "$fixture/node_modules/@openai/$package"
+  printf '{}\n' > "$fixture/node_modules/@openai/$package/package.json"
+  resolved="$(bun "$REPO_ROOT/scripts/image/codex-native-path.cjs" "$fixture/node_modules/@openai/codex/package.json")"
+  [ "$resolved" = "$fixture/node_modules/@openai/$package/vendor/$target/bin/codex" ] || fail "optional platform path mismatch"
+  assert_contains "$(cat "$REPO_ROOT/nix/image.nix")" 'exec "$native_codex" "$@"'
+)
+
+test_sandbox_temporary_storage() (
+  set -euo pipefail
+  local fixture first second first_lease output
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  CACHE_DIR="$fixture/cache with spaces"
+  mkdir -p "$CACHE_DIR/runtime-leases/sandbox-first" "$CACHE_DIR/runtime-leases/sandbox-second" "$fixture/outside"
+  RUNTIME_LEASE_DIR="$CACHE_DIR/runtime-leases/sandbox-first"
+  first_lease="$RUNTIME_LEASE_DIR"
+  prepare_sandbox_tmp
+  first="$SANDBOX_TMP_DIR"
+  [ "$(stat -c %a "$first")" = 1777 ] || fail "expected sticky writable temporary directory"
+  [ "$(stat -c %a "${first%/data}")" = 700 ] || fail "expected private host parent"
+  printf 'keep\n' > "$fixture/outside/sentinel"
+  mkdir -p "$first/readonly/nested"
+  printf 'materialized\n' > "$first/readonly/nested/file"
+  ln "$fixture/outside/sentinel" "$first/readonly/nested/hardlink"
+  chmod 0444 "$fixture/outside/sentinel"
+  chmod 0555 "$first/readonly" "$first/readonly/nested"
+  ln -s "$fixture/outside" "$first/external-link"
+  RUNTIME_LEASE_DIR="$CACHE_DIR/runtime-leases/sandbox-second"
+  prepare_sandbox_tmp
+  second="$SANDBOX_TMP_DIR"
+  [ "$first" != "$second" ] || fail "expected isolated temporary directories"
+  remove_runtime_lease "$first_lease"
+  [ ! -e "$first" ] || fail "expected temporary storage cleanup"
+  [ -d "$second" ] || fail "cleanup removed another sandbox's storage"
+  [ -f "$fixture/outside/sentinel" ] || fail "cleanup followed a sandbox symlink"
+  [ "$(stat -c %a "$fixture/outside/sentinel")" = 444 ] || fail "cleanup changed external file permissions"
+
+  runtime_lease_bound_container_exists() { return 2; }
+  cleanup_runtime_lease
+  [ -d "$second" ] || fail "unknown runtime state must retain temporary storage"
+  runtime_lease_bound_container_exists() { return 1; }
+  cleanup_runtime_lease
+  [ ! -e "$second" ] || fail "confirmed absence must remove temporary storage"
+
+  mkdir -p "$RUNTIME_LEASE_DIR"
+  prepare_sandbox_tmp
+  prune_stale_runtime_leases
+  [ ! -e "$second" ] || fail "stale lease pruning must remove temporary storage"
+
+  mkdir -p "$first_lease"
+  RUNTIME_LEASE_DIR="$first_lease"
+  ln -s "$fixture/outside" "$(sandbox_tmp_parent "$first_lease")"
+  if prepare_sandbox_tmp; then fail "expected symlinked temporary storage rejection"; fi
+  if remove_runtime_lease "$first_lease"; then fail "expected symlinked cleanup rejection"; fi
+  [ -f "$fixture/outside/sentinel" ] || fail "symlink rejection changed external files"
+  if sandbox_tmp_parent "$CACHE_DIR/runtime-leases/../outside"; then fail "expected traversal rejection"; fi
+
+  output="$(base_container_args_for 0 rootless-linux)"
+  assert_contains "$output" ':/tmp:rw,exec,nosuid,nodev'
+  assert_not_contains "$output" '/tmp:rw,exec,nosuid,nodev,size=512m'
+  output="$(remote_base_container_args_for)"
+  assert_contains "$output" ':/tmp:rw,exec,nosuid,nodev'
+  output="$(base_container_args_for 0 default docker)"
+  assert_contains "$output" '/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777'
+)
+
+test_remote_down_retains_tmp_until_teardown() (
+  set -euo pipefail
+  local fixture status output
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  source "$REPO_ROOT/bin/lib/remote.sh"
+  CACHE_DIR="$fixture/cache"
+  REMOTE_STATE_DIR="$CACHE_DIR/remote/test"
+  RUNTIME_LEASE_DIR="$REMOTE_STATE_DIR/runtime-lease"
+  REMOTE_NAME="test"
+  REMOTE_RUNTIME_CONTAINER="agent-test-runtime"
+  REMOTE_TS_CONTAINER="agent-test-ts"
+  REMOTE_DELETE_STATE=0
+  mkdir -p "$RUNTIME_LEASE_DIR"
+  prepare_sandbox_tmp
+  remote_bootstrap_light() { :; }
+  remote_uses_pod() { return 1; }
+  podman_runtime_cmd() {
+    case "$1" in
+      rm) return 125 ;;
+      container) return "$status" ;;
+      *) fail "unexpected Podman command" ;;
+    esac
+  }
+  for status in 0 125; do
+    if output="$(remote_run_down 2>&1)"; then fail "expected unconfirmed teardown to fail"; fi
+    [ -d "$SANDBOX_TMP_DIR" ] || fail "unconfirmed remote teardown removed temporary storage"
+    assert_contains "$output" 'retaining runtime lease and temporary storage'
+  done
+  status=1
+  remote_run_down
+  [ ! -e "$SANDBOX_TMP_DIR" ] || fail "confirmed remote teardown must remove temporary storage"
+)
+
 test_foreground_runtime_lease_follows_bound_container() (
   set -euo pipefail
 
@@ -2851,6 +3005,9 @@ EOF
   export FAKE_CONTAINER_STATE_FILE
 
   prepare_runtime_lease
+  prepare_sandbox_tmp
+  local sandbox_tmp="$SANDBOX_TMP_DIR"
+  printf 'temporary data\n' > "$sandbox_tmp/test-file"
   lease_dir="$RUNTIME_LEASE_DIR"
   bind_runtime_lease_to_container podman rootless-linux agent-lease-test
   prepare_runtime_lease_guard
@@ -2858,6 +3015,7 @@ EOF
   [ -f "$lease_dir/guard.pid" ] || fail "expected runtime lease guard pid"
 
   cleanup_runtime_lease
+  [ -f "$sandbox_tmp/test-file" ] || fail "expected live container to retain temporary storage"
   [ -d "$lease_dir" ] || fail "expected live container to retain foreground lease"
 
   {
@@ -2874,6 +3032,7 @@ EOF
     guard_wait=$((guard_wait + 1))
   done
   [ ! -e "$lease_dir" ] || fail "expected confirmed container teardown to release lease"
+  [ ! -e "$sandbox_tmp" ] || fail "expected confirmed teardown to remove temporary storage"
 )
 
 test_remote_runtime_lease_persists_until_explicit_removal() (
@@ -2895,12 +3054,16 @@ test_remote_runtime_lease_persists_until_explicit_removal() (
   REMOTE_NAME="test-remote"
   REMOTE_STATE_DIR="$CACHE_DIR/remote/$REMOTE_NAME"
   prepare_runtime_lease
+  prepare_sandbox_tmp
+  local sandbox_tmp="$SANDBOX_TMP_DIR"
   lease_dir="$RUNTIME_LEASE_DIR"
 
   cleanup_runtime_lease
   [ -d "$lease_dir" ] || fail "expected remote lease to survive launcher exit"
+  [ -d "$sandbox_tmp" ] || fail "expected remote temporary storage to survive launcher exit"
   remove_runtime_lease "$lease_dir"
   [ ! -e "$lease_dir" ] || fail "expected remote lease removal at remote teardown"
+  [ ! -e "$sandbox_tmp" ] || fail "expected remote teardown to remove temporary storage"
 )
 
 test_need_helper_lifetime_follows_runtime_lease() (
@@ -3964,6 +4127,7 @@ run_test() {
 }
 
 main() {
+  run_test "rootless manager shutdown lifecycle" bash "$REPO_ROOT/tests/rootless-linux-lifecycle.sh"
   run_test "project config parsing and environment forwarding" bash "$REPO_ROOT/tests/project-config.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
@@ -4050,6 +4214,10 @@ main() {
   run_test "rootless linux session contract" test_rootless_linux_session_contract
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
+  run_test "sandbox temporary storage" test_sandbox_temporary_storage
+  run_test "launcher cleanup preserves status" test_launcher_cleanup_preserves_status
+  run_test "Codex native executable resolution" test_codex_native_resolution
+  run_test "remote temporary storage requires confirmed teardown" test_remote_down_retains_tmp_until_teardown
   run_test "foreground runtime lease follows bound container" test_foreground_runtime_lease_follows_bound_container
   run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
   run_test "need helper lifetime follows runtime lease" test_need_helper_lifetime_follows_runtime_lease

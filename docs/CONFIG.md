@@ -82,6 +82,35 @@ the selected init fails during container creation.
 | `AGENT_HELPER_TMPDIR` | `$AGENT_CACHE_DIR/tmp` | Temp directory for helper runs |
 | `AGENT_DEBUG` | `0` | Print resolved paths and execution details with container environment values redacted |
 
+### Temporary storage
+
+Inside a newly launched Podman sandbox, run `df -h /tmp` to see the capacity
+of the host cache filesystem. `/tmp` is a private, disk-backed bind mount under
+`$AGENT_CACHE_DIR/tmp/sandboxes/` (normally
+`~/.cache/agent-sandbox/tmp/sandboxes/`), not the project's `.tmp` directory.
+Each foreground sandbox gets its own directory; a named remote sandbox keeps
+its directory until remote teardown. The mounted directory has mode `1777`
+and uses `exec,nosuid,nodev` mount options.
+
+There is no separate 512 MiB ceiling: available space and filesystem quotas on
+the cache filesystem apply. Choose a disk-backed cache filesystem that permits
+execution; placing the cache on tmpfs still consumes memory. Disk-backed files
+can also use memory through the kernel's page cache, so this is not an OOM fix.
+An explicit `TMPDIR` override still directs applications elsewhere.
+
+Temporary storage follows the runtime lease: it is removed after confirmed
+container teardown, retained if the runtime cannot confirm teardown, and retried
+by foreground stale-lease pruning on later launches. Cleanup restores owner
+access on temporary directories without changing file permissions or following
+symlinks. Ownership or filesystem errors may still prevent removal; failures
+retain the lease and warn without replacing the agent's exit status or skipping
+other launcher cleanup. No project temporary files are migrated or
+deleted. These changes apply to new sandboxes only.
+
+Docker retains its 512 MiB tmpfs because its bind-mount interface does not expose
+the equivalent per-mount security flags. `AGENT_HELPER_TMPDIR` controls helper
+temporary files, not the sandbox's `/tmp`.
+
 ## Remote Sandboxes
 
 Remote mode is documented in [REMOTE.md](REMOTE.md). It creates one durable
@@ -113,13 +142,20 @@ Podman pod per worktree and exposes the sandbox through a Tailscale sidecar.
 
 ### Rootless Linux Profile
 
-Use `AGENT_SANDBOX_PROFILE=rootless-linux` for workloads that require a real
-unprivileged user service manager and delegated cgroup-v2 controls without any
-privileged launcher.
+Use `AGENT_SANDBOX_PROFILE=rootless-linux` for unprivileged workloads that use
+inherited cgroup-v2 delegation. A private container-local `systemd --user`
+manager starts the agent in a delegated scope; the profile does not provide
+a complete user-session bus or a supported transient-service workflow with
+stdio forwarding.
+
+Use inherited delegation for local execution. Keep full service/acquisition
+conformance gates on a separate disposable CI host provisioned for that workflow.
+A passing inherited-delegation test does not qualify service acquisition,
+including acquisition from a transport service with insufficient delegation.
 
 The host contract is deliberately strict:
 
-- Linux with unified cgroup v2
+- Linux with unified cgroup v2 and writable `cgroup.kill` in the private manager subtree
 - a non-root launcher user
 - an active `systemd --user` manager and owned `XDG_RUNTIME_DIR`
 - delegated `cpu`, `memory`, and `pids` controllers
@@ -143,6 +179,29 @@ Podman's exact default `/proc` cover-mount paths are also unmasked so Linux's
 `mount_too_revealing()` guard permits a nested user/PID namespace to mount its
 own procfs. The list is explicit rather than `/proc/*` or `unmask=ALL`, and the
 container still receives a private PID namespace—not a host `/proc` bind.
+
+Before launching the agent, the entrypoint checks that `basic.target`,
+`exit.target`, `systemd-exit.service`, and `shutdown.target` are readable in
+the immutable user-unit directory and load successfully in the private manager.
+Missing shutdown units fail startup instead of leaving an unusable exit path.
+
+Codex launches its native executable directly, without a persistent Bun wrapper.
+The supervisor waits using an interruptible shell wait with stdin preserved;
+SIGINT, SIGTERM, or SIGHUP can start teardown even if the agent is stuck.
+After the agent exits, its status is preserved while the private manager gets
+a five-second shutdown grace period. A failed shutdown request or an expired
+deadline triggers `cgroup.kill` on that manager's subtree, including remaining
+descendants. The entrypoint retains a descriptor for this exact subtree; it
+does not kill host user units or unrelated PIDs. PID 1 and the supervisor live
+in a sibling cgroup. Repeated Ctrl+C does not restart cleanup. After one more
+second, any still-populated subtree is reported and left to container teardown,
+without an unbounded process wait.
+
+If shutdown reports missing units, start a new sandbox using the updated
+launcher/runtime; existing sessions keep their original entrypoint. An OOM
+message is a separate memory-pressure diagnostic, not proof that Codex was
+the killed process. These shutdown safeguards do not change memory limits.
+
 The user namespace maps only the invoking host user to its normal container
 UID/GID; container UID/GID 0 remain unmapped. This preserves host-user
 ownership of the delegated cgroup instead of asking the OCI runtime to assign
@@ -159,6 +218,14 @@ message bus. `AGENT_DELEGATED_CGROUP` identifies the empty parent as bounded
 informational metadata; it grants no authority beyond the cgroup filesystem's
 existing ownership. The host user bus and manager sockets are never mounted
 into the container.
+
+In particular, `systemd-run --user --wait --collect --pipe --service-type=exec`
+is outside the supported profile contract. The profile does not provision a
+session-bus broker at `$XDG_RUNTIME_DIR/bus`; successful `systemctl --user`
+queries through `$XDG_RUNTIME_DIR/systemd/private` do not establish support for
+that service path. Setting `DBUS_SESSION_BUS_ADDRESS` to the private manager
+socket is not a supported workaround. Substituting a scope for a service also
+does not qualify service/acquisition conformance coverage.
 
 The image supplies upstream Bubblewrap 0.12.0. Before the agent starts, the
 private session verifies zero effective capabilities, writable delegated CPU,

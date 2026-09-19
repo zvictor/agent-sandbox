@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source /bin/agent-rootless-linux-lifecycle
+
 fail() {
   echo "[agent] rootless-linux session unavailable: $*" >&2
   exit 1
@@ -87,7 +89,7 @@ tool="${AGENT_ROOTLESS_LINUX_TOOL:-}"
 [ -d "$XDG_RUNTIME_DIR" ] && [ -r "$XDG_RUNTIME_DIR" ] && [ -w "$XDG_RUNTIME_DIR" ] && [ -x "$XDG_RUNTIME_DIR" ] \
   || fail "XDG_RUNTIME_DIR is not usable"
 
-for command_name in bwrap jq systemctl systemd-run; do
+for command_name in bwrap jq systemctl systemd-run timeout; do
   command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is not installed"
 done
 [ -x /lib/systemd/systemd ] || fail "the systemd user manager is not installed"
@@ -101,6 +103,7 @@ verify_runtime_lease
 export SYSTEMD_UNIT_PATH=/example/systemd/user
 export SYSTEMD_GENERATOR_PATH=
 export SYSTEMD_ENVIRONMENT_GENERATOR_PATH=
+verify_rootless_shutdown_unit_files || fail "the immutable shutdown unit set is incomplete"
 
 bwrap_version="$(bwrap --version 2>/dev/null | awk '{ print $NF; exit }')"
 case "$bwrap_version" in
@@ -150,28 +153,26 @@ session_suffix="$$"
 supervisor_cgroup="$cgroup_root/session-supervisor-$session_suffix"
 manager_cgroup="$cgroup_root/user-manager-$session_suffix"
 mkdir "$supervisor_cgroup" "$manager_cgroup"
+[ -w "$manager_cgroup/cgroup.kill" ] && [ -r "$manager_cgroup/cgroup.events" ] \
+  || fail "the private manager requires writable cgroup.kill and readable cgroup.events"
+exec {manager_kill_fd}> "$manager_cgroup/cgroup.kill" \
+  || fail "could not open the private manager cgroup kill boundary"
 
 # The OCI init and this bootstrap initially occupy the delegated cgroup root.
 # Move both into a sibling before enabling controllers for the private user
-# manager. The agent itself is started below as a delegated transient service.
+# manager. The agent itself is started below as a delegated transient scope.
 printf '1\n' > "$supervisor_cgroup/cgroup.procs"
 printf '%s\n' "$$" > "$supervisor_cgroup/cgroup.procs"
 printf '+cpu +memory +pids\n' > "$cgroup_root/cgroup.subtree_control"
 
 (
+  exec {manager_kill_fd}>&-
   printf '%s\n' "$BASHPID" > "$manager_cgroup/cgroup.procs"
   exec /lib/systemd/systemd --user --unit=basic.target
 ) &
 manager_pid=$!
 
-stop_manager() {
-  trap - EXIT
-  if kill -0 "$manager_pid" >/dev/null 2>&1; then
-    systemctl --user exit >/dev/null 2>&1 || kill "$manager_pid" >/dev/null 2>&1 || true
-    wait "$manager_pid" >/dev/null 2>&1 || true
-  fi
-}
-trap stop_manager EXIT
+install_private_manager_cleanup
 
 manager_ready=0
 for _ in $(seq 1 200); do
@@ -184,6 +185,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 [ "$manager_ready" = "1" ] || fail "the private systemd user manager did not become ready"
+verify_rootless_shutdown_units_loaded || fail "the private user manager cannot perform a normal shutdown"
 
 capability_probe='set -eu
 fail() {
@@ -244,7 +246,7 @@ case "${AGENT_ROOTLESS_LINUX_PROBE_ONLY:-0}" in
 esac
 
 set +e
-systemd-run --user --scope --collect --quiet \
+wait_for_agent systemd-run --user --scope --collect --quiet \
   --expand-environment=no \
   --property='Delegate=cpu memory pids' \
   --working-directory="$PWD" \
