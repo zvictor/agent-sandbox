@@ -224,6 +224,7 @@ it changes host auth/config and cache ownership semantics.
 Tool config mounts:
 - `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and seeds managed settings under `.agent-sandbox/codex/managed_config.toml`, mounted at `/etc/codex`
 - `opencode`: host config root to container `~/.config/opencode`
+- `antigravity`: host `~/.gemini` to container `~/.gemini`; the native `agy` binary is cached under `/cache/antigravity`
 - `claude`: host config root to container `~/.claude`
 - `omp`: host `~/.omp` to container `~/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together

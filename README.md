@@ -6,6 +6,7 @@ Supported tools:
 - `codex`
 - `claude`
 - `opencode`
+- `antigravity`
 - `codemachine`
 - `omp` (`oh-my-pi`)
 
@@ -21,7 +22,7 @@ The system provides two runtime artifacts, selected by backend:
 And multiple user-facing entry points:
 
 * **CLI wrapper**: `bin/agent` dispatcher that handles commands like `init`, `doctor`, `login`, `sessions`, and `run`
-* **Tool-specific shortcuts**: Direct executables for `codex`, `claude`, `opencode`, `codemachine`, and `omp`
+* **Tool-specific shortcuts**: Direct executables for `codex`, `claude`, `opencode`, `antigravity`, `codemachine`, and `omp`
 * **Nix flake packages**: Installable via `nix run github:zvictor/agent-sandbox#<tool>`
 
 # Why agent-sandbox exists
@@ -349,6 +350,7 @@ Tool-specific wrappers are also available:
 agent-sandbox.packages.${system}.codex
 agent-sandbox.packages.${system}.claude
 agent-sandbox.packages.${system}.opencode
+agent-sandbox.packages.${system}.antigravity
 agent-sandbox.packages.${system}.codemachine
 agent-sandbox.packages.${system}.omp
 ```
@@ -358,6 +360,7 @@ These shortcut wrappers apply tool-specific defaults where supported:
 - `codex` adds `--yolo`
 - `claude` adds `--dangerously-skip-permissions`
 - `opencode` sets `OPENCODE_PERMISSION=allow` if it is unset
+- `antigravity` adds `--dangerously-skip-permissions`, installs Google's native `agy` CLI on first use, and reuses its `/cache/antigravity` cache
 
 Use `agent` if you want the underlying tool invocation without those wrapper defaults.
 

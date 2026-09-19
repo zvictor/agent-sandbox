@@ -1,5 +1,5 @@
 {
-  description = "Reusable sandboxed agent runtime (codex/claude/opencode/codemachine/omp/commandcode)";
+  description = "Reusable sandboxed agent runtime (codex/claude/opencode/antigravity/codemachine/omp/commandcode)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -82,6 +82,7 @@
                 "$out/scripts/codex" \
                 "$out/scripts/claude" \
                 "$out/scripts/opencode" \
+                "$out/scripts/antigravity" \
                 "$out/scripts/codemachine" \
                 "$out/scripts/omp" \
                 "$out/scripts/commandcode" \
@@ -152,6 +153,7 @@
           codex = mkTool "codex";
           claude = mkTool "claude";
           opencode = mkTool "opencode";
+          antigravity = mkTool "antigravity";
           codemachine = mkTool "codemachine";
           omp = mkTool "omp";
           commandcode = mkTool "commandcode";
@@ -175,6 +177,7 @@
           codex = mkApp "${p.codex}/bin/codex";
           claude = mkApp "${p.claude}/bin/claude";
           opencode = mkApp "${p.opencode}/bin/opencode";
+          antigravity = mkApp "${p.antigravity}/bin/antigravity";
           codemachine = mkApp "${p.codemachine}/bin/codemachine";
           omp = mkApp "${p.omp}/bin/omp";
           commandcode = mkApp "${p.commandcode}/bin/commandcode";

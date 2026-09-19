@@ -13,7 +13,7 @@ trim_whitespace() {
 
 is_project_config_key_allowed() {
   case "$1" in
-    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|COMMANDCODE_*|OMP_*|PI_*|CCHV_*|TESTCONTAINERS_*|OPENAI_*|ANTHROPIC_*)
+    AGENT_*|CODEX_*|CLAUDE_*|OPENCODE_*|ANTIGRAVITY_*|AGY_*|GEMINI_*|COMMANDCODE_*|OMP_*|PI_*|CCHV_*|TESTCONTAINERS_*|OPENAI_*|ANTHROPIC_*)
       return 0
       ;;
     *)
@@ -565,6 +565,10 @@ resolve_effective_tools_list() {
     inferred_tools="${inferred_tools:+$inferred_tools }opencode"
   elif [ -n "${OPENCODE_AUTH:-}" ] || [ -d "${OPENCODE_AUTH_BASE:-}" ]; then
     inferred_tools="${inferred_tools:+$inferred_tools }opencode"
+  fi
+
+  if [ -d "$ANTIGRAVITY_HOST_CONFIG" ] || [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${ANTIGRAVITY_CONFIG:-}" ]; then
+    inferred_tools="${inferred_tools:+$inferred_tools }antigravity"
   fi
 
   if [ -d "$OMP_HOST_CONFIG" ]; then

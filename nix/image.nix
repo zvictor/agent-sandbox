@@ -87,6 +87,9 @@ let
       bin = "opencode";
       latest = true;
     };
+    antigravity = {
+      installer = true;
+    };
     claude = {
       pkg = "@anthropic-ai/claude-code";
       bin = "claude";
@@ -174,7 +177,7 @@ let
   sudoConfig = pkgs.runCommand "agent-sudo-config" { } ''
     mkdir -p "$out/etc/sudoers.d"
     cat > "$out/etc/sudoers" <<'EOF'
-Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* OMP_* PI_* COMMANDCODE_*"
+Defaults env_keep += "HOME XDG_CACHE_HOME TOOL_CACHE CODEX_CACHE AGENT_* CODEX_* CLAUDE_* OPENCODE_* ANTIGRAVITY_* AGY_* GEMINI_* OMP_* PI_* COMMANDCODE_*"
 ALL ALL=(ALL:ALL) NOPASSWD:SETENV: ALL
 EOF
     cp "$out/etc/sudoers" "$out/etc/sudoers.d/agent-sandbox"
@@ -238,14 +241,31 @@ EOF
   mkBunToolLauncher =
     {
       name,
-      pkg,
+      pkg ? "",
       bin ? name,
       latest ? false,
+      installer ? false,
     }:
-    let
-      latestFlag = if latest then "1" else "0";
-    in
-    pkgs.writeShellScriptBin name ''
+    if installer then
+      pkgs.writeShellScriptBin name ''
+        # Antigravity is distributed as a native binary, not an npm package.
+        # Google's installer verifies the signed release manifest checksum.
+        # Keep the result in the shared per-tool cache for reuse and updates.
+        set -euo pipefail
+
+        CACHE_DIR="''${TOOL_CACHE:-/cache}/${name}"
+        INSTALL_DIR="$CACHE_DIR/bin"
+        mkdir -p "$INSTALL_DIR"
+        if [ ! -x "$INSTALL_DIR/agy" ]; then
+          curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir "$INSTALL_DIR"
+        fi
+        exec "$INSTALL_DIR/agy" "$@"
+      ''
+    else
+      let
+        latestFlag = if latest then "1" else "0";
+      in
+      pkgs.writeShellScriptBin name ''
       #!/bin/sh
       set -euo pipefail
 
@@ -334,7 +354,7 @@ EOF
       fi
 
       exec ${pkgs.bun}/bin/bun "$bin_path" "$@"
-    '';
+      '';
 
   toolsWithName = builtins.mapAttrs (name: tool: tool // { inherit name; }) tools;
   toolLaunchers = builtins.attrValues (builtins.mapAttrs (_: tool: mkBunToolLauncher tool) toolsWithName);
@@ -379,6 +399,8 @@ EOF
       pkgs.tmux
       pkgs.curl
       pkgs.wget
+      pkgs.gnutar
+      pkgs.gzip
       pkgs.jq
       pkgs.fx
       pkgs.bun

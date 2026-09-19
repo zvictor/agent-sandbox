@@ -555,6 +555,10 @@ mount_standard_engine() {
         "OPENCODE_CONFIG_DIR=/cache/.config/opencode" \
         "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "opencode.json"
       ;;
+    antigravity)
+      mount_engine "antigravity" "host" "$ANTIGRAVITY_HOST_CONFIG" "/cache/.gemini" \
+        "" "" "" ""
+      ;;
     claude)
       mount_engine "claude" "$CLAUDE_CONFIG_MODE" "$CLAUDE_HOST_CONFIG" "/cache/.claude" \
         "CLAUDE_CONFIG_DIR=/cache/.claude" \
@@ -577,7 +581,7 @@ mount_standard_engine() {
 
 mount_tool_configs() {
   case "$TOOL" in
-    codex | opencode | claude | omp | commandcode)
+    codex | opencode | claude | antigravity | omp | commandcode)
       mount_standard_engine "$TOOL"
       ;;
     codemachine)
@@ -1609,7 +1613,7 @@ append_passthrough_env_args() {
   if remote_container_mode && [ "${AGENT_REMOTE_ALLOW_HOST_ENV:-0}" != "1" ]; then
     DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED'
   else
-    DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nCOMMANDCODE_\nOMP_\nPI_\nAGENT_'
+    DEFAULT_PASS_ENV_PREFIXES=$'DEPLOYMENT_STAGE\nDEBUG\nTESTCONTAINERS_HOST_OVERRIDE\nTESTCONTAINERS_RYUK_DISABLED\nOPENAI_\nANTHROPIC_\nOPENCODE_\nCLAUDE_\nCODEX_\nANTIGRAVITY_\nAGY_\nGEMINI_\nCOMMANDCODE_\nOMP_\nPI_\nAGENT_'
   fi
   PASS_ENV_PREFIXES="${AGENT_PASS_ENV_PREFIXES:-$DEFAULT_PASS_ENV_PREFIXES}"
 
@@ -1666,8 +1670,11 @@ resolve_tool_config_roots() {
 
   CODEX_CONFIG_DEFAULT_HOST="$HOST_HOME/.codex"
   OPENCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.config/opencode"
+  ANTIGRAVITY_CONFIG_DEFAULT_HOST="$HOST_HOME/.gemini"
   CLAUDE_CONFIG_DEFAULT_HOST="$HOST_HOME/.claude"
   COMMANDCODE_CONFIG_DEFAULT_HOST="$HOST_HOME/.commandcode"
+
+  ANTIGRAVITY_HOST_CONFIG="$ANTIGRAVITY_CONFIG_DEFAULT_HOST"
 
   CODEX_CONFIG_PROJECT_PATH="$PROJECT_ROOT/.codex"
   CODEX_CONFIG_LEGACY_PROJECT_PATH="$CACHE_DIR/project-config/codex/$(runtime_path_scope_key "$PROJECT_ROOT")"
