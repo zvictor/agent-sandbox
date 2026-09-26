@@ -39,7 +39,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | Variable | Default | Allowed values | Effect |
 | --- | --- | --- | --- |
 | `AGENT_SANDBOX_PROFILE` | `default` | `default`, `rootless-linux`, `firecracker-host` | Selects the sandbox capability profile |
-| `AGENT_PERMISSION_POLICY` | Automatic from tool controls, then profile | `container`, `native` | Optional override of shared tool permission handling; see [Agent permission policy](#agent-permission-policy) |
+| `AGENT_PERMISSION_POLICY` | Automatic from tool controls, otherwise `container` | `container`, `native` | Optional override of shared tool permission handling; see [Agent permission policy](#agent-permission-policy) |
 | `AGENT_RUNTIME` | auto-detect | `podman`, `docker` | Selects the outer runtime |
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
@@ -79,22 +79,32 @@ agent codex --sandbox read-only --ask-for-approval never
 agent claude --permission-mode default
 ```
 
-The first two commands select container-managed permissions on a standard profile. The remaining commands preserve the tool's controls without injecting bypass flags. Workspace-write still requires compatible project metadata; protected symlinks cause an early error.
+The first two commands select container-managed permissions on every sandbox profile, including `rootless-linux`. The remaining commands preserve the tool's controls without injecting bypass flags. Workspace-write still requires compatible project metadata; protected symlinks cause an early error.
 
 Before creating the container, the launcher selects one shared policy in this order:
 
 1. An explicit `AGENT_PERMISSION_POLICY=container|native` from the environment or project config wins.
 2. An explicit complete bypass (`--yolo` or the supported tool equivalent) selects `container`, unless other controls require delegation. Contradictory bypass and restrictive CLI options fail.
 3. Other recognized permission controls select `native`, including Codex sandbox/approval options, permission or config profiles, permission-related `--config` overrides, Claude `--settings`, and an existing OpenCode `OPENCODE_PERMISSION` value. Opaque settings are delegated to the tool rather than parsed by agent-sandbox. Unrelated model or prompt options do not select a policy.
-4. Without explicit controls, standard and Firecracker profiles default to `container`; `rootless-linux` defaults to `native`.
+4. Without explicit controls, every sandbox profile defaults to `container`. Choosing `rootless-linux` changes runtime capabilities, not tool permission handling.
 
 This applies to shortcuts and direct `agent <tool>` launches. Remote sessions and child CLIs inherit the policy resolved when their container was created. A host CLI invoked outside agent-sandbox is not intercepted.
 
-For Antigravity, the host launcher supplies `--dangerously-skip-permissions` under container policy, so `./scripts/antigravity` and `agent antigravity` do not depend on the image wrapper to add it. Explicit native controls remain unchanged, and an existing bypass flag is not duplicated.
+For Codex and Antigravity, the host launcher supplies `--yolo` and `--dangerously-skip-permissions`, respectively, under container policy. Their shortcuts and direct launches do not depend on the image wrapper to add these flags. Explicit native controls remain unchanged, and an existing bypass flag is not duplicated. Resuming a conversation follows the same rules as starting one.
 
 `container` selects each tool's documented permissive launch mode. The outer runtime remains the isolation boundary. Explicit upstream deny rules and mandatory upstream policies may still apply; tools other than Codex can expose interactive mode switches. `native` means tool-managed permissions: it adds no bypass flags or permission environment overrides and preserves caller configuration and arguments, including a caller-supplied bypass. It neither requires restrictive settings nor enables a sandbox where the tool has none. Approval prompts and filesystem sandboxing are independent; `--ask-for-approval never` alone selects native handling, not full access. See [OpenAI's approval and sandbox documentation](https://learn.chatgpt.com/docs/agent-approvals-security).
 
 Use the environment variable only to override automatic selection or preserve existing tool configuration without specifying permission flags. For example, `AGENT_PERMISSION_POLICY=native agent codex` uses Codex's own configured defaults. An explicitly selected container policy rejects incompatible controls instead of overriding them. Changing tool permission handling never changes outer mounts, networking, or the sandbox profile.
+
+For example, these rootless launches need no permission-policy environment variable:
+
+```sh
+AGENT_SANDBOX_PROFILE=rootless-linux ./scripts/codex
+AGENT_SANDBOX_PROFILE=rootless-linux ./scripts/antigravity
+AGENT_SANDBOX_PROFILE=rootless-linux agent codex --sandbox read-only --ask-for-approval never
+```
+
+The first two use automatic bypass flags while keeping the rootless outer boundary. The third preserves Codex's inner read-only sandbox without approval prompts. Rootless preflight checks Bubblewrap capability; it does not wrap the whole agent in Bubblewrap. Codex `--yolo` disables Codex's inner sandbox, not the outer Podman container.
 
 | Tool | Container adapter |
 | --- | --- |
@@ -109,7 +119,7 @@ Policy is fixed for the lifetime of the container. Its resolved value is passed 
 
 Codex container policy requires version 0.138.0 or later. Its policy directory is regenerated for each launch under the runtime lease and mounted read-only at `/etc/codex`; model, hook, and other personal preferences remain in the normal user/project layers. The previous `.agent-sandbox/codex/managed_config.toml` copy is no longer loaded. Existing copies and legacy cache config remain available for recovery: move any settings unique to those files into a supported user or project config.
 
-`agent doctor`, `--verbose`, and `--json` report the configured/profile policy and its source; doctor without a tool invocation does not infer future CLI options. Native Codex workspace access is incompatible with protected workspace metadata symlinks such as `.codex -> ../.codex`. Explicit `--sandbox workspace-write` launches are rejected early for known symlinked project metadata; implicit policies selected in Codex config can still fail inside Codex. Native read-only mode can behave differently. Keep a real project `.codex/sessions` directory; container mode preserves supported shared `.codex` symlinks.
+`agent doctor`, `--verbose`, and `--json` report the configured/default policy and its source; doctor without a tool invocation does not infer future CLI options. Native Codex workspace access is incompatible with protected workspace metadata symlinks such as `.codex -> ../.codex`. Explicit `--sandbox workspace-write` launches are rejected early for known symlinked project metadata; implicit policies selected in Codex config can still fail inside Codex. Native read-only mode can behave differently. Keep a real project `.codex/sessions` directory; container mode preserves supported shared `.codex` symlinks.
 
 The PID-1 reaper is mandatory infrastructure, not a configuration option.
 Default, Firecracker, Docker, and remote launches use the engine's `--init`

@@ -47,9 +47,11 @@ phases under one foreground owner, or use the remote tmux-backed sandbox
 lifecycle when split-phase inspection is required.
 
 `AGENT_SANDBOX_PROFILE=rootless-linux` is a separate fail-fast capability
-profile for rootless cgroup/Bubblewrap proofs. Rootless Podman is launched in a
-host user-manager scope that delegates only cgroup control. The container gets
-a private cgroup namespace and a private container-local `systemd --user`
+profile for rootless cgroup/Bubblewrap proofs. It does not select native tool
+permissions or enable approval prompts. Bubblewrap is capability-tested at
+startup, not used as a permanent wrapper around the agent. Rootless Podman is
+launched in a host user-manager scope that delegates only cgroup control. The
+container gets a private cgroup namespace and a private container-local `systemd --user`
 manager; its transient scope is registered through the manager's private
 socket. The agent processes occupy a leaf below an empty, controller-enabled
 delegated parent, identified by the non-authoritative
@@ -102,7 +104,7 @@ The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` m
 
 ### 4. Tool launch defaults are centralized
 
-The launcher resolves a shared permission policy before creating the container. Explicit tool bypasses select `container`; other recognized permission controls select `native`. Without controls, standard container and Firecracker launches default to `container`; `rootless-linux` defaults to `native`. The optional `AGENT_PERMISSION_POLICY=container|native` override wins over automatic selection. Shortcuts delegate to the same launcher, and in-container tool adapters apply the resolved session policy to child CLIs:
+The launcher resolves a shared permission policy before creating the container. Explicit tool bypasses select `container`; other recognized permission controls select `native`. Without controls, every sandbox profile defaults to `container`, including `rootless-linux`. The optional `AGENT_PERMISSION_POLICY=container|native` override wins over automatic selection. Shortcuts delegate to the same launcher, and in-container tool adapters apply the resolved session policy to child CLIs:
 
 - Container Codex adds `--yolo` and constrains permission selection through generated requirements.
 - Container Claude and Antigravity add their documented permission bypass; Claude's Bash sandbox is disabled for the session.
@@ -232,6 +234,8 @@ For the current implementation, the runtime is best described like this:
 Native Codex has the richest built-in safety model of the tools here: approval policies, multiple sandbox modes, and explicit network policy support. In its safer native modes, Codex can be stricter than this repository because it can deny or escalate individual commands and can run with workspace-write or read-only semantics plus network controls.
 
 Container policy adds `--yolo`, making the outer container the primary guardrail. Fresh requirements constrain Codex permission selection to full access and approvals to `never`, preventing a later switch into an incompatible workspace sandbox. Native policy preserves Codex's own settings and controls.
+
+On `rootless-linux`, `--yolo` leaves the outer Podman isolation and delegated cgroups unchanged, but disables Codex's inner Bubblewrap sandbox. To keep the inner sandbox without prompts, explicitly request `--sandbox workspace-write --ask-for-approval never` (or `read-only`); these controls automatically select native handling. See [OpenAI's sandbox and approval documentation](https://learn.chatgpt.com/docs/agent-approvals-security). Workspace-write's protected-symlink restriction still applies.
 
 Verified with Codex 0.157.1: its Bubblewrap builder rejects a protected path such as `.codex` or `.agents` if it crosses a symlink inside a writable workspace. Binding the current symlink target does not solve this: the link could later be replaced. Shared `.codex` symlinks work in container policy; native workspace-write needs real protected metadata directories. Transcripts remain under `$PROJECT_ROOT/.codex/sessions`, including when that project directory resolves through a supported shared symlink. Doctor reports the incompatibility, and explicitly requested workspace-write launches fail early. No Bubblewrap security checks are removed.
 
