@@ -365,12 +365,14 @@ agent-sandbox.packages.${system}.omp
 
 These shortcut wrappers apply tool-specific defaults where supported:
 
-- `codex` adds `--yolo`
-- `claude` adds `--dangerously-skip-permissions`
-- `opencode` sets `OPENCODE_PERMISSION=allow` if it is unset
-- `antigravity` adds `--dangerously-skip-permissions`, installs Google's native `agy` CLI on first use, and reuses its `/cache/antigravity` cache
+- All shortcuts and direct launches share `AGENT_PERMISSION_POLICY=container|native`.
+- Standard profiles default to `container`: Codex, OMP, and Command Code use `--yolo`; Claude and Antigravity use their permission bypass; OpenCode receives a JSON allow override.
+- `rootless-linux` defaults to `native`, preserving caller permission controls. CodeMachine native mode is unsupported because its runners hardcode bypasses.
+- Antigravity installs Google's native `agy` CLI on first use and reuses its `/cache/antigravity` cache.
 
-Use `agent` if you want the underlying tool invocation without those wrapper defaults.
+Use `AGENT_PERMISSION_POLICY=native agent codex --sandbox workspace-write` to select native sandboxing. Protected metadata such as `.codex` must be real directories for Codex workspace-write; shared symlinks work with container policy. `agent doctor` reports the policy and symlink incompatibilities. See [permission policy](docs/CONFIG.md#agent-permission-policy) for adapters, conflicts, and upstream restrictions.
+
+Set `AGENT_PERMISSION_POLICY=native` to preserve the underlying tool's permission controls.
 
 ### One-off run
 
@@ -449,7 +451,7 @@ For `CODEX_CONFIG=project`, `agent sessions codex` treats the project session ro
 
 ## Tool Configuration Mounts
 
-The launcher mounts tool config directories into the container at the tools' normal home-relative locations. In `CODEX_CONFIG=project` mode, the host user's `~/.codex` is mounted as the Codex home at `/cache/.codex`, while the repository's `.codex` remains visible at its normal workspace path as the project configuration layer. The launcher overlays `$PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions` and points `CODEX_SQLITE_HOME` at the project `.codex`, so transcripts and their resume inventory keep project-local host paths without making the entire project `.codex` directory double as the user home. This means a user hook belongs in host `~/.codex/hooks.json`, a project hook belongs in `$PROJECT_ROOT/.codex/hooks.json`, and Codex discovers each layer once. Project hooks run only after the project is trusted. A launcher-managed settings layer lives in `.agent-sandbox/codex/managed_config.toml` and is mounted read-only at `/etc/codex`; on first use it is seeded from the temporary cache-backed project config, an existing project config, or the host config, in that order. Project launches also repair thread-inventory paths written by the short-lived absolute workspace-home layout, allowing those sessions to be forked as well as resumed.
+The launcher mounts tool config directories into the container at the tools' normal home-relative locations. In `CODEX_CONFIG=project` mode, the host user's `~/.codex` is mounted as the Codex home at `/cache/.codex`, while the repository's `.codex` remains visible at its normal workspace path as the project configuration layer. The launcher overlays `$PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions` and points `CODEX_SQLITE_HOME` at the project `.codex`, so transcripts and their resume inventory keep project-local host paths without making the entire project `.codex` directory double as the user home. This means a user hook belongs in host `~/.codex/hooks.json`, a project hook belongs in `$PROJECT_ROOT/.codex/hooks.json`, and Codex discovers each layer once. Project hooks run only after the project is trusted. A fresh launcher-owned policy directory under the runtime lease is mounted read-only at `/etc/codex`. It contains narrow runtime defaults and, in container permission mode, Codex requirements; user and project preferences stay in their normal layers. Old `.agent-sandbox/codex/managed_config.toml` copies are preserved but no longer loaded. Project launches also repair thread-inventory paths written by the short-lived absolute workspace-home layout, allowing those sessions to be forked as well as resumed.
 
 The project `.codex` can be a directory symlink, for example `main/.codex -> ../.codex` to share config and sessions across checkouts. The launcher mounts the target directory as needed, preserves the symlink, and keeps sessions at `$PROJECT_ROOT/.codex/sessions`. The project and user config directories must resolve to different directories. See [Tool Config Roots And Auth](docs/CONFIG.md#tool-config-roots-and-auth) for validation rules.
 

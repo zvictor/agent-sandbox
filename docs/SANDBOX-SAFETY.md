@@ -102,12 +102,14 @@ The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` m
 
 ### 4. Tool launch defaults are centralized
 
-The wrapper layer is opinionated about which native agent safety features stay enabled:
+`AGENT_PERMISSION_POLICY=container|native` selects one shared launch policy. Standard container and Firecracker launches default to `container`; `rootless-linux` defaults to `native`. Shortcuts delegate to the same launcher, and in-container tool adapters also apply to child CLIs:
 
-- `codex` shortcut wrappers add `--yolo`
-- `claude` shortcut wrappers add `--dangerously-skip-permissions`
-- `opencode` shortcut wrappers set `OPENCODE_PERMISSION=allow` if unset
-- `codemachine` and `omp` wrappers do not add an equivalent bypass flag today
+- Container Codex adds `--yolo` and constrains permission selection through generated requirements.
+- Container Claude and Antigravity add their documented permission bypass; Claude's Bash sandbox is disabled for the session.
+- Container OpenCode receives `OPENCODE_PERMISSION='{"*":"allow"}'`; OMP and Command Code add `--yolo`.
+- Native mode preserves caller controls without injecting bypasses. It does not promise OS sandboxing. CodeMachine native mode fails explicitly because its upstream runners hardcode bypasses.
+
+Upstream explicit deny rules and mandatory policies remain effective. Except for Codex's requirements, these adapters set startup behavior; they do not lock every interactive permission switch.
 
 See:
 
@@ -162,7 +164,7 @@ So this runtime is not equivalent to the built-in network restrictions offered b
 
 ### 3. Tool config mounts are writable
 
-For project-scoped `codex`, host `~/.codex` is the writable user home at `/cache/.codex`, the workspace's `.codex` remains the writable project layer, and `.agent-sandbox/codex` supplies the managed settings for later launches. A nested read-write mount maps the workspace's `.codex/sessions` onto `/cache/.codex/sessions`, preserving the project transcript path without mounting the whole project layer a second time. This exposes user-level Codex config, hooks, credentials, and non-session state to the sandbox; use a named `CODEX_AUTH` selector when the default user credential is too broad. Host, explicit, and fresh Codex roots, plus the `claude` and `opencode` roots, are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
+For project-scoped `codex`, host `~/.codex` is the writable user home at `/cache/.codex`, the workspace's `.codex` remains the writable project layer, and a fresh runtime-leased policy directory supplies the narrow settings and requirements at `/etc/codex`. A nested read-write mount maps the workspace's `.codex/sessions` onto `/cache/.codex/sessions`, preserving the project transcript path without mounting the whole project layer a second time. This exposes user-level Codex config, hooks, credentials, and non-session state to the sandbox; use a named `CODEX_AUTH` selector when the default user credential is too broad. Host, explicit, and fresh Codex roots, plus the `claude` and `opencode` roots, are mounted read-write. Optional `*_AUTH` selectors can also overlay a managed or explicit credential file onto the active auth path. For `omp`, the parent `.omp` tree is mounted read-write. For `codemachine`, the container receives all three of the Codex, OpenCode, and Claude config roots.
 
 This is convenient, but it means tokens, auth files, and tool settings are inside the blast radius of the agent.
 
@@ -227,7 +229,9 @@ For the current implementation, the runtime is best described like this:
 
 Native Codex has the richest built-in safety model of the tools here: approval policies, multiple sandbox modes, and explicit network policy support. In its safer native modes, Codex can be stricter than this repository because it can deny or escalate individual commands and can run with workspace-write or read-only semantics plus network controls.
 
-Our `codex` shortcut intentionally adds `--yolo`, which disables Codex's own approvals and sandbox. Once that flag is in play, our container becomes the primary guardrail. That is still better than running `codex --yolo` directly on the host, but it is less nuanced than Codex's native safety stack.
+Container policy adds `--yolo`, making the outer container the primary guardrail. Fresh requirements constrain Codex permission selection to full access and approvals to `never`, preventing a later switch into an incompatible workspace sandbox. Native policy preserves Codex's own settings and controls.
+
+Verified with Codex 0.157.1: its Bubblewrap builder rejects a protected path such as `.codex` or `.agents` if it crosses a symlink inside a writable workspace. Binding the current symlink target does not solve this: the link could later be replaced. Shared `.codex` symlinks work in container policy; native workspace-write needs real protected metadata directories. Transcripts remain under `$PROJECT_ROOT/.codex/sessions`, including when that project directory resolves through a supported shared symlink. Doctor reports the incompatibility, and explicitly requested workspace-write launches fail early. No Bubblewrap security checks are removed.
 
 Net effect:
 
@@ -238,7 +242,7 @@ Net effect:
 
 Native Claude Code has a meaningful permission model and optional Bash sandboxing. It can combine managed policies, local policies, and sandboxed command execution, which is more policy-rich than our outer container alone.
 
-Our `claude` shortcut adds `--dangerously-skip-permissions`, so the normal Claude approval loop is bypassed. At that point, our container is the main safety layer. Compared with direct host execution, that is still an improvement, but compared with Claude's own permission system plus sandbox support, our current runtime is weaker on fine-grained approvals and weaker on network isolation.
+Container policy adds `--dangerously-skip-permissions` and disables the Bash sandbox through session settings. Native policy preserves both permission and sandbox configuration. Explicit deny rules and mandatory managed settings can still restrict a container-policy launch.
 
 Net effect:
 
@@ -249,7 +253,7 @@ Net effect:
 
 OpenCode's native model is much lighter. It uses approval prompts and command policy, but it does not provide OS-level sandboxing. That means our container boundary adds a lot more real isolation than OpenCode normally has on its own.
 
-Our `opencode` shortcut sets `OPENCODE_PERMISSION=allow` if the caller did not already choose something else. That means the container boundary, not OpenCode's prompt system, is the main protection in shortcut mode.
+Container policy sets the valid JSON override `OPENCODE_PERMISSION='{"*":"allow"}'`; conflicting overrides require native policy. Native policy leaves OpenCode's permission environment and configuration unchanged.
 
 Net effect:
 
@@ -269,7 +273,7 @@ Net effect:
 
 ### pi-coding-agent / OMP
 
-The pi coding agent is the clearest case where external sandboxing matters. Its own model is intentionally extensible, and extensions can run arbitrary code with full system permissions. It does not rely on a built-in permission-popup safety model the way Codex, Claude, or OpenCode do.
+OMP provides tool approval tiers and explicit rules, but extensions can execute code with the process's access. Container policy starts OMP with `--yolo`; explicit tool/user prompt and deny rules can still apply. Native policy preserves its approval configuration. The outer container supplies OS isolation in either case.
 
 For this tool, our container is a substantial safety improvement. It is still not complete isolation, because the workspace, `.omp` data, network, and any mounted sockets remain in scope. But compared with running OMP directly on the host, the risk reduction is real and material.
 
@@ -285,7 +289,7 @@ This repository is mainly an external containment layer. Most of the tools it ru
 - native approval and sandbox policy inside the agent
 - little or no built-in sandboxing, with users expected to provide external isolation
 
-For `codex`, `claude`, and `opencode` shortcut wrappers, we intentionally lean toward the second model. We relax or bypass the agent's own prompts and depend on the outer container instead. That is a legitimate design choice for already-sandboxed agent execution, but it means the quality of the outer sandbox matters more than the agent's built-in guardrails.
+Container policy selects the second model across the supported tool adapters. Native policy preserves each tool's permission controls while retaining the outer container. The quality of the outer sandbox matters in both cases; native mode does not imply that every tool adds OS isolation.
 
 ## Operational Guidance
 

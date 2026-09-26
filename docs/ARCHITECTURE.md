@@ -213,15 +213,13 @@ uses `/bin/agent-remote-entrypoint` as the init child instead.
 There are two wrapper layers:
 
 1. Launcher wrappers:
-   - `agent <tool>` keeps the underlying tool invocation unchanged
-   - `codex`, `claude`, and `opencode` add tool-specific defaults
+   - `agent <tool>` resolves and validates `AGENT_PERMISSION_POLICY`
+   - Tool shortcuts delegate to that same launcher without adding bypasses
 2. Image wrappers:
+   - Tool launchers use the shared permission adapters, including when invoked by another agent
    - `need` and compatibility shims provide missing-tool expansion and stable `sh`/Nix behavior
 
-Current shortcut-wrapper defaults:
-- `codex`: adds `--yolo`
-- `claude`: adds `--dangerously-skip-permissions`
-- `opencode`: sets `OPENCODE_PERMISSION=allow` if unset
+The shared policy defaults to `container`, except on `rootless-linux`, which defaults to `native`. Container adapters select each tool's documented permissive launch mode. Native adapters preserve the caller's controls; CodeMachine rejects native mode because upstream hardcodes child bypasses. Codex gets freshly generated policy under the runtime lease, mounted read-only at `/etc/codex`, instead of a persistent copy of user preferences. Project transcript paths remain under `.codex/sessions`. See [configuration](CONFIG.md#agent-permission-policy) for the exact adapters and constraints.
 
 ## File Map By Concern
 
@@ -229,6 +227,7 @@ Current shortcut-wrapper defaults:
 | --- | --- |
 | CLI command parsing | [`bin/agent`](../bin/agent), [`bin/lib/cli.sh`](../bin/lib/cli.sh) |
 | runtime and project resolution | [`bin/lib/environment.sh`](../bin/lib/environment.sh) |
+| shared tool permission policy | [`bin/lib/permission_policy.sh`](../bin/lib/permission_policy.sh), [`tests/permission-policy.sh`](../tests/permission-policy.sh) |
 | PID 1 lifecycle and runtime arguments | [`bin/lib/container_runtime.sh`](../bin/lib/container_runtime.sh), [`tests/pid1-reaper-probe.sh`](../tests/pid1-reaper-probe.sh) |
 | package contract staging | [`bin/lib/project_contract.sh`](../bin/lib/project_contract.sh), [`nix/detect-packages.nix`](../nix/detect-packages.nix) |
 | build/load caching | [`bin/lib/artifact_prep.sh`](../bin/lib/artifact_prep.sh), [`bin/lib/rootfs.sh`](../bin/lib/rootfs.sh) |

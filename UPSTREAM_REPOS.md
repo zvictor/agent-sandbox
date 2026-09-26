@@ -10,5 +10,9 @@
 | Docker Engine | moby/moby | Docker runtime and daemon-managed init behavior |
 | Bubblewrap | containers/bubblewrap | Rootless sandbox behavior and release baseline |
 | Codex | openai/codex | Project config discovery, hook loading, and symlink behavior |
+| Claude Code | anthropics/claude-code | Permission bypass and child permission inheritance |
+| OpenCode | anomalyco/opencode | Permission configuration and environment overrides |
+| OMP | can1357/oh-my-pi | Tool approval modes and CLI bypass controls |
+| CodeMachine | moazbuilds/CodeMachine-CLI | Child CLI execution and hardcoded permission bypasses |
 | systemd | systemd/systemd | User-manager and cgroup-v2 delegation behavior |
 | Linux kernel | torvalds/linux | cgroup-v2 migration, delegation, and namespace behavior |

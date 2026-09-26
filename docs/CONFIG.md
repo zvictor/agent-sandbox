@@ -39,6 +39,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | Variable | Default | Allowed values | Effect |
 | --- | --- | --- | --- |
 | `AGENT_SANDBOX_PROFILE` | `default` | `default`, `rootless-linux`, `firecracker-host` | Selects the sandbox capability profile |
+| `AGENT_PERMISSION_POLICY` | `container`; `native` on `rootless-linux` | `container`, `native` | Selects shared tool permission handling; see [Agent permission policy](#agent-permission-policy) |
 | `AGENT_RUNTIME` | auto-detect | `podman`, `docker` | Selects the outer runtime |
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
@@ -65,6 +66,32 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell.nix` is pinned once under `AGENT_CACHE_DIR/project-contracts`. Its unpacked Nix store path is held by a project-scoped host GC root, and the pin is reused without a network check on later launches. Remove the exact pin file reported in the startup log to resolve the URL again. Locks created by older launchers without a retained store path must be removed once before reuse.
 
 ## Runtime Behavior
+
+### Agent permission policy
+
+`AGENT_PERMISSION_POLICY=container|native` applies to all supported tool launchers, including shortcuts, direct `agent <tool>` launches, remote Codex, and child CLIs started through the container's PATH. Standard and Firecracker profiles default to `container`; `rootless-linux` defaults to `native`. An explicit value overrides the profile default.
+
+`container` selects each tool's documented permissive launch mode. The outer runtime remains the isolation boundary. Explicit upstream deny rules and mandatory upstream policies may still apply; tools other than Codex can expose interactive mode switches. `native` adds no bypass flags or permission environment overrides and preserves caller settings. It does not enable a sandbox where the tool has none, or undo bypass flags the caller explicitly supplies.
+
+| Tool | Container adapter |
+| --- | --- |
+| Codex | `--yolo`, plus generated requirements restricting permission selection to `:danger-full-access` and approvals to `never` |
+| Claude | `--dangerously-skip-permissions` and session settings disabling its Bash sandbox |
+| OpenCode | `OPENCODE_PERMISSION='{"*":"allow"}'` |
+| Antigravity | `--dangerously-skip-permissions`; requesting its terminal sandbox conflicts with this policy |
+| OMP, Command Code | `--yolo`; upstream explicit restrictions remain effective |
+| CodeMachine | Child CLIs inherit the policy; native mode is unsupported because CodeMachine hardcodes bypass flags |
+
+Conflicting permission flags or OpenCode environment overrides fail with guidance to select `native`. For example:
+
+```sh
+AGENT_PERMISSION_POLICY=native agent codex --sandbox workspace-write --ask-for-approval on-request
+AGENT_PERMISSION_POLICY=native agent claude --permission-mode default
+```
+
+Codex container policy requires version 0.138.0 or later. Its policy directory is regenerated for each launch under the runtime lease and mounted read-only at `/etc/codex`; model, hook, and other personal preferences remain in the normal user/project layers. The previous `.agent-sandbox/codex/managed_config.toml` copy is no longer loaded. Existing copies and legacy cache config remain available for recovery: move any settings unique to those files into a supported user or project config.
+
+`agent doctor`, `--verbose`, and `--json` report the policy and its source. Native Codex workspace access is incompatible with protected workspace metadata symlinks such as `.codex -> ../.codex`. Explicit `--sandbox workspace-write` launches are rejected early for known symlinked project metadata; implicit policies selected in Codex config can still fail inside Codex. Native read-only mode can behave differently. Keep a real project `.codex/sessions` directory; container mode preserves supported shared `.codex` symlinks.
 
 The PID-1 reaper is mandatory infrastructure, not a configuration option.
 Default, Firecracker, Docker, and remote launches use the engine's `--init`
@@ -299,7 +326,7 @@ it changes host auth/config and cache ownership semantics.
 ## Tool Config Roots And Auth
 
 Tool config mounts:
-- `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and seeds managed settings under `.agent-sandbox/codex/managed_config.toml`, mounted at `/etc/codex`
+- `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and mounts freshly generated runtime policy at `/etc/codex` from the container's runtime lease
 - `opencode`: host config root to container `~/.config/opencode`
 - `antigravity`: host `~/.gemini` to container `~/.gemini`; the native `agy` binary is cached under `/cache/antigravity`
 - `claude`: host config root to container `~/.claude`
