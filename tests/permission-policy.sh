@@ -34,6 +34,38 @@ for tool in codex claude opencode antigravity omp commandcode; do
   AGENT_PERMISSION_POLICY=native apply_tool_permission_policy "$tool" --help
   [ "${#PERMISSION_TOOL_ARGS[@]}" = 1 ] || fail "$tool native changed args"
 done
+for spec in \
+  'codex --yolo' \
+  'codex --dangerously-bypass-approvals-and-sandbox' \
+  'codex --sandbox danger-full-access' \
+  'codex --sandbox=danger-full-access' \
+  'codex -a never' \
+  'claude --dangerously-skip-permissions' \
+  'claude --permission-mode bypassPermissions' \
+  'antigravity --dangerously-skip-permissions' \
+  'omp --yolo' \
+  'omp --auto-approve' \
+  'commandcode --yolo' \
+  'commandcode --dangerously-skip-permissions' \
+  'commandcode --permission-mode=yolo'; do
+  read -r -a bypass_args <<< "$spec"
+  if output="$(AGENT_PERMISSION_POLICY=native apply_tool_permission_policy "${bypass_args[@]}" 2>&1)"; then
+    fail "native accepted bypass: $spec"
+  fi
+  assert_contains "$output" 'conflicts with native permission policy'
+  assert_contains "$output" "AGENT_PERMISSION_POLICY=container agent ${bypass_args[0]}"
+done
+AGENT_PERMISSION_POLICY=native apply_tool_permission_policy claude -p --dangerously-skip-permissions
+AGENT_PERMISSION_POLICY=native apply_tool_permission_policy codex -- --yolo
+AGENT_PERMISSION_POLICY=native apply_tool_permission_policy codex -a on-request -s read-only
+unset AGENT_PERMISSION_POLICY
+SANDBOX_PROFILE=default
+apply_tool_permission_policy codex --yolo
+[ "$PERMISSION_POLICY" = container ] || fail "ordinary bypass launch needs explicit policy"
+[ "${#PERMISSION_TOOL_ARGS[@]}" = 1 ] || fail "ordinary bypass duplicated"
+SANDBOX_PROFILE=rootless-linux
+if apply_tool_permission_policy codex --yolo 2>/dev/null; then fail "profile-native accepted bypass"; fi
+AGENT_PERMISSION_POLICY=container
 OPENCODE_PERMISSION='{"bash":"ask"}'
 AGENT_PERMISSION_POLICY=native apply_tool_permission_policy opencode --help
 [ "$OPENCODE_PERMISSION" = '{"bash":"ask"}' ] || fail "native overwrote user permissions"

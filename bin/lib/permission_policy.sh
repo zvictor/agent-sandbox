@@ -24,6 +24,11 @@ permission_policy_conflict() {
   return 1
 }
 
+native_permission_policy_conflict() {
+  echo "[agent] ERROR: $1 permission bypass conflicts with native permission policy; remove the bypass option or launch with AGENT_PERMISSION_POLICY=container agent $1" >&2
+  return 1
+}
+
 codex_protected_symlink() {
   local root="${1:-${AGENT_PERMISSION_PROJECT_ROOT:-${PROJECT_ROOT:-$PWD}}}" name
   for name in .codex .agents .git; do
@@ -47,6 +52,10 @@ validate_tool_permission_args() {
     shift
     [ "$arg" != -- ] || break
     case "$tool:$arg" in
+      codex:--yolo|codex:--dangerously-bypass-approvals-and-sandbox|claude:--dangerously-skip-permissions|antigravity:--dangerously-skip-permissions|omp:--yolo|omp:--auto-approve|commandcode:--yolo|commandcode:--dangerously-skip-permissions)
+        [ "$PERMISSION_POLICY" != native ] || { native_permission_policy_conflict "$tool"; return 1; }
+        continue
+        ;;
       codex:-C|codex:--cd)
         permission_cwd="${1:-$permission_cwd}"
         [ "$#" -eq 0 ] || shift
@@ -90,8 +99,13 @@ validate_tool_permission_args() {
         codex:-s:danger-full-access|codex:--sandbox*:danger-full-access|codex:-a:never|codex:--ask-for-approval*:never|claude:--permission-mode*:bypassPermissions|commandcode:--permission-mode*:yolo) ;;
         *) permission_policy_conflict "$tool permission option" || return 1 ;;
       esac
-    elif [ "$tool" = codex ] && [ "$value" = workspace-write ]; then
-      workspace_write=1
+    else
+      case "$tool:$arg:$value" in
+        codex:-s:danger-full-access|codex:--sandbox*:danger-full-access|codex:-a:never|codex:--ask-for-approval*:never|claude:--permission-mode*:bypassPermissions|commandcode:--permission-mode*:yolo)
+          native_permission_policy_conflict "$tool" || return 1
+          ;;
+      esac
+      if [ "$tool" = codex ] && [ "$value" = workspace-write ]; then workspace_write=1; fi
     fi
   done
   if [ "$workspace_write" = 1 ] && [ -d "$permission_cwd" ]; then
