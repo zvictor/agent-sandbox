@@ -146,7 +146,7 @@ test_discovery_inheritance_and_reload() (
   assert_equal "$AGENT_TEST_SHARED" shared "discovered parent not loaded"
 )
 
-test_inheritance_failures() (
+test_inheritance_failures_and_explain() (
   local output
   unset AGENT_TEST_LOCAL
   printf 'AGENT_TEST_LOCAL=secret-one\nAGENT_TEST_LOCAL=secret-two\n' > "$AGENT_PROJECT_CONFIG_FILE"
@@ -159,6 +159,13 @@ test_inheritance_failures() (
   printf 'AGENT_CONFIG_EXTENDS=config.env\n' > "$AGENT_PROJECT_CONFIG_FILE"
   if output="$(load_project_config 2>&1)"; then fail "cycle accepted"; fi
   assert_contains "$output" 'inheritance cycle'
+  printf 'AGENT_TEST_LOCAL=file-secret\n' > "$AGENT_PROJECT_CONFIG_FILE"
+  output="$(AGENT_TEST_LOCAL=host-secret "$REPO_ROOT/bin/agent" config explain)"
+  assert_contains "$output" 'AGENT_TEST_LOCAL=REDACTED'
+  assert_contains "$output" 'process environment'
+  assert_contains "$output" "overrides $AGENT_PROJECT_CONFIG_FILE:1"
+  assert_not_contains "$output" file-secret
+  assert_not_contains "$output" host-secret
   AGENT_PROJECT_CONFIG_FILE="$config_test_dir/missing-explicit.env"
   if output="$(load_project_config 2>&1)"; then fail "missing explicit file accepted"; fi
   assert_contains "$output" 'config file not found'
@@ -314,7 +321,7 @@ for config_test in \
   test_quoted_values_and_line_endings \
   test_multiline_expansion_and_precedence \
   test_discovery_inheritance_and_reload \
-  test_inheritance_failures \
+  test_inheritance_failures_and_explain \
   test_config_errors_are_redacted \
   test_unsupported_blocks_are_consumed \
   test_extra_env_delimiters_and_values \

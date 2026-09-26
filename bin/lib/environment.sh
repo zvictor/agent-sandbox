@@ -242,6 +242,32 @@ load_project_config() {
   done
 }
 
+print_config_explain_and_exit() {
+  if [ "$#" -ne 1 ] || [ "$1" != explain ]; then
+    echo 'Usage: agent config explain' >&2
+    exit 1
+  fi
+  resolve_project_paths
+  load_project_config || exit 1
+  printf 'Launch directory: %s\nProject root: %s\nSelected config: %s\n' "$(pwd -P)" "$PROJECT_ROOT" "${PROJECT_CONFIG_FILE:-none}"
+  local file key
+  for file in "${PROJECT_CONFIG_FILES[@]}"; do printf 'Loaded: %s\n' "$file"; done
+  for key in "${!PROJECT_CONFIG_HOST[@]}"; do
+    is_project_config_key_allowed "$key" || continue
+    if ! [[ -v PROJECT_CONFIG_SOURCES[$key] ]]; then
+      PROJECT_CONFIG_VALUES[$key]="${PROJECT_CONFIG_HOST[$key]}"
+      PROJECT_CONFIG_SOURCES[$key]="process environment"
+    fi
+  done
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    printf '%s=REDACTED — %s\n' "$key" "${PROJECT_CONFIG_SOURCES[$key]}"
+    if [[ -v PROJECT_CONFIG_SHADOWED[$key] ]]; then
+      printf '  overrides %s\n' "${PROJECT_CONFIG_SHADOWED[$key]}"
+    fi
+  done < <(printf '%s\n' "${!PROJECT_CONFIG_VALUES[@]}" | LC_ALL=C sort)
+  exit 0
+}
 
 resolve_runtime() {
   if ! resolve_runtime_state; then

@@ -22,6 +22,7 @@ usage:
   agent login codex <name> [--no-use] [--config host|project|fresh|<path>] [-- <codex login args...>]
   agent init [--force] [--stdout]
   agent doctor [--verbose] [--json]
+  agent config explain
   agent help
 
 supported tools:

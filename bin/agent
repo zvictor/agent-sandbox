@@ -92,6 +92,10 @@ REMAINING_ARGS=()
 AGENT_COMMAND="run"
 if [ "$(basename "$0")" = "agent" ]; then
   case "${1:-}" in
+    config)
+      shift
+      print_config_explain_and_exit "$@"
+      ;;
     doctor)
       AGENT_COMMAND="doctor"
       shift
