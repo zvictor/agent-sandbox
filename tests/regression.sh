@@ -290,6 +290,37 @@ audio_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
+
+clipboard_args_for() (
+  set -euo pipefail
+
+  local test_wl_sock="${1:-}"
+  local test_x11_sock="${2:-}"
+  local test_xauth_file="${3:-}"
+  local test_display="${4:-:0}"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  resolve_wayland_socket() {
+    printf '%s\n' "$test_wl_sock"
+  }
+
+  resolve_x11_socket() {
+    printf '%s\n' "$test_x11_sock"
+  }
+
+  resolve_xauthority_file() {
+    printf '%s\n' "$test_xauth_file"
+  }
+
+  DISPLAY="$test_display"
+  Z_SUFFIX=""
+  ARGS=()
+  append_clipboard_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
 prepare_ssh_runtime_for() (
   set -euo pipefail
 
@@ -1486,6 +1517,49 @@ test_image_includes_audio_recorders() (
 
   assert_contains "$image_file" 'pkgs.alsa-utils'
   assert_contains "$image_file" 'pkgs.pipewire'
+)
+
+
+test_clipboard_forwarding_support() (
+  set -euo pipefail
+
+  local wl_sock="/tmp/test-wayland-0"
+  local x11_sock="/tmp/.X11-unix/X0"
+  local xauth_file="/tmp/test-Xauthority"
+  local output
+
+  output="$(clipboard_args_for "$wl_sock" "$x11_sock" "$xauth_file" ":0")"
+  assert_contains "$output" "$wl_sock:/run/host-services/test-wayland-0:rw"
+  assert_contains "$output" "WAYLAND_DISPLAY=/run/host-services/test-wayland-0"
+  assert_contains "$output" "XDG_RUNTIME_DIR=/run/host-services"
+  assert_contains "$output" "DISPLAY=:0"
+  assert_contains "$output" "$xauth_file:/run/host-services/Xauthority:ro"
+  assert_contains "$output" "XAUTHORITY=/run/host-services/Xauthority"
+
+  output="$(AGENT_DISABLE_CLIPBOARD=1 clipboard_args_for "$wl_sock" "$x11_sock" "$xauth_file" ":0")"
+  assert_not_contains "$output" "test-wayland-0"
+  assert_not_contains "$output" "Xauthority"
+  assert_not_contains "$output" "DISPLAY="
+
+  output="$(AGENT_REMOTE_CONTAINER_MODE=1 clipboard_args_for "$wl_sock" "$x11_sock" "$xauth_file" ":0")"
+  assert_not_contains "$output" "test-wayland-0"
+  assert_not_contains "$output" "DISPLAY="
+
+  output="$(AGENT_REMOTE_CONTAINER_MODE=1 AGENT_REMOTE_FORWARD_CLIPBOARD=1 clipboard_args_for "$wl_sock" "$x11_sock" "$xauth_file" ":0")"
+  assert_contains "$output" "$wl_sock:/run/host-services/test-wayland-0:rw"
+  assert_contains "$output" "WAYLAND_DISPLAY=/run/host-services/test-wayland-0"
+  assert_contains "$output" "XDG_RUNTIME_DIR=/run/host-services"
+)
+
+test_image_includes_clipboard_tools() (
+  set -euo pipefail
+
+  local image_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+
+  assert_contains "$image_file" 'pkgs.wl-clipboard'
+  assert_contains "$image_file" 'pkgs.xclip'
+  assert_contains "$image_file" 'pkgs.xsel'
 )
 
 test_remote_secrets_are_not_passthrough_env() (
@@ -4213,6 +4287,8 @@ main() {
   run_test "ssh agent mount support" test_ssh_agent_mount_support
   run_test "audio forwarding support" test_audio_forwarding_support
   run_test "image includes audio recorders" test_image_includes_audio_recorders
+  run_test "clipboard forwarding support" test_clipboard_forwarding_support
+  run_test "image includes clipboard tools" test_image_includes_clipboard_tools
   run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
   run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
   run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough

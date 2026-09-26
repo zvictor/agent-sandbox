@@ -984,6 +984,20 @@ sudo_enabled() {
     esac
   fi
 
+
+  if [ -n "${TERM:-}" ]; then
+    ARGS+=( -e "TERM=$TERM" )
+  fi
+  if [ -n "${COLORTERM:-}" ]; then
+    ARGS+=( -e "COLORTERM=$COLORTERM" )
+  fi
+  if [ -n "${TERM_PROGRAM:-}" ]; then
+    ARGS+=( -e "TERM_PROGRAM=$TERM_PROGRAM" )
+  fi
+  if [ -n "${TERM_PROGRAM_VERSION:-}" ]; then
+    ARGS+=( -e "TERM_PROGRAM_VERSION=$TERM_PROGRAM_VERSION" )
+  fi
+
   if rootless_linux_profile; then
     case "${AGENT_ALLOW_SUDO:-0}" in
       ""|0)
@@ -1431,6 +1445,7 @@ append_host_socket_args() {
 
   append_ssh_agent_args
   append_audio_args
+  append_clipboard_args
 }
 
 resolve_ssh_auth_socket() {
@@ -1555,6 +1570,118 @@ append_audio_args() {
 
   if [ -d /dev/snd ] && ! rootless_linux_profile; then
     ARGS+=( --device /dev/snd )
+  fi
+}
+
+
+resolve_wayland_socket() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local wayland_disp="${WAYLAND_DISPLAY:-}"
+  local sock_path=""
+
+  if [ -n "$wayland_disp" ]; then
+    case "$wayland_disp" in
+      /*)
+        sock_path="$wayland_disp"
+        ;;
+      *)
+        if [ -n "$runtime_dir" ] && [ -S "$runtime_dir/$wayland_disp" ]; then
+          sock_path="$runtime_dir/$wayland_disp"
+        fi
+        ;;
+    esac
+  elif [ -n "$runtime_dir" ] && [ -S "$runtime_dir/wayland-0" ]; then
+    sock_path="$runtime_dir/wayland-0"
+  fi
+
+  [ -n "$sock_path" ] || return 0
+  [ -S "$sock_path" ] || return 0
+
+  case "$sock_path" in
+    /*)
+      printf '%s\n' "$sock_path"
+      ;;
+    *)
+      local sock_dir=""
+      sock_dir="$(cd "$(dirname "$sock_path")" && pwd -P)"
+      printf '%s/%s\n' "$sock_dir" "$(basename "$sock_path")"
+      ;;
+  esac
+}
+
+resolve_x11_socket() {
+  local disp="${DISPLAY:-}"
+  local disp_num=""
+
+  [ -n "$disp" ] || return 0
+
+  disp_num="$(printf '%s\n' "$disp" | sed -E 's/.*:([0-9]+).*/\1/')"
+  [ -n "$disp_num" ] || return 0
+
+  local sock_path="/tmp/.X11-unix/X${disp_num}"
+  [ -S "$sock_path" ] || return 0
+
+  printf '%s\n' "$sock_path"
+}
+
+resolve_xauthority_file() {
+  local auth_file="${XAUTHORITY:-}"
+
+  if [ -n "$auth_file" ] && [ -f "$auth_file" ] && [ -r "$auth_file" ]; then
+    printf '%s\n' "$auth_file"
+    return 0
+  fi
+
+  if [ -f "$HOST_HOME/.Xauthority" ] && [ -r "$HOST_HOME/.Xauthority" ]; then
+    printf '%s\n' "$HOST_HOME/.Xauthority"
+    return 0
+  fi
+
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [ -n "$runtime_dir" ] && [ -f "$runtime_dir/.Xauthority" ] && [ -r "$runtime_dir/.Xauthority" ]; then
+    printf '%s\n' "$runtime_dir/.Xauthority"
+    return 0
+  fi
+
+  return 0
+}
+
+append_clipboard_args() {
+  local wayland_sock=""
+  local x11_sock=""
+  local xauth_file=""
+
+  if [ "${AGENT_DISABLE_CLIPBOARD:-0}" = "1" ]; then
+    return 0
+  fi
+
+  if remote_container_mode && [ "${AGENT_REMOTE_FORWARD_CLIPBOARD:-0}" != "1" ]; then
+    return 0
+  fi
+
+  wayland_sock="$(resolve_wayland_socket)"
+  if [ -n "$wayland_sock" ]; then
+    local sock_name
+    sock_name="$(basename "$wayland_sock")"
+    ARGS+=( -v "$wayland_sock:/run/host-services/$sock_name:rw${Z_SUFFIX}" )
+    ARGS+=( -e "WAYLAND_DISPLAY=/run/host-services/$sock_name" )
+    ARGS+=( -e "XDG_RUNTIME_DIR=/run/host-services" )
+  fi
+
+  x11_sock="$(resolve_x11_socket)"
+  if [ -n "$x11_sock" ]; then
+    if [ -d /tmp/.X11-unix ]; then
+      ARGS+=( -v "/tmp/.X11-unix:/tmp/.X11-unix:rw${Z_SUFFIX}" )
+    else
+      ARGS+=( -v "$x11_sock:$x11_sock:rw${Z_SUFFIX}" )
+    fi
+    ARGS+=( -e "DISPLAY=${DISPLAY}" )
+
+    xauth_file="$(resolve_xauthority_file)"
+    if [ -n "$xauth_file" ]; then
+      ARGS+=( -v "$xauth_file:/run/host-services/Xauthority:ro${Z_SUFFIX}" )
+      ARGS+=( -e "XAUTHORITY=/run/host-services/Xauthority" )
+    fi
   fi
 }
 

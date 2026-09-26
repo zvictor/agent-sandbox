@@ -1,5 +1,5 @@
 ROOTFS_MIRROR_FORMAT=9
-ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/agent-runtime-receipts\nrun/host-services\nrun/podman\nrun/secrets\nrun/systemd\nrun/systemd/system\nrun/user\nvar\nvar/run\nvar/tmp\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp\nproc\nsys\nsys/fs\nsys/fs/cgroup\ndev\ndev/net\ndev/snd'
+ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/agent-runtime-receipts\nrun/host-services\nrun/podman\nrun/secrets\nrun/systemd\nrun/systemd/system\nrun/user\nvar\nvar/run\nvar/tmp\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp\ntmp/.X11-unix\nproc\nsys\nsys/fs\nsys/fs/cgroup\ndev\ndev/net\ndev/snd'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
 ROOTFS_RUNTIME_EMPTY_FILES=$'etc/hosts\netc/hostname\netc/resolv.conf\ncache/.gitconfig\nrun/.containerenv\nvar/run/docker.sock\nrun/podman/podman.sock\nnix/var/nix/daemon-socket/socket'
 

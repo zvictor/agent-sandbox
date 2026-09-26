@@ -32,6 +32,8 @@ prepare_sandbox_tmp() {
   chmod 0700 "$base" "$parent" || return 1
   mkdir -p -m 1777 "$SANDBOX_TMP_DIR" || return 1
   chmod 1777 "$SANDBOX_TMP_DIR" || return 1
+  mkdir -p -m 1777 "$SANDBOX_TMP_DIR/.X11-unix" || return 1
+  chmod 1777 "$SANDBOX_TMP_DIR/.X11-unix" || return 1
 }
 
 remove_sandbox_tmp() {
