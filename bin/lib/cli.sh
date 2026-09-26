@@ -31,6 +31,10 @@ supported tools:
 enabled tools:
   $enabled_tools$enabled_suffix
 
+permission policy:
+  AGENT_PERMISSION_POLICY=container|native
+  default: container (native on rootless-linux)
+
 examples:
   agent init
   agent doctor
@@ -42,6 +46,7 @@ examples:
   agent remote codex
   agent run codex
   agent codex
+  AGENT_PERMISSION_POLICY=native agent codex --sandbox workspace-write
 EOF
   exit 0
 }

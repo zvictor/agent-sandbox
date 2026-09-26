@@ -1,3 +1,5 @@
+. "$(dirname "${BASH_SOURCE[0]}")/permission_policy.sh"
+
 mount_engine() {
   local engine="$1"
   local config_mode="$2"
@@ -122,64 +124,16 @@ prepare_codex_auth_mount_target() {
   CODEX_AUTH_PLACEHOLDER="$target_file"
 }
 
-prepare_codex_project_managed_config() {
-  local managed_dir="$CODEX_MANAGED_CONFIG_PROJECT_DIR"
-  local managed_file="$managed_dir/managed_config.toml"
-  local project_config="$CODEX_CONFIG_PROJECT_PATH/config.toml"
-  local host_config="$HOST_HOME/.codex/config.toml"
-  local legacy_config="$CODEX_CONFIG_LEGACY_PROJECT_PATH/config.toml"
-  local source_config=""
-  local pending_config=""
-
-  if [ -L "$managed_dir" ] || { [ -e "$managed_dir" ] && [ ! -d "$managed_dir" ]; }; then
-    echo "[agent] ERROR: project Codex config path must be a real directory: $managed_dir" >&2
-    exit 1
+prepare_codex_permission_config() {
+  resolve_permission_policy || return 1
+  CODEX_PERMISSION_CONFIG_DIR="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-policy.XXXXXX")" || return 1
+  # This directory belongs to this launch. Never copy user preferences into policy.
+  printf 'mcp_oauth_credentials_store = "file"\n' > "$CODEX_PERMISSION_CONFIG_DIR/config.toml"
+  if [ "$PERMISSION_POLICY" = container ]; then
+    printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n' >> "$CODEX_PERMISSION_CONFIG_DIR/config.toml"
+    printf 'default_permissions = ":danger-full-access"\nallowed_approval_policies = ["never"]\n[allowed_permission_profiles]\n":danger-full-access" = true\n' > "$CODEX_PERMISSION_CONFIG_DIR/requirements.toml"
   fi
-  if ! mkdir -p "$managed_dir"; then
-    echo "[agent] ERROR: could not create project Codex config directory: $managed_dir" >&2
-    exit 1
-  fi
-
-  if [ -L "$managed_file" ] || { [ -e "$managed_file" ] && [ ! -f "$managed_file" ]; }; then
-    echo "[agent] ERROR: project Codex managed config must be a regular file: $managed_file" >&2
-    exit 1
-  fi
-  if [ -e "$managed_file" ]; then
-    if [ ! -r "$managed_file" ]; then
-      echo "[agent] ERROR: project Codex managed config is not readable: $managed_file" >&2
-      exit 1
-    fi
-    return 0
-  fi
-
-  if [ -f "$legacy_config" ] && [ -r "$legacy_config" ]; then
-    source_config="$legacy_config"
-  elif [ -f "$project_config" ] && [ -r "$project_config" ]; then
-    source_config="$project_config"
-  elif [ "$host_config" != "$project_config" ] && [ -f "$host_config" ] && [ -r "$host_config" ]; then
-    source_config="$host_config"
-  fi
-
-  pending_config="$(mktemp "$managed_dir/.managed_config.toml.XXXXXX")"
-  if ! {
-    printf 'mcp_oauth_credentials_store = "file"\n'
-    if [ -n "${OPENAI_BASE_URL:-}" ]; then
-      printf 'openai_base_url = %s\n' "$(jq -Rn --arg value "$OPENAI_BASE_URL" '$value')"
-    fi
-    if [ -n "$source_config" ]; then
-      sed -e '/^mcp_oauth_credentials_store[[:space:]]*=/d' -e '/^openai_base_url[[:space:]]*=/d' "$source_config"
-    fi
-  } > "$pending_config"; then
-    rm -f "$pending_config"
-    echo "[agent] ERROR: could not initialize project Codex managed config: $managed_file" >&2
-    exit 1
-  fi
-
-  if ! chmod u+rw "$pending_config" || ! mv "$pending_config" "$managed_file"; then
-    rm -f "$pending_config"
-    echo "[agent] ERROR: could not install project Codex managed config: $managed_file" >&2
-    exit 1
-  fi
+  ARGS+=( -v "$CODEX_PERMISSION_CONFIG_DIR:/etc/codex:ro${Z_SUFFIX}" )
 }
 
 resolve_mount_dir() {
@@ -485,7 +439,7 @@ append_split_arg_values() {
 
 runtime_env_key_is_reserved() {
   case "$1" in
-    AGENT_NEED_HELPER_DIR|AGENT_RUNTIME_LEASE_ID|AGENT_RUNTIME_RECEIPTS_DIR)
+    AGENT_NEED_HELPER_DIR|AGENT_RUNTIME_LEASE_ID|AGENT_RUNTIME_RECEIPTS_DIR|AGENT_PERMISSION_POLICY|AGENT_PERMISSION_PROJECT_ROOT)
       return 0
       ;;
     AGENT_ROOTLESS_LINUX_TOOL|XDG_RUNTIME_DIR)
@@ -537,7 +491,6 @@ mount_standard_engine() {
       if [ "$CODEX_CONFIG_MODE" = "project" ]; then
         ensure_runtime_config_dir "codex" "project" "$CODEX_CONFIG_PROJECT_PATH" >/dev/null
         migrate_legacy_codex_project_state
-        prepare_codex_project_managed_config
       fi
       mount_engine "codex" "$CODEX_CONFIG_MODE" "$CODEX_HOST_CONFIG" "/cache/.codex" \
         "CODEX_HOME=/cache/.codex,CODEX_CONFIG_DIR=/cache/.codex" \
@@ -547,8 +500,8 @@ mount_standard_engine() {
         mount_codex_project_sessions
         ARGS+=( -e "CODEX_SQLITE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
         ARGS+=( -e "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
-        ARGS+=( -v "$CODEX_MANAGED_CONFIG_PROJECT_DIR:/etc/codex:ro${Z_SUFFIX}" )
       fi
+      prepare_codex_permission_config
       ;;
     opencode)
       mount_engine "opencode" "$OPENCODE_CONFIG_MODE" "$OPENCODE_HOST_CONFIG" "/cache/.config/opencode" \
@@ -2018,6 +1971,8 @@ run_container_runtime() {
 }
 
 build_container_args() {
+  resolve_permission_policy || return 1
+  validate_tool_permission_args "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   prepare_tool_cache_dirs
   prepare_path_guard_dir
   build_nix_config
@@ -2044,5 +1999,6 @@ build_container_args() {
   append_extra_device_args
   append_passthrough_env_args
   mount_tool_configs
+  ARGS+=( -e "AGENT_PERMISSION_POLICY=$PERMISSION_POLICY" -e "AGENT_PERMISSION_PROJECT_ROOT=$PROJECT_ROOT" )
   append_stdio_and_target_args
 }

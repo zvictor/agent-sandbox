@@ -1058,7 +1058,8 @@ EOF
   chmod +x "$tmp_dir/bin/agent"
 
   output="$(env -i PATH="$tmp_dir/bin:$TEST_HOST_PATH" "$tmp_dir/scripts/opencode" alpha beta)"
-  assert_contains "$output" "permission=allow"
+  assert_contains "$output" "permission="
+  assert_not_contains "$output" "permission=allow"
   assert_contains "$output" "argv=opencode alpha beta"
 
   output="$(env -i PATH="$tmp_dir/bin:$TEST_HOST_PATH" OPENCODE_PERMISSION=ask "$tmp_dir/scripts/opencode" alpha)"
@@ -3622,6 +3623,7 @@ codex_mount_args_for() (
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   HELPER_TMPDIR="$(mktemp -d)"
+  RUNTIME_LEASE_DIR="$HELPER_TMPDIR"
   trap 'rm -rf "$HELPER_TMPDIR"' EXIT
 
   HOST_HOME="$workspace_path"
@@ -3659,6 +3661,7 @@ codex_project_mount_args_for() (
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
 
   HELPER_TMPDIR="$(mktemp -d)"
+  RUNTIME_LEASE_DIR="$HELPER_TMPDIR"
   trap 'rm -rf "$HELPER_TMPDIR"' EXIT
 
   HOST_HOME="$host_home"
@@ -3733,10 +3736,10 @@ test_codex_project_config_mount_uses_stable_runtime_home() (
   assert_contains "$output" "$workspace/.codex/sessions:/cache/.codex/sessions:rw"
   assert_not_contains "$output" "$workspace/.codex:/cache/.codex"
   assert_not_contains "$output" ":$workspace/.codex:"
-  assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
+  assert_contains "$output" ':/etc/codex:ro'
   [ -d "$config_root" ] || fail "expected user Codex home to be available"
   [ -f "$config_root/config.toml" ] || fail "expected writable user Codex config"
-  [ -f "$workspace/.agent-sandbox/codex/managed_config.toml" ] || fail "expected project managed config to be created"
+  [ ! -e "$workspace/.agent-sandbox/codex/managed_config.toml" ] || fail "policy must not copy preferences into managed config"
   [ -f "$host_home/.codex/hooks.json" ] || fail "expected user Codex hooks to remain in the user home"
   [ -f "$workspace/.codex/hooks.json" ] || fail "expected project Codex hooks to remain in the project layer"
   [ -d "$workspace/.codex/sessions" ] || fail "expected project Codex sessions to remain under .codex"
@@ -3802,10 +3805,10 @@ test_codex_rollout_path_migration_rewrites_state_db() (
   [ -z "$output" ] || fail "expected an idempotent Codex rollout path migration"
 )
 
-test_codex_project_managed_config_is_seeded_from_host() (
+test_codex_preferences_remain_in_user_config() (
   set -euo pipefail
 
-  local tmp_dir workspace host_home cache_dir output managed_config runtime_config
+  local tmp_dir workspace host_home cache_dir output runtime_config
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -3816,12 +3819,10 @@ test_codex_project_managed_config_is_seeded_from_host() (
   printf 'model = "host-model"\n' > "$host_home/.codex/config.toml"
 
   output="$(codex_project_mount_args_for "$workspace" "$cache_dir" "$host_home")"
-  managed_config="$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")"
   runtime_config="$(cat "$host_home/.codex/config.toml")"
 
-  assert_contains "$output" "$workspace/.agent-sandbox/codex:/etc/codex:ro"
-  assert_contains "$managed_config" 'mcp_oauth_credentials_store = "file"'
-  assert_contains "$managed_config" 'model = "host-model"'
+  assert_contains "$output" ':/etc/codex:ro'
+  [ ! -e "$workspace/.agent-sandbox/codex/managed_config.toml" ] || fail "user preferences copied into policy"
   assert_contains "$runtime_config" 'model = "host-model"'
   [ ! -e "$workspace/.codex/config.toml" ] || fail "expected project config to remain absent when only a user config exists"
 )
@@ -3855,7 +3856,7 @@ test_codex_project_state_migrates_cache_sessions_without_clobbering() (
   assert_contains "$(cat "$workspace/.codex/archived_sessions/archived.jsonl")" 'archived'
   assert_contains "$(cat "$workspace/.codex/history.jsonl")" 'history'
   assert_contains "$(cat "$workspace/.codex/state_5.sqlite")" 'sqlite'
-  assert_contains "$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")" 'model = "cache-model"'
+  assert_contains "$(cat "$legacy_root/config.toml")" 'model = "cache-model"'
   assert_contains "$(cat "$marker")" "$legacy_root"
   [ -f "$legacy_root/sessions/2026/01/01/new.jsonl" ] || fail "expected legacy cache state to remain available for recovery"
 
@@ -3908,7 +3909,7 @@ test_codex_project_home_accepts_symlinks() (
     assert_contains "$output" "$workspace/.codex/sessions:/cache/.codex/sessions:rw"
     assert_contains "$output" "CODEX_SQLITE_HOME=$workspace/.codex"
     assert_contains "$output" 'config_root='
-    assert_contains "$(cat "$workspace/.agent-sandbox/codex/managed_config.toml")" 'model = "project-model"'
+    assert_contains "$(cat "$workspace/.codex/config.toml")" 'model = "project-model"'
     [ "$(readlink "$workspace/.codex")" = "$link_target" ] || fail "expected project symlink to remain intact"
     session_rows="$(collect_codex_sessions "$workspace/.codex/sessions")"
     assert_contains "$session_rows" 'shared-session'
@@ -4276,6 +4277,7 @@ run_test() {
 main() {
   run_test "rootless manager shutdown lifecycle" bash "$REPO_ROOT/tests/rootless-linux-lifecycle.sh"
   run_test "project config parsing and environment forwarding" bash "$REPO_ROOT/tests/project-config.sh"
+  run_test "shared permission policy" bash "$REPO_ROOT/tests/permission-policy.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0
@@ -4392,7 +4394,7 @@ main() {
   else
     echo "[skip] codex rollout path migration rewrites state db (Bun is provided by the runtime image)"
   fi
-  run_test "codex project managed config is seeded from host" test_codex_project_managed_config_is_seeded_from_host
+  run_test "codex preferences remain in user config" test_codex_preferences_remain_in_user_config
   run_test "codex project state migrates cache sessions without clobbering" test_codex_project_state_migrates_cache_sessions_without_clobbering
   run_test "codex project home accepts symlinks" test_codex_project_home_accepts_symlinks
   run_test "codex project home rejects invalid targets" test_codex_project_home_rejects_invalid_targets

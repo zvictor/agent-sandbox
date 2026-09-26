@@ -192,6 +192,8 @@ print_doctor_json() {
   printf '  },\n'
   printf '  "runtime": {\n'
   doctor_json_pair "profile" "${SANDBOX_PROFILE:-default}"; printf ',\n'
+  doctor_json_pair "permission_policy" "$PERMISSION_POLICY"; printf ',\n'
+  doctor_json_pair "permission_policy_source" "$PERMISSION_POLICY_SOURCE"; printf ',\n'
   doctor_json_pair "runtime" "$RUNTIME"; printf ',\n'
   doctor_json_pair "mode" "$runtime_mode"; printf ',\n'
   doctor_json_pair "tools_enabled" "$tools_list"; printf ',\n'
@@ -247,6 +249,8 @@ print_doctor_text_summary() {
   doctor_line "project_config" "${PROJECT_CONFIG_FILE:-none}"
   doctor_line "cache_dir" "$CACHE_DIR"
   doctor_line "sandbox_profile" "${SANDBOX_PROFILE:-default}"
+  doctor_line "permission_policy" "$PERMISSION_POLICY"
+  doctor_line "permission_policy_source" "$PERMISSION_POLICY_SOURCE"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "codex_config" "$codex_config_state"
@@ -291,6 +295,8 @@ print_doctor_text_verbose() {
 
   printf '\nRuntime\n'
   doctor_line "sandbox_profile" "${SANDBOX_PROFILE:-default}"
+  doctor_line "permission_policy" "$PERMISSION_POLICY"
+  doctor_line "permission_policy_source" "$PERMISSION_POLICY_SOURCE"
   doctor_line "runtime" "$RUNTIME"
   doctor_line "runtime_mode" "$runtime_mode"
   doctor_line "tools_enabled" "$tools_list"
@@ -324,8 +330,28 @@ print_doctor_text_verbose() {
   printf '%s\n' "$suggestions" | sed 's/^/- /'
 }
 
+doctor_permission_notes() {
+  local protected=""
+
+  if [ -f "${PROJECT_ROOT:-$PWD}/.agent-sandbox/codex/managed_config.toml" ]; then
+    doctor_note 'The old .agent-sandbox/codex/managed_config.toml is preserved but no longer loaded. Move any unique preferences into the normal Codex user/project config.'
+  fi
+
+  if [ "${PERMISSION_POLICY:-container}" = native ]; then
+    if protected="$(codex_protected_symlink)"; then
+      doctor_note "Codex workspace-write cannot protect writable symlink $protected. Use a real metadata directory or AGENT_PERMISSION_POLICY=container; read-only behavior may differ."
+    fi
+    doctor_note 'Native preserves tool settings; it does not guarantee that the tool enables OS sandboxing. CodeMachine native policy is unsupported because its runners hardcode bypasses.'
+  fi
+}
+
 print_doctor_suggestions() {
-  local printed="0"
+  local printed="0" permission_notes=""
+  permission_notes="$(doctor_permission_notes)"
+  if [ -n "$permission_notes" ]; then
+    printf '%s\n' "$permission_notes"
+    printed="1"
+  fi
 
   if [ -z "${PROJECT_CONFIG_FILE:-}" ]; then
     doctor_note "Run 'agent init' to create a project defaults file at $PROJECT_ROOT/.agent-sandbox.env."
@@ -427,6 +453,7 @@ print_doctor_and_exit() {
   resolve_project_paths
   load_project_config
   resolve_sandbox_profile
+  resolve_permission_policy || exit 1
   resolve_runtime_for_doctor
   resolve_sandbox_flake
   resolve_lock_args

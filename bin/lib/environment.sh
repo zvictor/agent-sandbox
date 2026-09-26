@@ -814,6 +814,8 @@ bootstrap_environment() {
 
   prepare_tool_resolution_context
   resolve_sandbox_profile
+  resolve_permission_policy || return 1
+  validate_tool_permission_args "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   resolve_runtime
   preflight_firecracker_host_profile
   preflight_rootless_linux_profile

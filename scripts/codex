@@ -2,10 +2,4 @@
 set -euo pipefail
 
 root_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-for arg in "$@"; do
-  if [ "$arg" = "--yolo" ]; then
-    exec "$root_dir/bin/agent" codex "$@"
-  fi
-done
-
-exec "$root_dir/bin/agent" codex --yolo "$@"
+exec "$root_dir/bin/agent" codex "$@"

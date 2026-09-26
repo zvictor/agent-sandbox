@@ -254,6 +254,10 @@ EOF
         # Keep the result in the shared per-tool cache for reuse and updates.
         set -euo pipefail
 
+        . ${../bin/lib/permission_policy.sh}
+        apply_tool_permission_policy "${name}" "$@"
+        set -- "''${PERMISSION_TOOL_ARGS[@]}"
+
         CACHE_DIR="''${TOOL_CACHE:-/cache}/${name}"
         INSTALL_DIR="$CACHE_DIR/bin"
         mkdir -p "$INSTALL_DIR"
@@ -269,6 +273,10 @@ EOF
       pkgs.writeShellScriptBin name ''
       #!/bin/sh
       set -euo pipefail
+
+      . ${../bin/lib/permission_policy.sh}
+      apply_tool_permission_policy "${name}" "$@"
+      set -- "''${PERMISSION_TOOL_ARGS[@]}"
 
       CACHE_DIR="''${TOOL_CACHE:-/cache}/${name}"
       mkdir -p "$CACHE_DIR"
@@ -345,6 +353,13 @@ EOF
         # native Codex. No Bun process remains between Codex and its supervisor.
         native_codex="$(${pkgs.bun}/bin/bun ${../scripts/image/codex-native-path.cjs} "$pkg_json")"
         [ -x "$native_codex" ] || { echo "Codex native executable is unavailable: $native_codex" >&2; exit 1; }
+        if [ "$PERMISSION_POLICY" = container ]; then
+          policy_version="$(${pkgs.bun}/bin/bun --print "require('$pkg_json').version")"
+          if ! ${pkgs.bun}/bin/bun -e 'const [major, minor] = process.argv[1].split(".").map(Number); process.exit(major > 0 || minor >= 138 ? 0 : 1)' "$policy_version"; then
+            echo 'Container permission policy requires Codex >= 0.138.0; use AGENT_PERMISSION_POLICY=native for older versions' >&2
+            exit 1
+          fi
+        fi
         unset CODEX_MANAGED_BY_NPM CODEX_MANAGED_BY_PNPM CODEX_MANAGED_BY_VITE_PLUS
         export CODEX_MANAGED_BY_BUN=1
         export CODEX_MANAGED_PACKAGE_ROOT="$(dirname "$(readlink -f "$pkg_json")")"

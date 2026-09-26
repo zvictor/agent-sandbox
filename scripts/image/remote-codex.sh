@@ -21,7 +21,7 @@ if tmux has-session -t "$session" 2>/dev/null; then
   exec tmux attach-session -t "$session"
 fi
 
-cmd="exec codex --sandbox workspace-write --ask-for-approval on-request"
+cmd="exec codex"
 
 if [ -d /cache/.ssh ]; then
   cmd="$cmd --add-dir /cache/.ssh"
