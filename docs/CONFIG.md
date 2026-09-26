@@ -71,7 +71,9 @@ For a project without `flake.lock`, a string-form `fetchTarball "..."` in `shell
 
 `AGENT_PERMISSION_POLICY=container|native` applies to all supported tool launchers, including shortcuts, direct `agent <tool>` launches, remote Codex, and child CLIs started through the container's PATH. Standard and Firecracker profiles default to `container`; `rootless-linux` defaults to `native`. An explicit value overrides the profile default.
 
-`container` selects each tool's documented permissive launch mode. The outer runtime remains the isolation boundary. Explicit upstream deny rules and mandatory upstream policies may still apply; tools other than Codex can expose interactive mode switches. `native` adds no bypass flags or permission environment overrides and preserves caller settings. It does not enable a sandbox where the tool has none, or undo bypass flags the caller explicitly supplies.
+`container` selects each tool's documented permissive launch mode. The outer runtime remains the isolation boundary. Explicit upstream deny rules and mandatory upstream policies may still apply; tools other than Codex can expose interactive mode switches. `native` adds no bypass flags or permission environment overrides and preserves caller configuration. It does not enable a sandbox where the tool has none. Explicit permission-bypass CLI options (such as `--yolo`, Codex `--sandbox danger-full-access`, or Claude `--permission-mode bypassPermissions`) conflict with `native` and fail before launch; configuration files remain the tool's responsibility.
+
+Ordinary launches need no policy setting: `agent codex` automatically selects container policy and supplies `--yolo`; `agent codex --yolo` accepts the existing flag without duplication. A bypass flag never silently overrides an explicit or profile-default native policy. Remove the conflicting flag, or explicitly use `AGENT_PERMISSION_POLICY=container agent codex --yolo` to rely on the outer sandbox. This policy does not intercept a host CLI invoked outside agent-sandbox.
 
 | Tool | Container adapter |
 | --- | --- |

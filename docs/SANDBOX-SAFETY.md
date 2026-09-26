@@ -107,7 +107,7 @@ The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` m
 - Container Codex adds `--yolo` and constrains permission selection through generated requirements.
 - Container Claude and Antigravity add their documented permission bypass; Claude's Bash sandbox is disabled for the session.
 - Container OpenCode receives `OPENCODE_PERMISSION='{"*":"allow"}'`; OMP and Command Code add `--yolo`.
-- Native mode preserves caller controls without injecting bypasses. It does not promise OS sandboxing. CodeMachine native mode fails explicitly because its upstream runners hardcode bypasses.
+- Native mode preserves caller configuration without injecting bypasses, and rejects explicit permission-bypass CLI options instead of silently switching policy. It does not promise OS sandboxing or validate every upstream configuration setting. CodeMachine native mode fails explicitly because its upstream runners hardcode bypasses.
 
 Upstream explicit deny rules and mandatory policies remain effective. Except for Codex's requirements, these adapters set startup behavior; they do not lock every interactive permission switch.
 
