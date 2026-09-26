@@ -102,14 +102,16 @@ The dev environment path is separate from this: in `AGENT_DEV_ENV=host-helper` m
 
 ### 4. Tool launch defaults are centralized
 
-`AGENT_PERMISSION_POLICY=container|native` selects one shared launch policy. Standard container and Firecracker launches default to `container`; `rootless-linux` defaults to `native`. Shortcuts delegate to the same launcher, and in-container tool adapters also apply to child CLIs:
+The launcher resolves a shared permission policy before creating the container. Explicit tool bypasses select `container`; other recognized permission controls select `native`. Without controls, standard container and Firecracker launches default to `container`; `rootless-linux` defaults to `native`. The optional `AGENT_PERMISSION_POLICY=container|native` override wins over automatic selection. Shortcuts delegate to the same launcher, and in-container tool adapters apply the resolved session policy to child CLIs:
 
 - Container Codex adds `--yolo` and constrains permission selection through generated requirements.
 - Container Claude and Antigravity add their documented permission bypass; Claude's Bash sandbox is disabled for the session.
 - Container OpenCode receives `OPENCODE_PERMISSION='{"*":"allow"}'`; OMP and Command Code add `--yolo`.
-- Native mode preserves caller configuration without injecting bypasses, and rejects explicit permission-bypass CLI options instead of silently switching policy. It does not promise OS sandboxing or validate every upstream configuration setting. CodeMachine native mode fails explicitly because its upstream runners hardcode bypasses.
+- Native mode preserves caller configuration and CLI controls without injecting bypasses. Caller-supplied bypasses remain allowed: native means tool-managed, not guaranteed restrictive. It does not promise OS sandboxing or validate every upstream configuration setting. CodeMachine native mode fails explicitly because its upstream runners hardcode bypasses.
 
 Upstream explicit deny rules and mandatory policies remain effective. Except for Codex's requirements, these adapters set startup behavior; they do not lock every interactive permission switch.
+
+Automatic selection does not change outer isolation. Valid mixed settings, such as Codex read-only access with approvals disabled, are passed through. Contradictory bypass/restrictive flags and controls incompatible with an explicitly selected container policy fail. Child commands cannot change the container's launch-time policy; relaunch to change its generated requirements.
 
 See:
 

@@ -213,13 +213,13 @@ uses `/bin/agent-remote-entrypoint` as the init child instead.
 There are two wrapper layers:
 
 1. Launcher wrappers:
-   - `agent <tool>` resolves and validates `AGENT_PERMISSION_POLICY`
+   - `agent <tool>` resolves policy from an explicit override, tool permission controls, then profile defaults, and validates actual conflicts before container creation
    - Tool shortcuts delegate to that same launcher without adding bypasses
 2. Image wrappers:
    - Tool launchers use the shared permission adapters, including when invoked by another agent
    - `need` and compatibility shims provide missing-tool expansion and stable `sh`/Nix behavior
 
-The shared policy defaults to `container`, except on `rootless-linux`, which defaults to `native`. Container adapters select each tool's documented permissive launch mode. Native adapters preserve the caller's controls; CodeMachine rejects native mode because upstream hardcodes child bypasses. Codex gets freshly generated policy under the runtime lease, mounted read-only at `/etc/codex`, instead of a persistent copy of user preferences. Project transcript paths remain under `.codex/sessions`. See [configuration](CONFIG.md#agent-permission-policy) for the exact adapters and constraints.
+Without explicit controls, the shared policy defaults to `container`, except on `rootless-linux`, which defaults to `native`. Complete tool bypasses select container handling; other permission controls delegate to native handling. An explicit `AGENT_PERMISSION_POLICY` override is authoritative. Container adapters select each tool's documented permissive launch mode. Native adapters preserve the caller's controls, even explicit bypasses; they do not enforce restrictive permissions. CodeMachine rejects native mode because upstream hardcodes child bypasses. Codex gets freshly generated policy under the runtime lease, mounted read-only at `/etc/codex`, instead of a persistent copy of user preferences. The resolved policy is inherited by child CLIs rather than re-inferred per command, since session requirements cannot be removed by changing child arguments. Project transcript paths remain under `.codex/sessions`. See [configuration](CONFIG.md#agent-permission-policy) for the exact adapters and constraints.
 
 ## File Map By Concern
 

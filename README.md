@@ -280,7 +280,7 @@ For SSH operations under Codex's native sandbox, the launcher exposes the sandbo
 
 ## Common Recipes
 
-- Safest default: use `agent <tool>` instead of the shortcut wrapper if you want the tool's native safety prompts left on.
+- Tool-managed permissions: use the tool's permission options, such as `agent codex --sandbox workspace-write --ask-for-approval on-request`. Shortcuts and direct launches use the same policy.
 - Fastest Codex workflow: run `./scripts/codex` after `./scripts/agent init`.
 - Session viewer: run `./scripts/viewer` or `agent viewer` to start Claude Code History Viewer server mode on `127.0.0.1:3727`; the launcher prints the authenticated URL.
 - Remote sandbox: run `./scripts/agent remote up` from a worktree, then `./scripts/agent remote codex` to use a durable tmux-backed Codex session that can also be reached from a phone over Tailscale/SSH. See [docs/REMOTE.md](docs/REMOTE.md).
@@ -365,14 +365,14 @@ agent-sandbox.packages.${system}.omp
 
 These shortcut wrappers apply tool-specific defaults where supported:
 
-- All shortcuts and direct launches share `AGENT_PERMISSION_POLICY=container|native`.
+- All shortcuts and direct launches automatically select permission handling from explicit tool controls, then profile defaults. `AGENT_PERMISSION_POLICY=container|native` is an optional override.
 - Standard profiles default to `container`: Codex, OMP, and Command Code use `--yolo`; Claude and Antigravity use their permission bypass; OpenCode receives a JSON allow override.
 - `rootless-linux` defaults to `native`, preserving caller permission controls. CodeMachine native mode is unsupported because its runners hardcode bypasses.
 - Antigravity installs Google's native `agy` CLI on first use and reuses its `/cache/antigravity` cache.
 
-Use `AGENT_PERMISSION_POLICY=native agent codex --sandbox workspace-write` to select native sandboxing. Protected metadata such as `.codex` must be real directories for Codex workspace-write; shared symlinks work with container policy. `agent doctor` reports the policy and symlink incompatibilities. See [permission policy](docs/CONFIG.md#agent-permission-policy) for adapters, conflicts, and upstream restrictions.
+Use `agent codex --sandbox workspace-write` to select tool-managed sandboxing without setting an environment variable; `agent codex --yolo` selects container-managed permissions. Approval prompts are independent: `agent codex --sandbox read-only --ask-for-approval never` preserves both settings. Protected metadata such as `.codex` must be real directories for Codex workspace-write; shared symlinks work with container policy. `agent doctor` reports the configured/profile policy and symlink incompatibilities. See [permission policy](docs/CONFIG.md#agent-permission-policy) for adapters, conflicts, and upstream restrictions.
 
-Set `AGENT_PERMISSION_POLICY=native` to preserve the underlying tool's permission controls.
+Set `AGENT_PERMISSION_POLICY=native` only when you want to preserve the tool's existing configuration without supplying permission flags. Native means tool-managed permissions, not guaranteed restrictive settings. The resolved policy stays in effect for the container's lifetime.
 
 ### One-off run
 

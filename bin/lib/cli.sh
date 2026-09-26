@@ -32,8 +32,9 @@ enabled tools:
   $enabled_tools$enabled_suffix
 
 permission policy:
-  AGENT_PERMISSION_POLICY=container|native
-  default: container (native on rootless-linux)
+  automatic from tool permission controls, then profile defaults
+  optional override: AGENT_PERMISSION_POLICY=container|native
+  no controls: container (native on rootless-linux)
 
 examples:
   agent init
@@ -46,7 +47,7 @@ examples:
   agent remote codex
   agent run codex
   agent codex
-  AGENT_PERMISSION_POLICY=native agent codex --sandbox workspace-write
+  agent codex --sandbox workspace-write
 EOF
   exit 0
 }
