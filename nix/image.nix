@@ -417,6 +417,7 @@ EOF
       pkgs.fx
       pkgs.bun
       pkgs.iproute2
+      pkgs.procps
       pkgs.nix-index
       pkgs.systemdMinimal
       pkgs.catatonit

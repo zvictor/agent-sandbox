@@ -1562,6 +1562,16 @@ test_image_includes_clipboard_tools() (
   assert_contains "$image_file" 'pkgs.xsel'
 )
 
+
+test_image_includes_procps() (
+  set -euo pipefail
+
+  local image_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+
+  assert_contains "$image_file" 'pkgs.procps'
+)
+
 test_remote_secrets_are_not_passthrough_env() (
   set -euo pipefail
 
@@ -4289,6 +4299,7 @@ main() {
   run_test "image includes audio recorders" test_image_includes_audio_recorders
   run_test "clipboard forwarding support" test_clipboard_forwarding_support
   run_test "image includes clipboard tools" test_image_includes_clipboard_tools
+  run_test "image includes procps" test_image_includes_procps
   run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
   run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
   run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough
