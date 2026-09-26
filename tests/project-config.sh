@@ -106,15 +106,62 @@ one
 two
 "
 AGENT_TEST_REFERENCE="$AGENT_TEST_FIRST"
-AGENT_TEST_FIRST=ignored
 AGENT_TEST_EXISTING=file
 AGENT_TEST_EMPTY=file
 EOF
   load_project_config
-  assert_equal "$AGENT_TEST_FIRST" $'\none\ntwo\n' "multiline whitespace or first-value precedence changed"
+  assert_equal "$AGENT_TEST_FIRST" $'\none\ntwo\n' "multiline whitespace changed"
   assert_equal "$AGENT_TEST_REFERENCE" "$AGENT_TEST_FIRST" "previous multiline config value was not expanded intact"
   assert_equal "$AGENT_TEST_EXISTING" host "environment must override file values"
   assert_equal "$AGENT_TEST_EMPTY" '' "empty environment values must override file values"
+)
+
+test_discovery_inheritance_and_reload() (
+  unset AGENT_PROJECT_CONFIG_FILE AGENT_TEST_SHARED AGENT_TEST_LOCAL AGENT_EXTRA_ENV
+  mkdir -p "$config_test_dir/worktrees/main/src" "$config_test_dir/worktrees/alpha"
+  git init -q "$config_test_dir/worktrees/main"
+  git -C "$config_test_dir/worktrees/main" -c user.name=ConfigTest -c user.email=config@example.invalid commit -q --allow-empty -m fixture
+  git -C "$config_test_dir/worktrees/main" worktree add -q -b config-alpha "$config_test_dir/worktrees/alpha"
+  printf 'AGENT_TEST_SHARED=shared\nAGENT_EXTRA_ENV="PARENT=one"\n' > "$config_test_dir/worktrees/.agent-sandbox.env"
+  printf 'AGENT_CONFIG_EXTENDS=../.agent-sandbox.env\nAGENT_TEST_LOCAL=local\nAGENT_EXTRA_ENV="CHILD=two"\n' > "$config_test_dir/worktrees/main/.agent-sandbox.env"
+  cd "$config_test_dir/worktrees/main/src"
+  unset AGENT_PROJECT_ROOT
+  resolve_project_paths
+  assert_equal "$PROJECT_ROOT" "$config_test_dir/worktrees/main" "worktree root not resolved"
+  load_project_config
+  assert_equal "$PROJECT_CONFIG_FILE" "$PROJECT_ROOT/.agent-sandbox.env" "nearest file not selected"
+  assert_equal "$AGENT_TEST_SHARED" shared "parent not inherited"
+  assert_equal "$AGENT_TEST_LOCAL" local "child not applied"
+  assert_equal "$AGENT_EXTRA_ENV" CHILD=two "extra env must replace parent block"
+  assert_equal "$PROJECT_ROOT" "$config_test_dir/worktrees/main" "config changed project identity"
+  printf 'AGENT_TEST_LOCAL=edited\n' > "$config_test_dir/worktrees/main/.agent-sandbox.env"
+  load_project_config
+  assert_equal "$AGENT_TEST_LOCAL" edited "reload retained old export"
+  [ -z "${AGENT_TEST_SHARED+x}" ] || fail "removed inherited setting retained"
+  cd "$config_test_dir/worktrees/alpha"
+  resolve_project_paths
+  load_project_config
+  assert_equal "$PROJECT_ROOT" "$config_test_dir/worktrees/alpha" "shared config changed worktree root"
+  assert_equal "$PROJECT_CONFIG_FILE" "$config_test_dir/worktrees/.agent-sandbox.env" "parent discovery failed"
+  assert_equal "$AGENT_TEST_SHARED" shared "discovered parent not loaded"
+)
+
+test_inheritance_failures() (
+  local output
+  unset AGENT_TEST_LOCAL
+  printf 'AGENT_TEST_LOCAL=secret-one\nAGENT_TEST_LOCAL=secret-two\n' > "$AGENT_PROJECT_CONFIG_FILE"
+  if output="$(load_project_config 2>&1)"; then fail "duplicate accepted"; fi
+  assert_contains "$output" 'duplicate config key'
+  assert_not_contains "$output" secret-one
+  printf 'AGENT_CONFIG_EXTENDS=missing.env\n' > "$AGENT_PROJECT_CONFIG_FILE"
+  if output="$(load_project_config 2>&1)"; then fail "missing parent accepted"; fi
+  assert_contains "$output" 'config file not found'
+  printf 'AGENT_CONFIG_EXTENDS=config.env\n' > "$AGENT_PROJECT_CONFIG_FILE"
+  if output="$(load_project_config 2>&1)"; then fail "cycle accepted"; fi
+  assert_contains "$output" 'inheritance cycle'
+  AGENT_PROJECT_CONFIG_FILE="$config_test_dir/missing-explicit.env"
+  if output="$(load_project_config 2>&1)"; then fail "missing explicit file accepted"; fi
+  assert_contains "$output" 'config file not found'
 )
 
 test_config_errors_are_redacted() (
@@ -266,6 +313,8 @@ for config_test in \
   test_variable_expansion_is_data \
   test_quoted_values_and_line_endings \
   test_multiline_expansion_and_precedence \
+  test_discovery_inheritance_and_reload \
+  test_inheritance_failures \
   test_config_errors_are_redacted \
   test_unsupported_blocks_are_consumed \
   test_extra_env_delimiters_and_values \

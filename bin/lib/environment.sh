@@ -2,6 +2,9 @@ PROJECT_CONFIG_FILE=""
 EFFECTIVE_TOOLS_LIST=""
 EFFECTIVE_TOOLS_SOURCE=""
 PROJECT_ROOT_SOURCE=""
+declare -A PROJECT_CONFIG_VALUES=() PROJECT_CONFIG_SOURCES=() PROJECT_CONFIG_SHADOWED=()
+declare -A PROJECT_CONFIG_EXPORTED=() PROJECT_CONFIG_HOST=()
+PROJECT_CONFIG_FILES=()
 
 trim_whitespace() {
   local value="$1"
@@ -35,6 +38,12 @@ expand_config_variables() {
     [[ "$config_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     config_environment["$config_name"]="${config_entry#*=}"
   done < <(env -0)
+  for config_name in "${!PROJECT_CONFIG_VALUES[@]}"; do
+    config_environment["$config_name"]="${PROJECT_CONFIG_VALUES[$config_name]}"
+  done
+  for config_name in "${!PROJECT_CONFIG_HOST[@]}"; do
+    config_environment["$config_name"]="${PROJECT_CONFIG_HOST[$config_name]}"
+  done
 
   while [[ "$config_remaining" == *'$'* ]]; do
     config_result+="${config_remaining%%\$*}"
@@ -53,6 +62,7 @@ expand_config_variables() {
 }
 
 resolve_project_config_file() {
+  local directory
   PROJECT_CONFIG_FILE=""
 
   if [ -n "${AGENT_PROJECT_CONFIG_FILE:-}" ]; then
@@ -60,10 +70,16 @@ resolve_project_config_file() {
     return 0
   fi
 
-  if [ -f "$PROJECT_ROOT/.agent-sandbox.env" ]; then
-    PROJECT_CONFIG_FILE="$PROJECT_ROOT/.agent-sandbox.env"
-    return 0
-  fi
+  directory="$(pwd -P)"
+  while :; do
+    if [ -f "$directory/.agent-sandbox.env" ]; then
+      PROJECT_CONFIG_FILE="$directory/.agent-sandbox.env"
+      return 0
+    fi
+    [ "$directory" != / ] || break
+    directory="${directory%/*}"
+    directory="${directory:-/}"
+  done
 }
 
 # Read logical assignments, preserving raw records for config-file updates.
@@ -145,25 +161,87 @@ read_project_config() {
 }
 
 load_project_config_entry() {
-  local key="$1" value="$2"
+  local key="$1" value="$2" line="$4"
   [ -n "$key" ] || return 0
-  if ! is_project_config_key_allowed "$key"; then
-    echo "[agent] ignoring unsupported project config key '$key' in $PROJECT_CONFIG_FILE" >&2
+  if [[ -v config_seen[$key] ]]; then
+    echo "[agent] ERROR: $config_file:$line: duplicate config key '$key'" >&2
+    return 1
+  fi
+  config_seen[$key]=1
+  if [ "$key" = AGENT_CONFIG_EXTENDS ]; then
+    config_parent="$value"
     return 0
   fi
-  if [ -z "${!key+x}" ]; then
-    expand_config_variables "$value" value
-    printf -v "$key" '%s' "$value"
-    export "$key"
+  if ! is_project_config_key_allowed "$key"; then
+    echo "[agent] ignoring unsupported project config key '$key' in $config_file" >&2
+    return 0
   fi
+  config_keys+=("$key")
+  config_values+=("$value")
+  config_lines+=("$line")
+}
+
+load_project_config_tree() {
+  local config_file="$1" directory key value index config_parent="" ancestor
+  local -A config_seen=()
+  local -a config_keys=() config_values=() config_lines=()
+  [ -f "$config_file" ] || { echo "[agent] ERROR: config file not found: $config_file" >&2; return 1; }
+  directory="$(CDPATH= cd -- "$(dirname -- "$config_file")" && pwd -P)" || return 1
+  config_file="$directory/$(basename -- "$config_file")"
+  for ancestor in "${config_stack[@]}"; do
+    if [ "$ancestor" = "$config_file" ]; then
+      echo "[agent] ERROR: config inheritance cycle: $config_file" >&2
+      return 1
+    fi
+  done
+  local -a config_stack=("${config_stack[@]}" "$config_file")
+  read_project_config "$config_file" load_project_config_entry || return 1
+  if [ -n "$config_parent" ]; then
+    case "$config_parent" in /*) ;; *) config_parent="$directory/$config_parent" ;; esac
+    load_project_config_tree "$config_parent" || return 1
+  fi
+  PROJECT_CONFIG_FILES+=("$config_file")
+  for index in "${!config_keys[@]}"; do
+    key="${config_keys[index]}"
+    value="${config_values[index]}"
+    expand_config_variables "$value" value
+    PROJECT_CONFIG_VALUES[$key]="$value"
+    PROJECT_CONFIG_SOURCES[$key]="$config_file:${config_lines[index]}"
+  done
 }
 
 load_project_config() {
+  local key entry
+  local -a config_stack=()
+  # Remove only values exported by our previous resolution. External changes win.
+  for key in "${!PROJECT_CONFIG_EXPORTED[@]}"; do
+    if [ "${!key-}" = "${PROJECT_CONFIG_EXPORTED[$key]}" ]; then
+      unset "$key"
+    fi
+  done
+  PROJECT_CONFIG_EXPORTED=() PROJECT_CONFIG_VALUES=() PROJECT_CONFIG_SOURCES=()
+  PROJECT_CONFIG_SHADOWED=() PROJECT_CONFIG_HOST=() PROJECT_CONFIG_FILES=()
+  while IFS= read -r -d '' entry; do
+    key="${entry%%=*}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    PROJECT_CONFIG_HOST[$key]="${entry#*=}"
+  done < <(env -0)
   resolve_project_config_file
   [ -n "$PROJECT_CONFIG_FILE" ] || return 0
-  [ -f "$PROJECT_CONFIG_FILE" ] || return 0
-  read_project_config "$PROJECT_CONFIG_FILE" load_project_config_entry
+  load_project_config_tree "$PROJECT_CONFIG_FILE" || return 1
+  for key in "${!PROJECT_CONFIG_VALUES[@]}"; do
+    if [[ -v PROJECT_CONFIG_HOST[$key] ]]; then
+      PROJECT_CONFIG_SHADOWED[$key]="${PROJECT_CONFIG_SOURCES[$key]}"
+      PROJECT_CONFIG_VALUES[$key]="${PROJECT_CONFIG_HOST[$key]}"
+      PROJECT_CONFIG_SOURCES[$key]="process environment"
+    else
+      printf -v "$key" '%s' "${PROJECT_CONFIG_VALUES[$key]}"
+      export "$key"
+      PROJECT_CONFIG_EXPORTED[$key]="${PROJECT_CONFIG_VALUES[$key]}"
+    fi
+  done
 }
+
 
 resolve_runtime() {
   if ! resolve_runtime_state; then
