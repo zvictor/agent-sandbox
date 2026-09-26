@@ -2,4 +2,6 @@
 set -euo pipefail
 
 root_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+# The shared host launcher supplies --dangerously-skip-permissions in container
+# policy, while preserving explicit native controls and project config.
 exec "$root_dir/bin/agent" antigravity "$@"

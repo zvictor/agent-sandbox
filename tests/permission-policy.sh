@@ -185,4 +185,43 @@ fi
   REMAINING_ARGS=(--sandbox read-only --ask-for-approval never)
   bootstrap_environment
 )
+(
+  # Verify the actual container command gets the default even with an image
+  # launcher that does nothing except forward argv to native Antigravity.
+  unset AGENT_PERMISSION_POLICY
+  TOOL=antigravity
+  SANDBOX_PROFILE=default
+  MODE=podman-rootfs
+  ROOTFS_IMAGE_ARG=/tmp/test-rootfs:O
+  REMAINING_ARGS=(-p 'inspect flow-intro files')
+  ARGS=()
+  append_stdio_and_target_args
+  [ "${ARGS[-3]}" = --dangerously-skip-permissions ] || fail "host omitted Antigravity bypass"
+  [ "${ARGS[-1]}" = 'inspect flow-intro files' ] || fail "host changed prompt quoting"
+  [ "${#REMAINING_ARGS[@]}" = 2 ] || fail "host mutated user controls"
+  # Modern image launchers must not add the bypass again.
+  apply_tool_permission_policy antigravity "${ARGS[@]: -3}"
+  [ "${#PERMISSION_TOOL_ARGS[@]}" = 3 ] || fail "image duplicated host bypass"
+  ARGS=()
+  REMAINING_ARGS=(--dangerously-skip-permissions -p 'inspect flow-intro files')
+  append_stdio_and_target_args
+  count=0
+  for arg in "${ARGS[@]}"; do
+    if [ "$arg" = --dangerously-skip-permissions ]; then count=$((count + 1)); fi
+  done
+  [ "$count" = 1 ] || fail "host duplicated explicit bypass"
+  ARGS=()
+  REMAINING_ARGS=(-p 'inspect flow-intro files')
+  AGENT_PERMISSION_POLICY=native append_stdio_and_target_args
+  [ "${ARGS[-3]}" = /tmp/test-rootfs:O ] || fail "native shortcut added bypass"
+  ARGS=()
+  REMAINING_ARGS=(--sandbox -p 'inspect flow-intro files')
+  append_stdio_and_target_args
+  [ "${ARGS[-3]}" = --sandbox ] || fail "host replaced native sandbox control"
+  ARGS=()
+  REMAINING_ARGS=(-p 'inspect flow-intro files')
+  SANDBOX_PROFILE=rootless-linux
+  append_stdio_and_target_args
+  [ "${ARGS[-3]}" = /bin/agent-rootless-linux-entrypoint ] || fail "rootless default added bypass"
+)
 echo '[test] shared defaults, adapters, conflicts, symlinks and policy refresh passed'

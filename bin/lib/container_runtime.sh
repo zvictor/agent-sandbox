@@ -1940,7 +1940,12 @@ append_stdio_and_target_args() {
     ARGS+=( -- /bin/agent-rootless-linux-entrypoint )
   fi
   append_codex_ssh_sandbox_args
-  if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  if [ "$TOOL" = antigravity ]; then
+    # Supply the primary CLI's permissions on the host, not only in the image.
+    # The image adapter still handles child launches and recognizes this flag.
+    apply_tool_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
+    ARGS+=( "${PERMISSION_TOOL_ARGS[@]}" )
+  elif [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
     ARGS+=( "${REMAINING_ARGS[@]}" )
   fi
 }
