@@ -32,9 +32,9 @@ enabled tools:
   $enabled_tools$enabled_suffix
 
 permission policy:
-  automatic from tool permission controls, then profile defaults
+  automatic from tool permission controls, otherwise container
   optional override: AGENT_PERMISSION_POLICY=container|native
-  no controls: container (native on rootless-linux)
+  no controls: container on every sandbox profile
 
 examples:
   agent init

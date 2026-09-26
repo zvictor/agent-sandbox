@@ -2233,6 +2233,7 @@ test_stdio_target_uses_podman_rootfs() (
 
   assert_contains "$output" "--rootfs"
   assert_contains "$output" "/tmp/rootfs:O"
+  assert_contains "$output" $'--yolo\n--probe'
   assert_not_contains "$output" "sha256:unused"
 )
 
@@ -2247,6 +2248,7 @@ test_rootless_linux_target_uses_private_session_entrypoint() (
   assert_contains "$output" "/bin/agent-rootless-linux-entrypoint"
   assert_contains "$output" $'/tmp/rootfs:O\n--\n/bin/agent-rootless-linux-entrypoint\n--add-dir\n/cache/.ssh'
   assert_contains "$output" "--probe"
+  assert_contains "$output" $'--yolo\n--probe'
   assert_not_contains "$output" "--entrypoint\n/bin/codex"
 )
 

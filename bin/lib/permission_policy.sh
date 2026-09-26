@@ -98,12 +98,9 @@ resolve_permission_policy() {
     elif [ "$PERMISSION_HAS_CONTROLS" = 1 ]; then
       PERMISSION_POLICY=native
     else
-      PERMISSION_POLICY_SOURCE="sandbox profile default"
-      if [ "${SANDBOX_PROFILE:-${AGENT_SANDBOX_PROFILE:-default}}" = rootless-linux ]; then
-        PERMISSION_POLICY=native
-      else
-        PERMISSION_POLICY=container
-      fi
+      # Runtime capabilities and tool permission handling are independent.
+      PERMISSION_POLICY_SOURCE="container default"
+      PERMISSION_POLICY=container
     fi
   fi
   case "$PERMISSION_POLICY" in

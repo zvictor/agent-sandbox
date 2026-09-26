@@ -13,7 +13,24 @@ resolve_permission_policy
 [ "$PERMISSION_POLICY" = container ] || fail "standard default"
 SANDBOX_PROFILE=rootless-linux
 resolve_permission_policy
-[ "$PERMISSION_POLICY" = native ] || fail "rootless default"
+[ "$PERMISSION_POLICY" = container ] || fail "rootless default"
+for profile in default rootless-linux firecracker-host; do
+  SANDBOX_PROFILE="$profile"
+  for tool in codex claude opencode antigravity omp commandcode codemachine; do
+    unset OPENCODE_PERMISSION
+    apply_tool_permission_policy "$tool" --help
+    [ "$PERMISSION_POLICY" = container ] || fail "$profile/$tool requires a policy override"
+    [ "$PERMISSION_POLICY_SOURCE" = 'container default' ] || fail "$profile/$tool depends on profile"
+    case "$tool" in
+      codex|omp|commandcode) [ "${PERMISSION_TOOL_ARGS[0]}" = --yolo ] || fail "$profile/$tool bypass" ;;
+      claude|antigravity) [ "${PERMISSION_TOOL_ARGS[0]}" = --dangerously-skip-permissions ] || fail "$profile/$tool bypass" ;;
+      opencode) [ "$OPENCODE_PERMISSION" = '{"*":"allow"}' ] || fail "$profile/OpenCode permissions" ;;
+      codemachine) [ "${PERMISSION_TOOL_ARGS[*]}" = --help ] || fail "composite arguments changed" ;;
+    esac
+  done
+done
+unset OPENCODE_PERMISSION
+SANDBOX_PROFILE=rootless-linux
 AGENT_PERMISSION_POLICY=container
 resolve_permission_policy
 [ "$PERMISSION_POLICY" = container ] || fail "explicit override"
@@ -62,7 +79,7 @@ apply_tool_permission_policy codex --yolo
 [ "${#PERMISSION_TOOL_ARGS[@]}" = 1 ] || fail "ordinary bypass duplicated"
 SANDBOX_PROFILE=rootless-linux
 apply_tool_permission_policy codex --yolo
-[ "$PERMISSION_POLICY" = container ] || fail "bypass did not override profile default"
+[ "$PERMISSION_POLICY" = container ] || fail "rootless bypass selected native"
 [ "$PERMISSION_POLICY_SOURCE" = 'tool permission bypass' ] || fail "missing bypass source"
 SANDBOX_PROFILE=default
 for spec in \
@@ -222,6 +239,90 @@ fi
   REMAINING_ARGS=(-p 'inspect flow-intro files')
   SANDBOX_PROFILE=rootless-linux
   append_stdio_and_target_args
-  [ "${ARGS[-3]}" = /bin/agent-rootless-linux-entrypoint ] || fail "rootless default added bypass"
+  [ "${ARGS[-4]}" = /bin/agent-rootless-linux-entrypoint ] || fail "rootless entrypoint replaced"
+  [ "${ARGS[-3]}" = --dangerously-skip-permissions ] || fail "rootless Antigravity omitted bypass"
+  ARGS=()
+  REMAINING_ARGS=(--conversation=00000000-0000-4000-8000-000000000000)
+  append_stdio_and_target_args
+  [ "${ARGS[-2]}" = --dangerously-skip-permissions ] || fail "rootless resumed conversation omitted bypass"
+  [ "${ARGS[-1]}" = "${REMAINING_ARGS[0]}" ] || fail "conversation ID changed"
+)
+(
+  # Host Codex shortcuts must also work with an argv-only cached image wrapper.
+  unset AGENT_PERMISSION_POLICY
+  TOOL=codex
+  SANDBOX_PROFILE=rootless-linux
+  MODE=podman-rootfs
+  ROOTFS_IMAGE_ARG=/tmp/test-rootfs:O
+  SSH_RUNTIME_DIR=""
+  REMAINING_ARGS=(resume test-session)
+  ARGS=()
+  append_stdio_and_target_args
+  [ "${ARGS[-4]}" = /bin/agent-rootless-linux-entrypoint ] || fail "Codex rootless entrypoint replaced"
+  [ "${ARGS[-3]}" = --yolo ] || fail "rootless Codex omitted bypass"
+  [ "${ARGS[-2]} ${ARGS[-1]}" = 'resume test-session' ] || fail "resume args changed"
+  [ "${REMAINING_ARGS[*]}" = 'resume test-session' ] || fail "host mutated Codex args"
+  apply_tool_permission_policy codex "${ARGS[@]: -3}"
+  [ "${#PERMISSION_TOOL_ARGS[@]}" = 3 ] || fail "Codex image duplicated host bypass"
+  ARGS=()
+  REMAINING_ARGS=(--yolo resume test-session)
+  append_stdio_and_target_args
+  count=0
+  for arg in "${ARGS[@]}"; do
+    if [ "$arg" = --yolo ]; then count=$((count + 1)); fi
+  done
+  [ "$count" = 1 ] || fail "Codex host duplicated explicit bypass"
+  ARGS=()
+  REMAINING_ARGS=(--sandbox read-only --ask-for-approval never)
+  append_stdio_and_target_args
+  [ "$PERMISSION_POLICY" = native ] || fail "rootless ignored native CLI controls"
+  [[ "${ARGS[*]}" != *--yolo* ]] || fail "rootless native controls got bypass"
+  [ "${ARGS[-4]} ${ARGS[-3]} ${ARGS[-2]} ${ARGS[-1]}" = "${REMAINING_ARGS[*]}" ] || fail "native CLI controls changed"
+  ARGS=()
+  REMAINING_ARGS=(resume test-session)
+  AGENT_PERMISSION_POLICY=native append_stdio_and_target_args
+  [[ "${ARGS[*]}" != *--yolo* ]] || fail "rootless native override got bypass"
+  ARGS=()
+  REMAINING_ARGS=()
+  prepare_codex_permission_config
+  [ "$PERMISSION_POLICY" = container ] || fail "rootless policy config defaulted to native"
+  assert_contains "$(cat "$CODEX_PERMISSION_CONFIG_DIR/config.toml")" 'sandbox_mode = "danger-full-access"'
+  [ -e "$CODEX_PERMISSION_CONFIG_DIR/requirements.toml" ] || fail "rootless default lacks requirements"
+  [ -z "$(doctor_permission_notes)" ] || fail "rootless container got native symlink warning"
+)
+(
+  # Changing permission handling must not change the outer rootless boundary.
+  SANDBOX_PROFILE=rootless-linux
+  AGENT_ALLOW_SUDO=0
+  AGENT_REMOTE_CONTAINER_MODE=0
+  RUNTIME=podman
+  OS_NAME=Linux
+  ROOTLESS_NETWORK_BACKEND=pasta
+  SANDBOX_TMP_DIR="$test_dir"
+  TOOL=codex
+  WORKSPACE_PATH="$PROJECT_ROOT"
+  WORKSPACE_RUNTIME_PATH=/bin:/usr/bin
+  TOOL_CACHE_DIR="$test_dir/cache"
+  NEED_TOOLS_PATH="$test_dir/need"
+  NIX_CONFIG='sandbox = false'
+  outer_args=""
+  for policy in native container; do
+    AGENT_PERMISSION_POLICY="$policy"
+    apply_tool_permission_policy codex
+    build_base_container_args
+    append_runtime_identity_args
+    # Only the generated container name varies between builds.
+    current_args="$(printf '%q ' "${ARGS[@]:2}")"
+    if [ -n "$outer_args" ]; then
+      [ "$current_args" = "$outer_args" ] || fail "permissions changed outer isolation"
+    fi
+    outer_args="$current_args"
+  done
+  assert_contains "$outer_args" --cap-drop=ALL
+  assert_contains "$outer_args" --security-opt=no-new-privileges
+  assert_contains "$outer_args" --cgroupns=private
+  assert_contains "$outer_args" --network=pasta
+  assert_contains "$outer_args" --uidmap
+  assert_contains "$outer_args" --pids-limit=512
 )
 echo '[test] shared defaults, adapters, conflicts, symlinks and policy refresh passed'
