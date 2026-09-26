@@ -24,9 +24,15 @@ Bootstrap the project defaults file with:
 
 The launcher loads defaults from:
 1. `AGENT_PROJECT_CONFIG_FILE`
-2. `.agent-sandbox.env`
+2. The nearest `.agent-sandbox.env`, searching from the launch directory upward to the filesystem root.
 
-Existing environment variables always win over file values.
+Only one file is discovered; files in parent directories are not automatically merged. Config discovery is independent of `AGENT_PROJECT_ROOT` and Git worktree roots. An explicit `AGENT_PROJECT_CONFIG_FILE` must exist.
+
+To inherit shared defaults, add `AGENT_CONFIG_EXTENDS=../.agent-sandbox.env` to a worktree's config. The path is relative to the declaring file (absolute paths are also accepted). Parents load before children; child assignments replace parent values, including the entire `AGENT_EXTRA_ENV` block. Missing parents and inheritance cycles are errors. The inheritance path is literal, without variable expansion.
+
+Precedence is built-in defaults, inherited config, selected config, then process environment. Existing environment variables, including empty values, always win over file values. Duplicate keys within one file are errors. Files are read on each launch; edits affect new containers, not already running containers.
+
+Run `agent config explain` to see the launch directory, project root, loaded files in order, and sources of configured settings. Values are always redacted, and environment overrides identify the file assignment they replace.
 
 ## High-Impact Knobs
 
@@ -469,7 +475,7 @@ AGENT_EXTRA_ENV="
 
 Each nonblank line must contain `KEY=VALUE`, with a shell-style variable name (`[A-Za-z_][A-Za-z0-9_]*`). Indentation before the key is ignored; spaces after `=` are part of the value. Empty values and additional `=` characters are supported. The entries are injected into the container, not loaded as host settings. Creating directories such as `$PWD/.tmp` remains your responsibility.
 
-In a multiline value, commas are literal data: `LABELS=one,two` is one assignment. A single-line value instead uses commas as separators, for example `AGENT_EXTRA_ENV="FIRST=one,SECOND=two"`. Do not mix comma-separated assignments with newline-separated assignments in the same value. Repeated `AGENT_EXTRA_ENV=` assignments do not append: the first file value wins unless the variable is already set in the environment.
+In a multiline value, commas are literal data: `LABELS=one,two` is one assignment. A single-line value instead uses commas as separators, for example `AGENT_EXTRA_ENV="FIRST=one,SECOND=two"`. Do not mix comma-separated assignments with newline-separated assignments in the same value. Repeated `AGENT_EXTRA_ENV=` assignments within one file are errors. A child config replaces the entire inherited block.
 
 Malformed entries and attempts to override runtime-owned variables stop the launch without printing their values. In remote mode, this setting still requires `AGENT_REMOTE_ALLOW_EXTRA_ENV=1`.
 
@@ -522,7 +528,7 @@ CODEX_AUTH=work
 
 Parsing rules:
 
-- Existing environment values, including empty values, override the file. Otherwise, the first assignment to a key wins.
+- Existing environment values, including empty values, override the file. Child assignments override inherited values; duplicate keys within one file are errors.
 - `$VAR` and `${VAR}` expand in all three value forms using exported environment variables and earlier loaded settings. Unknown references stay literal. Expansion happens once: dollar signs and shell-looking text inside substituted environment values remain data.
 - Quotes delimit a whole value, not individual entries in `AGENT_EXTRA_ENV`. To include the enclosing quote or a backslash in a quoted value, escape it with a backslash. Other backslash sequences, including `\n`, stay literal; use actual line breaks for multiline values.
 - A closing quote can appear at the end of the final value line or on its own line. Only whitespace may follow it. Line breaks and whitespace inside quotes are preserved; the extra-environment list separately ignores blank lines and indentation before keys.

@@ -231,9 +231,11 @@ Rules:
 Instead of exporting a long list of environment variables before every run, you can define project-level sandbox defaults in a file. The launcher checks these locations in order:
 
 1. `AGENT_PROJECT_CONFIG_FILE`
-2. `.agent-sandbox.env`
+2. The nearest `.agent-sandbox.env`, searching upward from the launch directory.
 
-The format is `KEY=VALUE` assignments, with quoted values allowed to span multiple lines. Blank lines and `#` comments outside quoted values are ignored. Existing environment variables still take precedence over file values.
+The format is `KEY=VALUE` assignments, with quoted values allowed to span multiple lines. Blank lines and `#` comments outside quoted values are ignored. Existing environment variables still take precedence over file values. Duplicate keys within a file are errors.
+
+Config discovery is independent of the Git worktree root. Files are not automatically merged: use `AGENT_CONFIG_EXTENDS=../.agent-sandbox.env` for explicit shared defaults. The parent path is relative to the declaring file; child settings override parent settings, replacing `AGENT_EXTRA_ENV` as a whole. Explicit config files and inherited parents must exist, and inheritance cycles are errors. Run `agent config explain` to inspect loaded files and setting sources with values redacted. This replaces the previous root-only discovery and first-assignment-wins behavior.
 
 Example:
 
