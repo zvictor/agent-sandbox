@@ -3131,7 +3131,11 @@ test_foreground_runtime_lease_follows_bound_container() (
 #!/usr/bin/env bash
 set -euo pipefail
 [ "$*" = "container exists agent-lease-test" ] || exit 125
-[ "$(cat "$FAKE_CONTAINER_STATE_FILE")" = "1" ]
+if [ "$(cat "$FAKE_CONTAINER_STATE_FILE")" = "1" ]; then
+  : > "$FAKE_CONTAINER_SEEN_FILE"
+else
+  exit 1
+fi
 EOF
   chmod +x "$bin_dir/podman"
 
@@ -3149,7 +3153,8 @@ EOF
   state_file="$tmp_dir/container-state"
   printf '1\n' > "$state_file"
   FAKE_CONTAINER_STATE_FILE="$state_file"
-  export FAKE_CONTAINER_STATE_FILE
+  FAKE_CONTAINER_SEEN_FILE="$tmp_dir/container-seen"
+  export FAKE_CONTAINER_STATE_FILE FAKE_CONTAINER_SEEN_FILE
 
   prepare_runtime_lease
   prepare_sandbox_tmp
@@ -3160,6 +3165,15 @@ EOF
   prepare_runtime_lease_guard
   [ -f "$lease_dir/container.env" ] || fail "expected runtime lease container binding"
   [ -f "$lease_dir/guard.pid" ] || fail "expected runtime lease guard pid"
+
+  # Wait for the guard to observe the live container before simulating its
+  # teardown. A live PID alone does not establish the guard's startup state.
+  guard_wait=0
+  while [ ! -f "$FAKE_CONTAINER_SEEN_FILE" ] && [ "$guard_wait" -lt 50 ]; do
+    sleep 0.1
+    guard_wait=$((guard_wait + 1))
+  done
+  [ -f "$FAKE_CONTAINER_SEEN_FILE" ] || fail "expected guard to observe live container"
 
   cleanup_runtime_lease
   [ -f "$sandbox_tmp/test-file" ] || fail "expected live container to retain temporary storage"
