@@ -387,7 +387,7 @@ EOF
     ln -s /cache/nix/gcroots "$out/nix/var/nix/gcroots"
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/var/tmp" "$out/config"
-    mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"
+    mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net" "$out/dev/snd"
     mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/run/systemd/system" "$out/run/user" "$out/var/run"
   '';
 
@@ -420,6 +420,8 @@ EOF
       pkgs.nix-index
       pkgs.systemdMinimal
       pkgs.catatonit
+      pkgs.alsa-utils
+      pkgs.pipewire
     ]
     ++ helpers
     ++ devPackagesImage
@@ -478,9 +480,9 @@ rec {
       # Keep common runtime mount destinations as normal directories, not
       # symlink chains.
       for d in \
-        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/secrets run/systemd run/systemd/system run/user var var/run var/tmp \
+        cache config nixcache tmp run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/host-services run/secrets run/systemd run/systemd/system run/user var var/run var/tmp \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
-        proc sys sys/fs sys/fs/cgroup dev dev/net
+        proc sys sys/fs sys/fs/cgroup dev dev/net dev/snd
       do
         rm -rf "$out/$d"
         mkdir -p "$out/$d"

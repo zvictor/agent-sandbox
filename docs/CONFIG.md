@@ -76,6 +76,7 @@ the selected init fails during container creation.
 | `AGENT_WORKSPACE_PATH` | current directory | Workspace mounted at the same absolute path inside the sandbox |
 | `AGENT_PODMAN_ROOTFS_MODE` | `auto` | Podman rootfs mode: `auto`, `overlay`, or `mirror`; `rootless-linux` requires `auto` or `mirror` and always selects the mirror |
 | `AGENT_ALLOW_SUDO` | `0` | Enables container-local sudo when set to `1` |
+| `AGENT_DISABLE_AUDIO` | `0` | Disables automatic audio forwarding (PipeWire, PulseAudio, and ALSA `/dev/snd`) |
 | `AGENT_PERF_LOG` | `1` | Enable or disable timing logs |
 | `AGENT_FORCE_REBUILD` | `0` | Rebuild cached runtime artifacts |
 | `AGENT_NIX_EXPERIMENTAL_FEATURES` | `nix-command flakes` | Extra Nix experimental features for launcher commands |
@@ -138,6 +139,7 @@ Podman pod per worktree and exposes the sandbox through a Tailscale sidecar.
 | `AGENT_REMOTE_ALLOW_EXTRA_ENV` | `0` | Allow `AGENT_EXTRA_ENV` in remote mode |
 | `AGENT_REMOTE_ALLOW_HOST_ENV` | `0` | Allow broad host environment passthrough in remote mode |
 | `AGENT_REMOTE_FORWARD_SSH_AGENT` | `0` | Forward the host SSH agent into the remote runtime |
+| `AGENT_REMOTE_FORWARD_AUDIO` | `0` | Forward host audio into the remote runtime |
 | `AGENT_REMOTE_ALLOW_PRIVILEGED_HOST_CONTROL` | unset | Set to `I_UNDERSTAND` to allow non-interactive `firecracker-host` remote startup |
 
 ### Rootless Linux Profile

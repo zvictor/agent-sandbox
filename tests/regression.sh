@@ -266,6 +266,30 @@ ssh_agent_args_for() (
   printf '%s\n' "${ARGS[@]}"
 )
 
+
+audio_args_for() (
+  set -euo pipefail
+
+  local test_pw_sock="${1:-}"
+  local test_pulse_sock="${2:-}"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  resolve_pipewire_socket() {
+    printf '%s\n' "$test_pw_sock"
+  }
+
+  resolve_pulseaudio_socket() {
+    printf '%s\n' "$test_pulse_sock"
+  }
+
+  Z_SUFFIX=""
+  ARGS=()
+  append_audio_args
+
+  printf '%s\n' "${ARGS[@]}"
+)
+
 prepare_ssh_runtime_for() (
   set -euo pipefail
 
@@ -1426,6 +1450,44 @@ test_remote_mode_suppresses_ssh_agent_by_default() (
   assert_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
 )
 
+
+test_audio_forwarding_support() (
+  set -euo pipefail
+
+  local pw_sock="/tmp/test-pw.sock"
+  local pulse_sock="/tmp/test-pulse.sock"
+  local output
+
+  output="$(audio_args_for "$pw_sock" "$pulse_sock")"
+  assert_contains "$output" "$pw_sock:/run/host-services/pipewire-0:rw"
+  assert_contains "$output" "PIPEWIRE_RUNTIME_DIR=/run/host-services"
+  assert_contains "$output" "PIPEWIRE_REMOTE=pipewire-0"
+  assert_contains "$output" "$pulse_sock:/run/host-services/pulse-native:rw"
+  assert_contains "$output" "PULSE_SERVER=unix:/run/host-services/pulse-native"
+
+  output="$(AGENT_DISABLE_AUDIO=1 audio_args_for "$pw_sock" "$pulse_sock")"
+  assert_not_contains "$output" "pipewire-0"
+  assert_not_contains "$output" "pulse-native"
+
+  output="$(AGENT_REMOTE_CONTAINER_MODE=1 audio_args_for "$pw_sock" "$pulse_sock")"
+  assert_not_contains "$output" "pipewire-0"
+  assert_not_contains "$output" "pulse-native"
+
+  output="$(AGENT_REMOTE_CONTAINER_MODE=1 AGENT_REMOTE_FORWARD_AUDIO=1 audio_args_for "$pw_sock" "$pulse_sock")"
+  assert_contains "$output" "$pw_sock:/run/host-services/pipewire-0:rw"
+  assert_contains "$output" "PIPEWIRE_RUNTIME_DIR=/run/host-services"
+)
+
+test_image_includes_audio_recorders() (
+  set -euo pipefail
+
+  local image_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+
+  assert_contains "$image_file" 'pkgs.alsa-utils'
+  assert_contains "$image_file" 'pkgs.pipewire'
+)
+
 test_remote_secrets_are_not_passthrough_env() (
   set -euo pipefail
 
@@ -1524,7 +1586,7 @@ test_remote_forces_safe_helper_defaults() (
 
   local output
   output="$(
-    AGENT_CONTAINER_API=auto AGENT_NEED_HELPER=1 bash -c '
+    AGENT_CONTAINER_API=auto AGENT_NEED_HELPER=1 AGENT_EXTRA_ENV="" AGENT_EXTRA_MOUNTS="" AGENT_EXTRA_DEVICES="" AGENT_AUTO_MOUNT_DIRS="" bash -c '
       source "$1"
       remote_reject_implicit_host_bridges
       printf "container_api=%s\n" "$AGENT_CONTAINER_API"
@@ -4091,7 +4153,8 @@ test_image_includes_openssh() (
   assert_contains "$image_file" '"$out/proc" "$out/sys/fs/cgroup" "$out/dev/net"'
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$image_file" "var/tmp"
-  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=8"
+  assert_contains "$image_file" '"$out/run/host-services"'
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=9"
   assert_contains "$rootfs_file" "run/agent-path-guard"
   assert_contains "$rootfs_file" "run/agent-runtime-receipts"
   assert_contains "$rootfs_file" "var/tmp"
@@ -4148,6 +4211,8 @@ main() {
   run_test "workspace mounts for linked worktree override" test_workspace_mounts_for_linked_worktree_workspace_override
   run_test "config selectors are not passthrough env" test_config_selectors_are_not_passthrough_env
   run_test "ssh agent mount support" test_ssh_agent_mount_support
+  run_test "audio forwarding support" test_audio_forwarding_support
+  run_test "image includes audio recorders" test_image_includes_audio_recorders
   run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
   run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
   run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough

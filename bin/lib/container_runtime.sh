@@ -1430,6 +1430,7 @@ append_host_socket_args() {
   fi
 
   append_ssh_agent_args
+  append_audio_args
 }
 
 resolve_ssh_auth_socket() {
@@ -1463,6 +1464,98 @@ append_ssh_agent_args() {
 
   ARGS+=( -v "$host_sock:$container_sock:rw${Z_SUFFIX}" )
   ARGS+=( -e "SSH_AUTH_SOCK=$container_sock" )
+}
+
+
+resolve_pipewire_socket() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local sock_path=""
+
+  if [ -n "${PIPEWIRE_RUNTIME_DIR:-}" ] && [ -S "${PIPEWIRE_RUNTIME_DIR}/${PIPEWIRE_REMOTE:-pipewire-0}" ]; then
+    sock_path="${PIPEWIRE_RUNTIME_DIR}/${PIPEWIRE_REMOTE:-pipewire-0}"
+  elif [ -n "$runtime_dir" ] && [ -S "$runtime_dir/pipewire-0" ]; then
+    sock_path="$runtime_dir/pipewire-0"
+  fi
+
+  [ -n "$sock_path" ] || return 0
+
+  case "$sock_path" in
+    /*)
+      printf '%s\n' "$sock_path"
+      ;;
+    *)
+      local sock_dir=""
+      sock_dir="$(cd "$(dirname "$sock_path")" && pwd -P)"
+      printf '%s/%s\n' "$sock_dir" "$(basename "$sock_path")"
+      ;;
+  esac
+}
+
+resolve_pulseaudio_socket() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local raw_path=""
+  local sock_path=""
+
+  if [ -n "${PULSE_SERVER:-}" ]; then
+    case "$PULSE_SERVER" in
+      unix:/*)
+        raw_path="${PULSE_SERVER#unix:}"
+        ;;
+      /*)
+        raw_path="$PULSE_SERVER"
+        ;;
+    esac
+  elif [ -n "$runtime_dir" ] && [ -S "$runtime_dir/pulse/native" ]; then
+    raw_path="$runtime_dir/pulse/native"
+  elif [ -S "/run/pulse/native" ]; then
+    raw_path="/run/pulse/native"
+  fi
+
+  [ -n "$raw_path" ] || return 0
+  [ -S "$raw_path" ] || return 0
+
+  case "$raw_path" in
+    /*)
+      sock_path="$raw_path"
+      ;;
+    *)
+      local sock_dir=""
+      sock_dir="$(cd "$(dirname "$raw_path")" && pwd -P)"
+      sock_path="$sock_dir/$(basename "$raw_path")"
+      ;;
+  esac
+
+  printf '%s\n' "$sock_path"
+}
+
+append_audio_args() {
+  local pipewire_sock=""
+  local pulse_sock=""
+
+  if [ "${AGENT_DISABLE_AUDIO:-0}" = "1" ]; then
+    return 0
+  fi
+
+  if remote_container_mode && [ "${AGENT_REMOTE_FORWARD_AUDIO:-0}" != "1" ]; then
+    return 0
+  fi
+
+  pipewire_sock="$(resolve_pipewire_socket)"
+  if [ -n "$pipewire_sock" ]; then
+    ARGS+=( -v "$pipewire_sock:/run/host-services/pipewire-0:rw${Z_SUFFIX}" )
+    ARGS+=( -e "PIPEWIRE_RUNTIME_DIR=/run/host-services" )
+    ARGS+=( -e "PIPEWIRE_REMOTE=pipewire-0" )
+  fi
+
+  pulse_sock="$(resolve_pulseaudio_socket)"
+  if [ -n "$pulse_sock" ]; then
+    ARGS+=( -v "$pulse_sock:/run/host-services/pulse-native:rw${Z_SUFFIX}" )
+    ARGS+=( -e "PULSE_SERVER=unix:/run/host-services/pulse-native" )
+  fi
+
+  if [ -d /dev/snd ] && ! rootless_linux_profile; then
+    ARGS+=( --device /dev/snd )
+  fi
 }
 
 append_ssh_runtime_mount_args() {
