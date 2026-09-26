@@ -125,7 +125,7 @@ prepare_codex_auth_mount_target() {
 }
 
 prepare_codex_permission_config() {
-  resolve_permission_policy || return 1
+  resolve_permission_policy "${TOOL:-codex}" "${REMAINING_ARGS[@]}" || return 1
   CODEX_PERMISSION_CONFIG_DIR="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-policy.XXXXXX")" || return 1
   # This directory belongs to this launch. Never copy user preferences into policy.
   printf 'mcp_oauth_credentials_store = "file"\n' > "$CODEX_PERMISSION_CONFIG_DIR/config.toml"
@@ -1971,7 +1971,7 @@ run_container_runtime() {
 }
 
 build_container_args() {
-  resolve_permission_policy || return 1
+  resolve_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   validate_tool_permission_args "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   prepare_tool_cache_dirs
   prepare_path_guard_dir

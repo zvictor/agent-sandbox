@@ -339,7 +339,7 @@ doctor_permission_notes() {
 
   if [ "${PERMISSION_POLICY:-container}" = native ]; then
     if protected="$(codex_protected_symlink)"; then
-      doctor_note "Codex workspace-write cannot protect writable symlink $protected. Use a real metadata directory or AGENT_PERMISSION_POLICY=container; read-only behavior may differ."
+      doctor_note "Codex workspace-write cannot protect writable symlink $protected. Use a real metadata directory or launch with --yolo instead of workspace-write; read-only behavior may differ."
     fi
     doctor_note 'Native preserves tool settings; it does not guarantee that the tool enables OS sandboxing. CodeMachine native policy is unsupported because its runners hardcode bypasses.'
   fi
