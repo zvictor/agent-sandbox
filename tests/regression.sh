@@ -4404,6 +4404,7 @@ main() {
   run_test "need clear commands" test_need_clear_commands
   run_test "codex config mount omits workspace alias" test_codex_config_mount_omits_workspace_alias
   run_test "codex project config mount uses stable runtime home" test_codex_project_config_mount_uses_stable_runtime_home
+  run_test "Antigravity config selectors and project-local sessions" "$REPO_ROOT/tests/antigravity-config.sh"
   if command -v bun >/dev/null 2>&1; then
     run_test "codex rollout path migration rewrites state db" test_codex_rollout_path_migration_rewrites_state_db
     run_test "codex rollout path migration follows symlinked SQLite home" test_codex_rollout_path_migration_rewrites_state_db symlink
