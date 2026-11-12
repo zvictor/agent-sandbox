@@ -48,6 +48,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex home; `project` uses `$AGENT_PROJECT_ROOT/.codex` |
 | `CLAUDE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Claude config root |
 | `OPENCODE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects OpenCode config root |
+| `ANTIGRAVITY_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Antigravity CLI home; `project` uses `$AGENT_PROJECT_ROOT/.gemini` |
 | `CODEX_AUTH` | unset | slot name, file path | Overlays Codex credentials |
 | `CLAUDE_AUTH` | unset | slot name, file path | Overlays Claude credentials |
 | `OPENCODE_AUTH` | unset | slot name, file path | Overlays OpenCode credentials |
@@ -356,7 +357,7 @@ it changes host auth/config and cache ownership semantics.
 Tool config mounts:
 - `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and mounts freshly generated runtime policy at `/etc/codex` from the container's runtime lease
 - `opencode`: host config root to container `~/.config/opencode`
-- `antigravity`: host `~/.gemini` to container `~/.gemini`; the native `agy` binary is cached under `/cache/antigravity`
+- `antigravity`: selected config root to container `~/.gemini` (host `~/.gemini` by default, or `$AGENT_PROJECT_ROOT/.gemini` with `ANTIGRAVITY_CONFIG=project`); the native `agy` binary is cached under `/cache/antigravity`
 - `claude`: host config root to container `~/.claude`
 - `omp`: host `~/.omp` to container `~/.omp`
 - `codemachine`: mounts Codex, OpenCode, and Claude config roots together
@@ -379,6 +380,9 @@ Config selectors:
 | `CODEX_CONFIG` | `host`, `project`, `fresh`, `<path>` |
 | `CLAUDE_CONFIG` | `host`, `project`, `fresh`, `<path>` |
 | `OPENCODE_CONFIG` | `host`, `project`, `fresh`, `<path>` |
+| `ANTIGRAVITY_CONFIG` | `host`, `project`, `fresh`, `<path>` |
+
+`ANTIGRAVITY_CONFIG=project` stores CLI transcripts, session cache, and CLI settings under `$AGENT_PROJECT_ROOT/.gemini/antigravity-cli/` instead of the host's `~/.gemini/antigravity-cli/`. This is opt-in to keep existing host sessions available by default. `fresh` uses temporary runtime state; an explicit path is resolved like the other config selectors. Project mode does not migrate old host sessions or credentials automatically; back them up before changing modes, and authenticate in the new config root as needed.
 
 Auth selectors:
 
