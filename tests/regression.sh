@@ -1621,6 +1621,16 @@ test_image_includes_procps() (
   assert_contains "$image_file" 'pkgs.procps'
 )
 
+test_rootfs_buildenv_rejects_package_collisions() (
+  set -euo pipefail
+
+  local image_file
+  image_file="$(cat "$REPO_ROOT/nix/image.nix")"
+
+  assert_not_contains "$image_file" 'ignoreCollisions = true;'
+  assert_contains "$image_file" 'pname == "procps"'
+)
+
 test_remote_secrets_are_not_passthrough_env() (
   set -euo pipefail
 
@@ -2128,6 +2138,40 @@ test_runtime_path_includes_sudo_when_enabled() (
     "/run/agent-path-guard:/agent-sudo/bin:$workspace/node_modules/.bin:/cache/need/projects/"*) ;;
     *) fail "runtime PATH should include sudo path when enabled: $output" ;;
   esac
+)
+
+test_antigravity_runtime_path_includes_cache_bin() (
+  set -euo pipefail
+
+  local tmp_dir workspace output
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  TOOL="antigravity"
+  output="$(runtime_path_for "$workspace" "$workspace")"
+  assert_contains "$output" "/cache/antigravity/bin"
+  assert_contains "$output" "/cache/.local/bin"
+
+  TOOL="agy"
+  output="$(runtime_path_for "$workspace" "$workspace")"
+  assert_contains "$output" "/cache/antigravity/bin"
+  assert_contains "$output" "/cache/.local/bin"
+)
+
+test_agy_tool_resolution_and_alias() (
+  set -euo pipefail
+
+  source "$REPO_ROOT/bin/lib/cli.sh"
+  KNOWN_TOOLS="codex claude opencode antigravity agy codemachine omp commandcode"
+
+  TOOL=""
+  REMAINING_ARGS=()
+  resolve_tool agy -p "inspect"
+  [ "$TOOL" = "antigravity" ] || fail "expected agy to resolve to antigravity, got: $TOOL"
+  [ "${REMAINING_ARGS[*]}" = "-p inspect" ] || fail "remaining args mutated: ${REMAINING_ARGS[*]}"
 )
 
 test_runtime_modes_preserve_podman_rootfs() (
@@ -4411,6 +4455,7 @@ main() {
   run_test "clipboard forwarding support" test_clipboard_forwarding_support
   run_test "image includes clipboard tools" test_image_includes_clipboard_tools
   run_test "image includes procps" test_image_includes_procps
+  run_test "rootfs buildenv rejects package collisions" test_rootfs_buildenv_rejects_package_collisions
   run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
   run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
   run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough
@@ -4429,6 +4474,8 @@ main() {
   run_test "dev env path precedence" test_dev_env_path_precedence
   run_test "runtime path uses project-scoped need bins" test_runtime_path_uses_project_scoped_need_bins
   run_test "runtime path includes sudo when enabled" test_runtime_path_includes_sudo_when_enabled
+  run_test "antigravity runtime path includes cache bin" test_antigravity_runtime_path_includes_cache_bin
+  run_test "agy tool resolution and alias" test_agy_tool_resolution_and_alias
   run_test "runtime modes preserve podman rootfs" test_runtime_modes_preserve_podman_rootfs
   run_test "rootless linux requires writable rootfs mirror" test_rootless_linux_requires_writable_rootfs_mirror
   run_test "rootless linux mirror prepares dynamic mount targets" test_rootless_linux_mirror_prepares_dynamic_mount_targets
