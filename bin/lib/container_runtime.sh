@@ -438,6 +438,11 @@ append_split_arg_values() {
 }
 
 runtime_env_key_is_reserved() {
+  if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
+    case "$1" in
+      GH_*|GITHUB_TOKEN|GIT_CONFIG_*|GIT_TERMINAL_PROMPT) return 0 ;;
+    esac
+  fi
   case "$1" in
     AGENT_NEED_HELPER_DIR|AGENT_RUNTIME_LEASE_ID|AGENT_RUNTIME_RECEIPTS_DIR|AGENT_PERMISSION_POLICY|AGENT_PERMISSION_PROJECT_ROOT)
       return 0
@@ -564,6 +569,7 @@ prepare_path_guard_dir() {
   for guarded_command in git sh nix nix-shell need; do
     ln -s "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
   done
+  prepare_github_app_commands
 
   if firecracker_host_profile; then
     ln -s "/bin/agent-firecracker-podman" "$PATH_GUARD_HOST_DIR/podman"
@@ -855,6 +861,10 @@ EOF_SSH
 }
 
 prepare_ssh_runtime_dir() {
+  if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
+    SSH_RUNTIME_DIR=""
+    return 0
+  fi
   local host_ssh_dir="$HOST_HOME/.ssh"
   local stable_sock_path="/run/host-services/ssh-auth.sock"
   local host_sock=""
@@ -1348,7 +1358,7 @@ append_firecracker_host_args() {
 }
 
 append_host_socket_args() {
-  if [ -f "$HOST_HOME/.gitconfig" ]; then
+  if [ "${GITHUB_APP_AUTH_MODE:-none}" != app ] && [ -f "$HOST_HOME/.gitconfig" ]; then
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
   fi
 
@@ -1425,6 +1435,7 @@ resolve_ssh_auth_socket() {
 }
 
 append_ssh_agent_args() {
+  [ "${GITHUB_APP_AUTH_MODE:-none}" != app ] || return 0
   local host_sock=""
   local container_sock="/run/host-services/ssh-auth.sock"
 
@@ -1813,7 +1824,15 @@ append_passthrough_env_args() {
         # mounted separately so the container sees a valid in-container path.
         continue
         ;;
-      AGENT_REMOTE_TS_AUTHKEY|AGENT_REMOTE_TAILSCALE_AUTHKEY|TS_AUTHKEY|TS_AUTH_KEY|AGENT_REMOTE_TS_CLIENT_SECRET|AGENT_REMOTE_TS_CLIENT_SECRET_FILE|TS_CLIENT_SECRET)
+      AGENT_REMOTE_TS_AUTHKEY|AGENT_REMOTE_TAILSCALE_AUTHKEY|TS_AUTHKEY|TS_AUTH_KEY|AGENT_REMOTE_TS_CLIENT_SECRET|AGENT_REMOTE_TS_CLIENT_SECRET_FILE|TS_CLIENT_SECRET|AGENT_GITHUB_APP_*|AGENT_GITHUB_INSTALLATION_ID)
+        continue
+        ;;
+      GH_*|GITHUB_TOKEN|GIT_CONFIG_*)
+        if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
+          continue
+        fi
+        ;; 
+      AGENT_GITHUB_AUTH)
         continue
         ;;
     esac
@@ -2009,6 +2028,7 @@ build_container_args() {
   append_extra_device_args
   append_passthrough_env_args
   mount_tool_configs
+  append_github_app_container_args
   ARGS+=( -e "AGENT_PERMISSION_POLICY=$PERMISSION_POLICY" -e "AGENT_PERMISSION_PROJECT_ROOT=$PROJECT_ROOT" )
   append_stdio_and_target_args
 }
