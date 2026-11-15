@@ -524,6 +524,30 @@ stop_runtime_lease_helper() {
   fi
 }
 
+stop_runtime_lease_github_app_broker() {
+  local lease_dir="$1" pid_file="$1/github-app/service.pid"
+  local socket_path="$1/github-app/token.sock" pid="" cmd="" waited=0
+  [ -f "$pid_file" ] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  case "$pid" in ""|*[!0-9]*) return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  if [ -r "/proc/$pid/cmdline" ]; then
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  else
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  fi
+  case "$cmd" in
+    *agent-github-app-broker*"$socket_path"*) ;;
+    *) return 0 ;;
+  esac
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 50 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # Do not SIGKILL a reused PID; the service might have already exited.
+}
+
 remove_runtime_lease() {
   local lease_dir="$1"
 
@@ -534,6 +558,7 @@ remove_runtime_lease() {
   }
 
   stop_runtime_lease_helper "$lease_dir"
+  stop_runtime_lease_github_app_broker "$lease_dir"
   remove_sandbox_tmp "$lease_dir" || return 1
   rm -rf -- "$lease_dir"
 }
