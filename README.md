@@ -97,7 +97,8 @@ scope, gives the container a private cgroup namespace, and starts a private
 container-local user manager. It never mounts the host user bus into the
 container. The agent stays unprivileged with no effective capabilities, and
 the profile rejects Docker, remote-container mode, root, and
-`AGENT_ALLOW_SUDO=1`. It also rejects caller-supplied mounts/devices, container
+`AGENT_ALLOW_SUDO=1`. Explicit `AGENT_EXTRA_MOUNTS` are supported and widen
+the accessible filesystem; the profile rejects automatic mounts, extra devices, container
 API exposure, KVM, and Nix daemon access. The image provides Bubblewrap 0.12.0
 and verifies the manager, delegated controls, and a nested rootless Bubblewrap
 invocation before starting the agent. A missing predicate is a hard
@@ -137,7 +138,9 @@ though the container still runs through Podman or Docker internally.
 
 ## Host Project Contract
 
-The launcher looks for the host project's package contract in this order:
+Set `AGENT_PROJECT_CONTRACT=none` to skip host package resolution entirely and use the built-in empty contract.
+
+Otherwise, the launcher looks for the host project's package contract in this order:
 1. `$AGENT_PROJECT_NIX_DIR/packages.nix`
 2. `<project-root>/shell.nix`
 3. built-in empty project contract
@@ -283,6 +286,7 @@ For SSH operations under Codex's native sandbox, the launcher exposes the sandbo
 - Tool-managed permissions: use the tool's permission options, such as `agent codex --sandbox workspace-write --ask-for-approval on-request`. Shortcuts and direct launches use the same policy.
 - Fastest Codex workflow: run `./scripts/codex` after `./scripts/agent init`.
 - Session viewer: run `./scripts/viewer` or `agent viewer` to start Claude Code History Viewer server mode on `127.0.0.1:3727`; the launcher prints the authenticated URL.
+  Use `AGENT_PROJECT_ROOT=/path/to/project ./scripts/viewer` to view another project's selected session roots. Viewer homes are cached separately per project; `CODEX_CONFIG=project` reads that project's `.codex/sessions`, including shared `.codex` directory symlinks.
 - Remote sandbox: run `./scripts/agent remote up` from a worktree, then `./scripts/agent remote codex` to use a durable tmux-backed Codex session that can also be reached from a phone over Tailscale/SSH. See [docs/REMOTE.md](docs/REMOTE.md).
 - Project-scoped state: set `CODEX_CONFIG=project`, `CLAUDE_CONFIG=project`, or `OPENCODE_CONFIG=project`.
 - Ephemeral run: set `<TOOL>_CONFIG=fresh`.
@@ -551,6 +555,7 @@ AGENT_FORCE_REBUILD=1
 ### Primary Launcher Knobs
 
 - `AGENT_PROJECT_ROOT`: host project root; defaults to current git top-level or cwd
+- `AGENT_PROJECT_CONTRACT`: `auto` (default) or `none` to skip host package resolution and use the empty contract
 - `AGENT_PROJECT_NIX_DIR`: package contract directory; defaults to `$AGENT_PROJECT_ROOT/nix`
 - `AGENT_SANDBOX_FLAKE_REF`: override sandbox flake source
 - `AGENT_RUNTIME`: `podman` or `docker`; defaults to auto-detect
