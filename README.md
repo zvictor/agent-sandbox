@@ -97,7 +97,8 @@ scope, gives the container a private cgroup namespace, and starts a private
 container-local user manager. It never mounts the host user bus into the
 container. The agent stays unprivileged with no effective capabilities, and
 the profile rejects Docker, remote-container mode, root, and
-`AGENT_ALLOW_SUDO=1`. It also rejects caller-supplied mounts/devices, container
+`AGENT_ALLOW_SUDO=1`. Explicit `AGENT_EXTRA_MOUNTS` are supported and widen
+the accessible filesystem; the profile rejects automatic mounts, extra devices, container
 API exposure, KVM, and Nix daemon access. The image provides Bubblewrap 0.12.0
 and verifies the manager, delegated controls, and a nested rootless Bubblewrap
 invocation before starting the agent. A missing predicate is a hard

@@ -24,6 +24,7 @@ resolve_test_store_path() {
 }
 
 TEST_RETAINED_STORE_PATH="$(resolve_test_store_path)"
+source "$REPO_ROOT/bin/lib/podman_host.sh"
 
 assert_contains() {
   local haystack="$1"
@@ -597,7 +598,9 @@ runtime_identity_args_for() (
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
 
-  mkdir -p "$tmp_dir/rootfs/agent-sudo/bin" "$tmp_dir/helper"
+  mkdir -p "$tmp_dir/rootfs/agent-sudo/bin" "$tmp_dir/helper" "$tmp_dir/runtime"
+  XDG_RUNTIME_DIR="$tmp_dir/runtime"
+  XDG_CACHE_HOME="$tmp_dir/cache"
   printf '#!/bin/sh\n' > "$tmp_dir/rootfs/agent-sudo/bin/sudo"
   chmod 0755 "$tmp_dir/rootfs/agent-sudo/bin/sudo"
 
@@ -833,11 +836,11 @@ rootless_linux_preflight_for() (
 
   podman() {
     case "$*" in
-      info)
-        return 0
-        ;;
       "info --format {{.Host.Security.Rootless}}")
-        if [ "$fail_case" = "rootful" ]; then
+        if [ "$fail_case" = "podman-info" ]; then
+          printf 'mock libpod state points at another working directory\n' >&2
+          return 125
+        elif [ "$fail_case" = "rootful" ]; then
           printf 'false\n'
         else
           printf 'true\n'
@@ -917,6 +920,8 @@ rootless_runtime_command_for() (
   set -euo pipefail
 
   source "$REPO_ROOT/bin/lib/container_runtime.sh"
+
+  init_podman_storage_context() { :; }
 
   run_with_logical_argv0() {
     printf 'logical-argv0=%s\n' "$1"
@@ -2325,6 +2330,8 @@ test_stdio_target_uses_podman_rootfs() (
 
   assert_contains "$output" "--rootfs"
   assert_contains "$output" "/tmp/rootfs:O"
+  assert_contains "$output" "--no-daemon"
+  assert_contains "$output" $'--no-daemon\n--yolo\n--probe'
   assert_contains "$output" $'--yolo\n--probe'
   assert_not_contains "$output" "sha256:unused"
 )
@@ -2340,6 +2347,8 @@ test_rootless_linux_target_uses_private_session_entrypoint() (
   assert_contains "$output" "/bin/agent-rootless-linux-entrypoint"
   assert_contains "$output" $'/tmp/rootfs:O\n--\n/bin/agent-rootless-linux-entrypoint\n--add-dir\n/cache/.ssh'
   assert_contains "$output" "--probe"
+  assert_contains "$output" "--no-daemon"
+  assert_contains "$output" $'--no-daemon\n--yolo\n--probe'
   assert_contains "$output" $'--yolo\n--probe'
   assert_not_contains "$output" "--entrypoint\n/bin/codex"
 )
@@ -2779,6 +2788,22 @@ test_rootless_linux_preflight_accepts_capable_host() (
   assert_contains "$output" "network=pasta"
 )
 
+test_rootless_linux_preflight_accepts_explicit_mounts() (
+  set -euo pipefail
+
+  local output
+  output="$(AGENT_EXTRA_MOUNTS='/host/packages:/host/packages:ro' rootless_linux_preflight_for)"
+  assert_contains "$output" "preflight-ok"
+
+  source "$REPO_ROOT/bin/lib/container_runtime.sh"
+  ARGS=()
+  split_csv_or_lines() { printf '%s\n' "$1" | tr ',' '\n'; }
+  append_split_arg_values -v '/host/packages:/host/packages:ro,/host/other:/host/other:rw'
+  [ "${#ARGS[@]}" -eq 4 ] || fail "expected two explicit mount arguments"
+  [ "${ARGS[0]}" = -v ] && [ "${ARGS[1]}" = '/host/packages:/host/packages:ro' ] || fail "read-only mount changed"
+  [ "${ARGS[2]}" = -v ] && [ "${ARGS[3]}" = '/host/other:/host/other:rw' ] || fail "read-write mount changed"
+)
+
 test_rootless_linux_preflight_uses_slirp_when_pasta_is_missing() (
   set -euo pipefail
 
@@ -2846,6 +2871,22 @@ test_rootless_linux_preflight_rejects_rootful_podman() (
   assert_contains "$output" "rootless-linux preflight failed: rootless podman is required"
 )
 
+test_rootless_linux_preflight_preserves_podman_diagnostics() (
+  set -euo pipefail
+
+  local output status
+
+  set +e
+  output="$(rootless_linux_preflight_for podman-info 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected failed podman info to fail"
+  assert_contains "$output" "rootless-linux podman executable:"
+  assert_contains "$output" "rootless-linux podman info: mock libpod state points at another working directory"
+  assert_contains "$output" "rootless-linux preflight failed: podman info failed for the launcher user"
+)
+
 test_rootless_linux_preflight_rejects_missing_isolated_network() (
   set -euo pipefail
 
@@ -2858,6 +2899,242 @@ test_rootless_linux_preflight_rejects_missing_isolated_network() (
 
   [ "$status" -ne 0 ] || fail "expected missing rootless network backend to fail"
   assert_contains "$output" "rootless-linux preflight failed: rootless Podman requires pasta or slirp4netns; host-network fallback is forbidden"
+)
+
+test_podman_namespace_guard_accepts_initial_namespace() (
+  set -euo pipefail
+  source "$REPO_ROOT/bin/lib/podman_host.sh"
+
+  local tmp_dir fixture
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  fixture="$tmp_dir/uid_map"
+  printf '         0          0 4294967295\n' > "$fixture"
+
+  RUNTIME="podman"
+  OS_NAME="Linux"
+  AGENT_TEST_UID_MAP="$fixture"
+
+  assert_host_podman_namespace
+)
+
+test_podman_namespace_guard_rejects_nested_namespace() (
+  set -euo pipefail
+  source "$REPO_ROOT/bin/lib/podman_host.sh"
+
+  local tmp_dir fixture output status=0
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  fixture="$tmp_dir/uid_map"
+  printf '         0       1000          1\n         1     100000      65536\n' > "$fixture"
+
+  RUNTIME="podman"
+  OS_NAME="Linux"
+  AGENT_TEST_UID_MAP="$fixture"
+
+  set +e
+  output="$(assert_host_podman_namespace 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || fail "expected assert_host_podman_namespace to fail in nested namespace"
+  assert_contains "$output" "Refusing to invoke host Podman from a nested user namespace"
+
+  AGENT_ALLOW_NESTED_PODMAN=1 assert_host_podman_namespace
+)
+
+test_nested_podman_uses_private_runtime_and_storage() (
+  set -euo pipefail
+  local fixture context output
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  mkdir -p "$fixture/bin" "$fixture/runtime" "$fixture/home/.local/share/containers/storage"
+  printf '1000 1000 1\n' > "$fixture/uid_map"
+  printf '#!/bin/sh\nprintf "podman-runtime=%%s\\n" "$XDG_RUNTIME_DIR"\n' > "$fixture/bin/podman"
+  chmod +x "$fixture/bin/podman"
+  PATH="$fixture/bin:$PATH"
+  XDG_RUNTIME_DIR="$fixture/runtime"
+  HOST_HOME="$fixture/home"
+  AGENT_TEST_UID_MAP="$fixture/uid_map"
+  RUNTIME=podman OS_NAME=Linux SANDBOX_PROFILE=rootless-linux
+  unset SANDBOX_NESTED_PODMAN_CONTEXT AGENT_SANDBOX_PODMAN_DIR AGENT_SANDBOX_PODMAN_GRAPHROOT AGENT_SANDBOX_PODMAN_RUNROOT AGENT_SANDBOX_PODMAN_STORAGE_CONF
+
+  prepare_nested_podman_context
+  context="$SANDBOX_NESTED_PODMAN_CONTEXT"
+  assert_host_podman_namespace
+  [ "$XDG_RUNTIME_DIR" = "$fixture/runtime" ] || fail 'launcher runtime directory changed'
+  output="$(podman info)"
+  assert_contains "$output" "podman-runtime=$context/runtime"
+  init_podman_storage_context
+  [ "$CONTAINERS_STORAGE_CONF" = "$context/storage/storage.conf" ] || fail 'nested storage configuration not isolated'
+  assert_not_contains "$(< "$CONTAINERS_STORAGE_CONF")" 'additionalimagestores'
+  [ "$AGENT_SANDBOX_PODMAN_RUNROOT" = "$context/runroot" ] || fail 'nested runroot not isolated'
+)
+
+test_nested_podman_lease_contexts_do_not_collide() (
+  set -euo pipefail
+  local fixture status
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  printf 'runtime=podman\nprofile=rootless-linux\ncontainer=agent-test\npodman_context=/run/user/1000/agent-sandbox-nested.other\n' > "$fixture/container.env"
+  SANDBOX_NESTED_PODMAN_CONTEXT=/run/user/1000/agent-sandbox-nested.current
+  status=0
+  runtime_lease_bound_container_exists "$fixture" || status=$?
+  [ "$status" -eq 2 ] || fail 'foreign Podman context must have unknown container status'
+  unset SANDBOX_NESTED_PODMAN_CONTEXT
+  status=0
+  runtime_lease_bound_container_exists "$fixture" || status=$?
+  [ "$status" -eq 2 ] || fail 'host context must not inspect nested storage'
+)
+
+test_podman_isolated_storage_conf_generation() (
+  set -euo pipefail
+  source "$REPO_ROOT/bin/lib/podman_host.sh"
+
+  local tmp_dir host_home cache_dir runtime_dir conf_path
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  host_home="$tmp_dir/home"
+  cache_dir="$tmp_dir/cache"
+  runtime_dir="$tmp_dir/runtime"
+  mkdir -p "$host_home/.local/share/containers/storage" "$runtime_dir"
+
+  HOST_HOME="$host_home"
+  XDG_CACHE_HOME="$cache_dir"
+  XDG_RUNTIME_DIR="$runtime_dir"
+  RUNTIME="podman"
+  SANDBOX_PROFILE="default"
+  AGENT_SANDBOX_PROFILE="default"
+
+  init_podman_storage_context
+
+  conf_path="$cache_dir/agent-sandbox/podman/storage.conf"
+  [ -f "$conf_path" ] || fail "expected storage.conf to be generated"
+  [ "${CONTAINERS_STORAGE_CONF:-}" = "$conf_path" ] || fail "expected CONTAINERS_STORAGE_CONF to match $conf_path"
+
+  local content
+  content="$(cat "$conf_path")"
+  assert_contains "$content" 'driver = "overlay"'
+  assert_contains "$content" "graphroot = \"$cache_dir/agent-sandbox/podman/graphroot\""
+  assert_contains "$content" "runroot = \"$runtime_dir/agent-sandbox-podman/runroot\""
+  assert_contains "$content" "additionalimagestores = [\"$host_home/.local/share/containers/storage\"]"
+  assert_contains "$content" 'mountopt = "nodev,metacopy=on"'
+)
+
+test_validate_container_mount_safety_rejects_storage_mounts() (
+  set -euo pipefail
+  source "$REPO_ROOT/bin/lib/podman_host.sh"
+
+  local tmp_dir host_home runtime_dir normal_dir output status=0
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  host_home="$tmp_dir/home"
+  runtime_dir="$tmp_dir/runtime"
+  normal_dir="$tmp_dir/project"
+  mkdir -p "$host_home/.local/share/containers/storage" "$runtime_dir/containers" "$normal_dir"
+
+  HOST_HOME="$host_home"
+  XDG_RUNTIME_DIR="$runtime_dir"
+
+  # 1. Normal project directory is accepted
+  ARGS=( -v "$normal_dir:/workspace:rw" )
+  validate_container_mount_safety
+
+  # 2. Host storage graphroot exact match is rejected
+  ARGS=( -v "$host_home/.local/share/containers/storage:/storage:rw" )
+  set +e
+  output="$(validate_container_mount_safety 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected storage mount to be rejected"
+  assert_contains "$output" "Refusing to mount host container storage path into sandbox"
+
+  # 3. Host storage parent directory is rejected
+  ARGS=( -v "$host_home/.local/share/containers:/containers:ro" )
+  set +e
+  output="$(validate_container_mount_safety 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected parent containers mount to be rejected"
+  assert_contains "$output" "Refusing to mount host container storage path into sandbox"
+
+  # 4. Host runroot is rejected
+  ARGS=( -v "$runtime_dir/containers:/runroot:rw" )
+  set +e
+  output="$(validate_container_mount_safety 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected runroot mount to be rejected"
+  assert_contains "$output" "Refusing to mount host container storage path into sandbox"
+
+  # 5. /var/lib/containers is rejected
+  ARGS=( -v "/var/lib/containers:/var-containers:ro" )
+  set +e
+  output="$(validate_container_mount_safety 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected /var/lib/containers to be rejected"
+  assert_contains "$output" "Refusing to mount host container storage path into sandbox"
+
+  # 6. Symlink pointing to storage is rejected
+  ln -s "$host_home/.local/share/containers" "$tmp_dir/storage-symlink"
+  ARGS=( -v "$tmp_dir/storage-symlink:/symlink:rw" )
+  set +e
+  output="$(validate_container_mount_safety 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected symlink to storage to be rejected"
+  assert_contains "$output" "Refusing to mount host container storage path into sandbox"
+
+  # 7. Sandbox internal tmp directory is accepted even when unreadable storage dirs exist
+  local unreadable_forbidden="$tmp_dir/unreadable_forbidden"
+  mkdir -p "$unreadable_forbidden"
+  chmod 000 "$unreadable_forbidden"
+  local sandbox_tmp="$tmp_dir/cache/agent-sandbox/tmp/sandboxes/local-sandbox-123/data"
+  mkdir -p "$sandbox_tmp"
+  ARGS=( -v "$sandbox_tmp:/tmp:rw" )
+  validate_container_mount_safety
+  chmod 755 "$unreadable_forbidden"
+
+  # Tool arguments after the runtime separator are not container mounts.
+  ARGS=( -- /bin/codex -v "/var/lib/containers:/data" )
+  validate_container_mount_safety
+)
+
+test_podman_runtime_cmd_uses_isolated_storage() (
+  set -euo pipefail
+  source "$REPO_ROOT/bin/lib/podman_host.sh"
+
+  local tmp_dir host_home cache_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  host_home="$tmp_dir/home"
+  cache_dir="$tmp_dir/cache"
+  mkdir -p "$host_home" "$cache_dir" "$tmp_dir/runtime"
+
+  HOST_HOME="$host_home"
+  XDG_CACHE_HOME="$cache_dir"
+  XDG_RUNTIME_DIR="$tmp_dir/runtime"
+  RUNTIME="podman"
+  SANDBOX_PROFILE="default"
+  AGENT_SANDBOX_PROFILE="default"
+
+  local captured_storage_conf=""
+  podman() {
+    captured_storage_conf="${CONTAINERS_STORAGE_CONF:-unset}"
+    printf 'podman-ok\n'
+  }
+
+  podman_runtime_cmd info >/dev/null
+
+  [ "$captured_storage_conf" = "$cache_dir/agent-sandbox/podman/storage.conf" ] \
+    || fail "expected podman_runtime_cmd to set CONTAINERS_STORAGE_CONF to $cache_dir/agent-sandbox/podman/storage.conf, got $captured_storage_conf"
 )
 
 test_rootless_linux_session_contract() (
@@ -3288,6 +3565,42 @@ EOF
   done
   [ ! -e "$lease_dir" ] || fail "expected confirmed container teardown to release lease"
   [ ! -e "$sandbox_tmp" ] || fail "expected confirmed teardown to remove temporary storage"
+)
+
+test_runtime_lease_cleanup_stops_guard_and_handles_races() (
+  set -euo pipefail
+
+  local fixture lease_dir sandbox_tmp
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  source "$REPO_ROOT/bin/lib/runtime_lease.sh"
+  CACHE_DIR="$fixture/cache"
+  RUNTIME_LEASE_DIR="$CACHE_DIR/runtime-leases/sandbox-test"
+  lease_dir="$RUNTIME_LEASE_DIR"
+  mkdir -p "$lease_dir"
+  prepare_sandbox_tmp
+  sandbox_tmp="$SANDBOX_TMP_DIR"
+  # A marker left by an interrupted older cleanup must not block a retry.
+  mkdir "$lease_dir/.cleaning"
+
+  # Spawn a mock background guard process whose PID is saved to guard.pid
+  sleep 60 &
+  local mock_pid="$!"
+  printf '%s\n' "$mock_pid" > "$lease_dir/guard.pid"
+  runtime_process_identity "$mock_pid" > "$lease_dir/guard.identity"
+
+  # Populate sandbox tmp with files and ephemeral subdirs
+  printf 'hello\n' > "$sandbox_tmp/data.txt"
+  mkdir -p "$sandbox_tmp/.tmp_ephemeral"
+
+  # remove_runtime_lease should stop the guard and remove temporary storage
+  remove_runtime_lease "$lease_dir"
+  [ ! -e "$lease_dir" ] || fail "expected lease directory removed"
+  [ ! -e "$sandbox_tmp" ] || fail "expected sandbox temporary storage removed"
+  ! kill -0 "$mock_pid" 2>/dev/null || fail "expected guard process to be stopped"
+
+  # Verify concurrent invocation on a non-existent or locked lease yields cleanly
+  remove_runtime_lease "$lease_dir"
 )
 
 test_remote_runtime_lease_persists_until_explicit_removal() (
@@ -4515,12 +4828,21 @@ main() {
   run_test "firecracker preflight rejects missing tun" test_firecracker_preflight_rejects_missing_tun
   run_test "firecracker preflight rejects root workspace failure" test_firecracker_preflight_rejects_root_workspace_failure
   run_test "rootless linux preflight accepts capable host" test_rootless_linux_preflight_accepts_capable_host
+  run_test "rootless linux preflight accepts explicit mounts" test_rootless_linux_preflight_accepts_explicit_mounts
   run_test "rootless linux preflight uses slirp without pasta" test_rootless_linux_preflight_uses_slirp_when_pasta_is_missing
   run_test "rootless linux preflight rejects missing user manager" test_rootless_linux_preflight_rejects_missing_user_manager
   run_test "rootless linux preflight rejects incomplete delegation" test_rootless_linux_preflight_rejects_incomplete_delegation
   run_test "rootless linux preflight rejects missing user namespaces" test_rootless_linux_preflight_rejects_missing_user_namespaces
+  run_test "rootless linux preflight preserves podman diagnostics" test_rootless_linux_preflight_preserves_podman_diagnostics
   run_test "rootless linux preflight rejects rootful podman" test_rootless_linux_preflight_rejects_rootful_podman
   run_test "rootless linux preflight rejects missing isolated network" test_rootless_linux_preflight_rejects_missing_isolated_network
+  run_test "podman namespace guard accepts initial namespace" test_podman_namespace_guard_accepts_initial_namespace
+  run_test "podman namespace guard rejects nested namespace" test_podman_namespace_guard_rejects_nested_namespace
+  run_test "nested podman uses private runtime and storage" test_nested_podman_uses_private_runtime_and_storage
+  run_test "nested podman lease contexts do not collide" test_nested_podman_lease_contexts_do_not_collide
+  run_test "podman isolated storage conf generation" test_podman_isolated_storage_conf_generation
+  run_test "validate container mount safety rejects storage mounts" test_validate_container_mount_safety_rejects_storage_mounts
+  run_test "podman runtime cmd uses isolated storage" test_podman_runtime_cmd_uses_isolated_storage
   run_test "rootless linux session contract" test_rootless_linux_session_contract
   run_test "host GC roots use final paths" test_host_gc_root_registration_uses_final_path
   run_test "runtime lease retains artifact and mounts receipts" test_runtime_lease_retains_artifact_and_mounts_receipts
@@ -4529,6 +4851,7 @@ main() {
   run_test "Codex native executable resolution" test_codex_native_resolution
   run_test "remote temporary storage requires confirmed teardown" test_remote_down_retains_tmp_until_teardown
   run_test "foreground runtime lease follows bound container" test_foreground_runtime_lease_follows_bound_container
+  run_test "runtime lease cleanup stops guard and handles races" test_runtime_lease_cleanup_stops_guard_and_handles_races
   run_test "remote runtime lease persists until removal" test_remote_runtime_lease_persists_until_explicit_removal
   run_test "need helper lifetime follows runtime lease" test_need_helper_lifetime_follows_runtime_lease
   run_test "need helper startup failure is fatal" test_need_helper_startup_failure_is_fatal

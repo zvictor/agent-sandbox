@@ -68,9 +68,10 @@ created when container root is deliberately unmapped.
 The agent runs with all capabilities dropped and `no-new-privileges`, while
 sudo, root, Docker, and remote-container mode are rejected. The profile adds no
 Jig-specific helper, service, registration, or privileged launcher. It also
-rejects caller-supplied mounts/devices, container API access, KVM, and the
-Nix daemon socket so those channels cannot replace or widen the capability
-proof. Networking uses a private rootless namespace through `pasta` or
+allows explicit `AGENT_EXTRA_MOUNTS`, which widen the filesystem accessible to
+the agent and can affect the capability proof if they cover runtime paths. It
+rejects automatic mounts, extra devices, container API access, KVM, and the
+Nix daemon socket. Networking uses a private rootless namespace through `pasta` or
 `slirp4netns`; the profile rejects host-network fallback.
 To permit Bubblewrap to mount procfs for a nested PID namespace, the profile
 removes only Podman's explicit default `/proc` cover mounts. It does not use
@@ -122,7 +123,21 @@ See:
 
 This matters because for some tools our container becomes the primary safety boundary once the tool's own prompts are bypassed.
 
-### 5. Container API access is split into safe and unsafe modes
+### 5. Podman runtime and storage isolation
+
+To prevent cross-contamination and runtime corruption between agent workloads and the developer's normal host Podman installation (such as upstream Podman issue #29986):
+
+- **Dedicated Storage Context**: Rootless Podman executes using an isolated storage configuration with `graphroot` under `${XDG_CACHE_HOME:-$HOST_HOME/.cache}/agent-sandbox/podman/graphroot` and `runroot` under `${XDG_RUNTIME_DIR}/agent-sandbox-podman/runroot`. Wiping sandbox state never affects the host user's personal containers or requires rebooting.
+- **Image Sharing**: Outside nested user namespaces, read-only base images are shared via `additionalimagestores` pointing to `~/.local/share/containers/storage`. Nested launches do not share host image storage.
+- **Nested User Namespaces**: For `rootless-linux`, a launcher already inside a user namespace gives Podman a private runtime directory, graphroot, and runroot for that launch. The launcher retains the original user-manager connection. These private directories are removed after confirmed container teardown; interrupted launches may retain them until the user runtime directory is cleared. Other profiles retain the initial user namespace guard.
+- **Storage Mount Validation**: The runtime scans and rejects any `AGENT_EXTRA_MOUNTS`, `AGENT_AUTO_MOUNT_DIRS`, or workspace paths that resolve to or encompass host or sandbox container storage or runroot directories.
+
+See:
+
+- [`podman_host.sh`](../bin/lib/podman_host.sh)
+- [`container_runtime.sh`](../bin/lib/container_runtime.sh)
+
+### 6. Container API access is split into safe and unsafe modes
 
 The default launcher behavior is still no host container API access. For Testcontainers-style workflows, the preferred high-level setting is now `AGENT_CONTAINER_API=auto`, which resolves to `podman-session` when host Podman is available. `podman-session` starts a dedicated rootless Podman API service with state under `AGENT_CACHE_DIR` and mounts only that session socket into the sandbox.
 

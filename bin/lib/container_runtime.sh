@@ -1,3 +1,4 @@
+[ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/permission_policy.sh"
 
 mount_engine() {
@@ -203,15 +204,6 @@ resolve_rootless_network_backend() {
   esac
 
   return 1
-}
-
-podman_runtime_cmd() {
-  if firecracker_host_profile; then
-    sudo -n podman "$@"
-    return
-  fi
-
-  podman "$@"
 }
 
 runtime_run_label() {
@@ -2000,6 +1992,10 @@ run_container_runtime() {
   if [ "$RUNTIME" = "podman" ] && firecracker_host_profile; then
     run_with_logical_argv0 "$TOOL" sudo -n podman run "${ARGS[@]}"
     return
+  fi
+
+  if [ "$RUNTIME" = "podman" ]; then
+    init_podman_storage_context || return 1
   fi
 
   if [ "$RUNTIME" = "podman" ] && rootless_linux_profile; then

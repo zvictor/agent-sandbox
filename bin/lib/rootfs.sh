@@ -1,3 +1,4 @@
+[ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 ROOTFS_MIRROR_FORMAT=9
 ROOTFS_RUNTIME_DIRS=$'etc\nconfig\nconfig/.codex\nconfig/.opencode\nconfig/.claude\ncache\ncache/.omp\nworkspace\nnixcache\nrun\nrun/agent-container-api\nrun/agent-nix-helper\nrun/agent-path-guard\nrun/agent-runtime-receipts\nrun/host-services\nrun/podman\nrun/secrets\nrun/systemd\nrun/systemd/system\nrun/user\nvar\nvar/run\nvar/tmp\nnix\nnix/store\nnix/var\nnix/var/nix\nnix/var/nix/daemon-socket\ntmp\ntmp/.X11-unix\nproc\nsys\nsys/fs\nsys/fs/cgroup\ndev\ndev/net\ndev/snd'
 ROOTFS_RUNTIME_COPY_FILES=$'etc/passwd\netc/group\netc/nsswitch.conf'
@@ -35,6 +36,7 @@ detect_podman_rootfs_mode() {
     return
   fi
 
+  init_podman_storage_context 2>/dev/null || true
   info="$(podman info --format '{{.Host.Security.Rootless}} {{.Store.GraphDriverName}} {{index .Store.GraphStatus "Native Overlay Diff"}}' 2>/dev/null || true)"
   case "$info" in
     "true overlay true")
