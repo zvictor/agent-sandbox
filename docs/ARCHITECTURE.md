@@ -84,7 +84,9 @@ logical agent instead of only `podman` or `docker`.
 
 ## Project Contract Resolution
 
-The host project package contract is resolved in this order:
+When `AGENT_PROJECT_CONTRACT=none` is set, the launcher immediately selects the built-in empty project contract without staging or evaluating project Nix expressions.
+
+Otherwise, the host project package contract is resolved in this order:
 1. `$AGENT_PROJECT_NIX_DIR/packages.nix`
 2. `<project-root>/shell.nix`
 3. built-in empty project contract
