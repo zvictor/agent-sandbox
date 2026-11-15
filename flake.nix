@@ -83,6 +83,7 @@
                 "$out/scripts/claude" \
                 "$out/scripts/opencode" \
                 "$out/scripts/antigravity" \
+                "$out/scripts/agy" \
                 "$out/scripts/codemachine" \
                 "$out/scripts/omp" \
                 "$out/scripts/commandcode" \
@@ -154,6 +155,7 @@
           claude = mkTool "claude";
           opencode = mkTool "opencode";
           antigravity = mkTool "antigravity";
+          agy = mkTool "agy";
           codemachine = mkTool "codemachine";
           omp = mkTool "omp";
           commandcode = mkTool "commandcode";
@@ -178,6 +180,7 @@
           claude = mkApp "${p.claude}/bin/claude";
           opencode = mkApp "${p.opencode}/bin/opencode";
           antigravity = mkApp "${p.antigravity}/bin/antigravity";
+          agy = mkApp "${p.agy}/bin/agy";
           codemachine = mkApp "${p.codemachine}/bin/codemachine";
           omp = mkApp "${p.omp}/bin/omp";
           commandcode = mkApp "${p.commandcode}/bin/commandcode";

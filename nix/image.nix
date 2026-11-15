@@ -90,6 +90,9 @@ let
     antigravity = {
       installer = true;
     };
+    agy = {
+      alias = "antigravity";
+    };
     claude = {
       pkg = "@anthropic-ai/claude-code";
       bin = "claude";
@@ -246,8 +249,14 @@ EOF
       bin ? name,
       latest ? false,
       installer ? false,
+      alias ? null,
     }:
-    if installer then
+    if alias != null then
+      pkgs.writeShellScriptBin name ''
+        #!/bin/sh
+        exec /bin/${alias} "$@"
+      ''
+    else if installer then
       pkgs.writeShellScriptBin name ''
         # Antigravity is distributed as a native binary, not an npm package.
         # Google's installer verifies the signed release manifest checksum.
@@ -261,6 +270,7 @@ EOF
         CACHE_DIR="''${TOOL_CACHE:-/cache}/${name}"
         INSTALL_DIR="$CACHE_DIR/bin"
         mkdir -p "$INSTALL_DIR"
+        export PATH="$INSTALL_DIR:/cache/.local/bin:$PATH"
         if [ ! -x "$INSTALL_DIR/agy" ]; then
           curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir "$INSTALL_DIR"
         fi

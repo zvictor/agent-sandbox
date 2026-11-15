@@ -508,7 +508,7 @@ mount_standard_engine() {
         "OPENCODE_CONFIG_DIR=/cache/.config/opencode" \
         "OPENCODE_AUTH" "$OPENCODE_AUTH_BASE" "opencode.json"
       ;;
-    antigravity)
+    antigravity|agy)
       mount_engine "antigravity" "host" "$ANTIGRAVITY_HOST_CONFIG" "/cache/.gemini" \
         "" "" "" ""
       ;;
@@ -534,7 +534,7 @@ mount_standard_engine() {
 
 mount_tool_configs() {
   case "$TOOL" in
-    codex | opencode | claude | antigravity | omp | commandcode)
+    codex | opencode | claude | antigravity | agy | omp | commandcode)
       mount_standard_engine "$TOOL"
       ;;
     codemachine)
@@ -743,6 +743,11 @@ compose_runtime_path() {
   if [ -n "$dev_env_path" ]; then
     path_parts+=( "$dev_env_path" )
   fi
+  case "${TOOL:-}" in
+    antigravity|agy)
+      path_parts+=( "/cache/antigravity/bin" "/cache/.local/bin" )
+      ;;
+  esac
   path_parts+=( "$NEED_TOOLS_PATH" "$IMAGE_FALLBACK_PATH" )
 
   local IFS=:

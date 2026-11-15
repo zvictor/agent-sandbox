@@ -85,12 +85,29 @@ normalize_flake_ref() {
   esac
 }
 
+if ! command -v contains_word >/dev/null 2>&1; then
+  contains_word() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+      if [ "$item" = "$needle" ]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+fi
+
 resolve_tool() {
   local argv0
   argv0="$(basename "$0")"
 
   if contains_word "$argv0" $KNOWN_TOOLS; then
     TOOL="$argv0"
+    case "$TOOL" in
+      agy) TOOL="antigravity" ;;
+    esac
     REMAINING_ARGS=("$@")
     return
   fi
@@ -119,6 +136,9 @@ resolve_tool() {
 
   TOOL="$1"
   shift
+  case "$TOOL" in
+    agy) TOOL="antigravity" ;;
+  esac
   REMAINING_ARGS=("$@")
 }
 

@@ -14,7 +14,7 @@ inspect_tool_permission_args() {
     shift
     [ "$arg" != -- ] || break
     case "$tool:$arg" in
-      codex:--yolo|codex:--dangerously-bypass-approvals-and-sandbox|claude:--dangerously-skip-permissions|antigravity:--dangerously-skip-permissions|omp:--yolo|omp:--auto-approve|commandcode:--yolo|commandcode:--dangerously-skip-permissions)
+      codex:--yolo|codex:--dangerously-bypass-approvals-and-sandbox|claude:--dangerously-skip-permissions|antigravity:--dangerously-skip-permissions|agy:--dangerously-skip-permissions|omp:--yolo|omp:--auto-approve|commandcode:--yolo|commandcode:--dangerously-skip-permissions)
         PERMISSION_HAS_BYPASS=1; continue ;;
       codex:-C|codex:--cd)
         PERMISSION_CWD="${1:-$PERMISSION_CWD}"
@@ -60,7 +60,7 @@ inspect_tool_permission_args() {
           PERMISSION_HAS_CONTROLS=1; PERMISSION_CONTAINER_CONFLICT=1; PERMISSION_BYPASS_CONFLICT=1
         fi
         positional_seen=1; continue ;;
-      codex:--approve-for-me|codex:--not-so-yolo|codex:--full-auto|claude:--restricted|commandcode:--plan|commandcode:--accept-edits|antigravity:--sandbox|antigravity:--sandbox=*)
+      codex:--approve-for-me|codex:--not-so-yolo|codex:--full-auto|claude:--restricted|commandcode:--plan|commandcode:--accept-edits|antigravity:--sandbox|antigravity:--sandbox=*|agy:--sandbox|agy:--sandbox=*)
         PERMISSION_HAS_CONTROLS=1; PERMISSION_CONTAINER_CONFLICT=1
         PERMISSION_BYPASS_CONFLICT=1; continue ;;
       *) [[ "$arg" == -* ]] || positional_seen=1; continue ;;
@@ -156,9 +156,9 @@ apply_tool_permission_policy() {
   PERMISSION_TOOL_ARGS=("$@")
   [ "$PERMISSION_POLICY" = container ] || return 0
   local bypass=""
-  case "$tool" in codex|omp|commandcode) bypass=--yolo ;; claude|antigravity) bypass=--dangerously-skip-permissions ;; esac
+  case "$tool" in codex|omp|commandcode) bypass=--yolo ;; claude|antigravity|agy) bypass=--dangerously-skip-permissions ;; esac
   case "$tool" in
-    codex|omp|commandcode|antigravity) [ "$PERMISSION_HAS_BYPASS" = 1 ] || PERMISSION_TOOL_ARGS=("$bypass" "$@") ;;
+    codex|omp|commandcode|antigravity|agy) [ "$PERMISSION_HAS_BYPASS" = 1 ] || PERMISSION_TOOL_ARGS=("$bypass" "$@") ;;
     claude)
       PERMISSION_TOOL_ARGS=(--settings '{"sandbox":{"enabled":false}}' "$@")
       [ "$PERMISSION_HAS_BYPASS" = 1 ] || PERMISSION_TOOL_ARGS=("$bypass" "${PERMISSION_TOOL_ARGS[@]}")
