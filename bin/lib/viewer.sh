@@ -159,7 +159,15 @@ viewer_bootstrap_environment() {
   STORE_KEY="viewer"
 
   resolve_project_paths
-  load_project_config
+  PROJECT_ROOT="$(CDPATH= cd -- "$PROJECT_ROOT" && pwd)"
+  local launch_dir="$PWD"
+  if [ -n "${AGENT_PROJECT_ROOT:-}" ]; then
+    cd -- "$PROJECT_ROOT"
+  fi
+  local config_status=0
+  load_project_config || config_status=$?
+  cd -- "$launch_dir"
+  [ "$config_status" = "0" ] || return "$config_status"
   resolve_host_home
   resolve_sandbox_flake
   resolve_lock_args
@@ -232,13 +240,20 @@ prepare_viewer_mountpoint() {
 }
 
 prepare_viewer_home() {
-  VIEWER_HOME="${AGENT_VIEWER_HOME:-$CACHE_DIR/viewer-home}"
+  VIEWER_HOME="${AGENT_VIEWER_HOME:-$CACHE_DIR/viewer-home/$(runtime_path_scope_key "$PROJECT_ROOT")}"
   VIEWER_HOME="$(expand_host_config_path "$VIEWER_HOME")"
   mkdir -p "$VIEWER_HOME/.claude-history-viewer" "$VIEWER_HOME/.cache" "$VIEWER_HOME/.local/share"
 
   VIEWER_CLAUDE_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_CLAUDE_HOME:-$CLAUDE_HOST_CONFIG}")"
   VIEWER_CODEX_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_CODEX_HOME:-$CODEX_SESSION_ROOT}")"
   VIEWER_OPENCODE_SOURCE="$(viewer_source_dir_or_empty "${AGENT_VIEWER_OPENCODE_HOME:-${OPENCODE_HOME:-$HOST_HOME/.local/share/opencode}}")"
+
+  echo "[agent] viewer project: $PROJECT_ROOT"
+  if [ -n "$VIEWER_CODEX_SOURCE" ]; then
+    echo "[agent] viewer Codex sessions: $VIEWER_CODEX_SOURCE/sessions"
+  else
+    echo "[agent] viewer Codex sessions: none"
+  fi
 
   VIEWER_CLAUDE_TARGET="$VIEWER_HOME/.claude"
   VIEWER_CODEX_TARGET="$VIEWER_HOME/.codex"
