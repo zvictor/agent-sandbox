@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Lease-scoped GitHub App installation token broker.
+
+Only a Unix socket is exposed to the sandbox. The App private key stays on the
+host. Callers receive short-lived installation tokens, never the signing key.
+"""
+import base64
+import datetime as dt
+import json
+import os
+import socketserver
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+
+
+API_ROOT = "https://api.github.com"
+API_VERSION = "2022-11-28"
+REFRESH_MARGIN_SECONDS = 120
+
+
+def b64url(payload):
+    return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+
+def app_jwt(app_id, key_file, now=None):
+    now = int(time.time() if now is None else now)
+    header = b64url(b'{"alg":"RS256","typ":"JWT"}')
+    claims = b64url(json.dumps(
+        {"iat": now - 60, "exp": now + 540, "iss": str(app_id)},
+        separators=(",", ":"),
+    ).encode())
+    message = (header + "." + claims).encode("ascii")
+    signature = subprocess.run(
+        ["openssl", "dgst", "-sha256", "-sign", str(key_file)],
+        input=message,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    return message.decode("ascii") + "." + b64url(signature)
+
+
+class TokenIssuer:
+    def __init__(self, app_id, installation_id, key_file, repositories=None, api_root=API_ROOT):
+        self.app_id = app_id
+        self.installation_id = installation_id
+        self.key_file = key_file
+        self.repositories = repositories or []
+        self.api_root = api_root.rstrip("/")
+        self.lock = threading.Lock()
+        self.cached_token = None
+        self.expires_at = 0
+
+    def get_token(self):
+        with self.lock:
+            if self.cached_token and time.time() < self.expires_at - REFRESH_MARGIN_SECONDS:
+                return self.cached_token
+            jwt = app_jwt(self.app_id, self.key_file)
+            data = {}
+            if self.repositories:
+                data["repositories"] = self.repositories
+            request = urllib.request.Request(
+                self.api_root + "/app/installations/" + str(self.installation_id) + "/access_tokens",
+                data=json.dumps(data).encode(),
+                method="POST",
+                headers={
+                    "Authorization": "Bearer " + jwt,
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                    "X-GitHub-Api-Version": API_VERSION,
+                    "User-Agent": "agent-sandbox-github-app-broker",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=20) as response:
+                result = json.load(response)
+            token = result["token"]
+            expires = dt.datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
+            expiry = expires.timestamp()
+            if not isinstance(token, str) or not token or expiry <= time.time() + 10:
+                raise ValueError("GitHub returned an unusable installation token")
+            self.cached_token, self.expires_at = token, expiry
+            return token
+
+
+class TokenHandler(BaseHTTPRequestHandler):
+    issuer = None
+
+    def log_message(self, fmt, *args):
+        # Never log request bodies, installation tokens, or signing material.
+        return
+
+    def send_text(self, code, body):
+        payload = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_text(200, "ok\n")
+        elif self.path == "/token":
+            try:
+                self.send_text(200, self.issuer.get_token() + "\n")
+            except Exception as exc:
+                # Error details belong in the trusted host log, not the sandbox.
+                print("GitHub App token refresh failed: " + type(exc).__name__, file=sys.stderr)
+                self.send_text(503, "GitHub App authentication unavailable\n")
+        else:
+            self.send_text(404, "not found\n")
+
+    def do_POST(self):
+        self.send_text(405, "method not allowed\n")
+
+
+class Broker(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+    allow_reuse_address = False
+
+
+def serve(socket_path, app_id, installation_id, key_file, repositories=None):
+    if not app_id.isdecimal() or not installation_id.isdecimal():
+        raise ValueError("GitHub App and installation IDs must be numeric")
+    key = Path(key_file).resolve(strict=True)
+    if not key.is_file():
+        raise ValueError("GitHub App private key must be a regular file")
+    parent = Path(socket_path).parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise ValueError("socket parent must be a real directory")
+    if os.path.lexists(socket_path):
+        raise ValueError("refusing to overwrite an existing socket path")
+    TokenHandler.issuer = TokenIssuer(app_id, installation_id, key, repositories)
+    server = Broker(socket_path, TokenHandler)
+    try:
+        os.chmod(socket_path, 0o600)
+        server.serve_forever(poll_interval=0.2)
+    finally:
+        server.server_close()
+        try:
+            os.unlink(socket_path)
+        except FileNotFoundError:
+            pass
+
+
+def main(argv):
+    if len(argv) not in (5, 6):
+        raise SystemExit(
+            "usage: agent-github-app-broker SOCKET APP_ID INSTALLATION_ID PRIVATE_KEY_FILE [REPO1,REPO2]"
+        )
+    socket_path, app_id, installation_id, key_file = argv[1:5]
+    repositories = argv[5].split(",") if len(argv) == 6 and argv[5] else []
+    if any(not name or "/" in name or name.strip() != name for name in repositories):
+        raise SystemExit("repository scope must be comma-separated repository names")
+    serve(socket_path, app_id, installation_id, key_file, repositories)
+
+
+if __name__ == "__main__":
+    main(sys.argv)
