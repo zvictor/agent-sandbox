@@ -163,7 +163,7 @@ Before creating the container, the launcher selects one shared policy in this or
 
 This applies to shortcuts and direct `agent <tool>` launches. Remote sessions and child CLIs inherit the policy resolved when their container was created. A host CLI invoked outside agent-sandbox is not intercepted.
 
-For Codex and Antigravity, the host launcher supplies `--yolo` and `--dangerously-skip-permissions`, respectively, under container policy. Their shortcuts and direct launches do not depend on the image wrapper to add these flags. Explicit native controls remain unchanged, and an existing bypass flag is not duplicated. Resuming a conversation follows the same rules as starting one.
+For Codex and Antigravity, the host launcher supplies `--yolo` and `--dangerously-skip-permissions`, respectively, under container policy. Their shortcuts and direct launches do not depend on the image wrapper to add these flags. Explicit native controls remain unchanged, and an existing bypass flag is not duplicated. Resuming a conversation follows the same rules as starting one. In local container launches, Codex also receives `--no-daemon` by default to match the disposable container lifecycle, unless an explicit `--daemon` flag is passed or the container runs in remote mode (`agent remote`).
 
 `container` selects each tool's documented permissive launch mode. The outer runtime remains the isolation boundary. Explicit upstream deny rules and mandatory upstream policies may still apply; tools other than Codex can expose interactive mode switches. `native` means tool-managed permissions: it adds no bypass flags or permission environment overrides and preserves caller configuration and arguments, including a caller-supplied bypass. It neither requires restrictive settings nor enables a sandbox where the tool has none. Approval prompts and filesystem sandboxing are independent; `--ask-for-approval never` alone selects native handling, not full access. See [OpenAI's approval and sandbox documentation](https://learn.chatgpt.com/docs/agent-approvals-security).
 
@@ -208,6 +208,11 @@ the selected init fails during container creation.
 | `AGENT_CPU_LIMIT` | `2` | Container CPU limit |
 | `AGENT_PIDS_LIMIT` | `512` | Container PID limit |
 | `AGENT_WORKSPACE_PATH` | current directory | Workspace mounted at the same absolute path inside the sandbox |
+| `AGENT_ALLOW_NESTED_PODMAN` | `0` | Override the initial user namespace check for Podman |
+| `AGENT_ALLOW_CONTAINER_STORAGE_MOUNTS` | `0` | Override safety validation prohibiting host container storage mounts |
+| `AGENT_SANDBOX_PODMAN_DIR` | `$XDG_CACHE_HOME/agent-sandbox/podman` | Directory storing sandbox-isolated `storage.conf` |
+| `AGENT_SANDBOX_PODMAN_GRAPHROOT` | `$AGENT_SANDBOX_PODMAN_DIR/graphroot` | Isolated storage graphroot for sandbox containers |
+| `AGENT_SANDBOX_PODMAN_RUNROOT` | `$XDG_RUNTIME_DIR/agent-sandbox-podman/runroot` | Isolated storage runroot for sandbox containers |
 | `AGENT_PODMAN_ROOTFS_MODE` | `auto` | Podman rootfs mode: `auto`, `overlay`, or `mirror`; `rootless-linux` requires `auto` or `mirror` and always selects the mirror |
 | `AGENT_ALLOW_SUDO` | `0` | Enables container-local sudo when set to `1` |
 | `AGENT_DISABLE_AUDIO` | `0` | Disables automatic audio forwarding (PipeWire, PulseAudio, and ALSA `/dev/snd`) |
@@ -301,9 +306,22 @@ The host contract is deliberately strict:
 - local rootless Podman
 - `pasta` (preferred) or `slirp4netns` for an isolated rootless network namespace
 
+When launched inside a user namespace, including from a compatible IDE terminal,
+the profile uses a separate Podman runtime and storage under `XDG_RUNTIME_DIR`.
+The original runtime directory remains in use for the systemd user manager.
+Private Podman state is removed after confirmed container teardown; custom
+`AGENT_SANDBOX_PODMAN_*` storage paths are rejected for nested launches.
+
+If the Podman capability probe fails, the launcher prints the selected Podman
+executable and Podman's own diagnostic before the preflight error. This keeps
+project-shell PATH selection and libpod storage/runtime-state mismatches visible;
+the launcher does not reset or replace the user's Podman state automatically.
+
 The profile supports only local Podman rootfs mode. It rejects Docker,
 remote-container mode, rootful Podman, root execution, and
-`AGENT_ALLOW_SUDO=1`. It also rejects extra/automatic mounts, extra devices,
+`AGENT_ALLOW_SUDO=1`. Explicit `AGENT_EXTRA_MOUNTS` are supported; they grant
+the agent access to the specified host paths with the requested mount permissions.
+It rejects automatic mounts, extra devices,
 KVM, container API exposure, and the Nix daemon socket. Podman itself runs in a
 transient delegated host user scope with `--cgroups=split`,
 `--cgroupns=private`, a rootfs-supplied Catatonit PID-1 reaper, and Podman
@@ -589,6 +607,12 @@ The sandbox also prefers compatibility shims over sandbox-specific instructions 
 | `AGENT_EXTRA_MOUNTS` | unset | Raw mount specs in `host:container[:options]` format |
 | `AGENT_EXTRA_DEVICES` | unset | Raw device specs passed through as `--device` |
 | `AGENT_PASS_ENV_PREFIXES` | built-in list | Prefixes forwarded from the host environment |
+
+Mount a directory to expose its contents, for example
+`AGENT_EXTRA_MOUNTS=/host/packages:/host/packages:ro`. Entries are separated by
+commas or newlines; shell globs are not expanded. Podman applies the requested
+mount options and host filesystem permissions still apply. Extra mounts can
+expose sensitive files or sockets and can cover launcher-managed paths.
 
 For several variables, use a multiline block in `.agent-sandbox.env`:
 
