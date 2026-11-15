@@ -1723,6 +1723,14 @@ append_dev_env_args() {
       key="${env_spec%%=*}"
       value="${env_spec#*=}"
 
+      if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
+        case "$key" in
+          GH_*|GITHUB_TOKEN|GIT_CONFIG_*|GIT_TERMINAL_PROMPT|SSH_AUTH_SOCK|AGENT_GITHUB_APP_*|AGENT_GITHUB_INSTALLATION_ID)
+            continue
+            ;;
+        esac
+      fi
+
       if [ "$key" = "PATH" ]; then
         ARGS+=( -e "PATH=$(compose_runtime_path "$value")" )
         continue
