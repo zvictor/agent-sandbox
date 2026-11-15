@@ -1,3 +1,4 @@
+[ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 RUNTIME_LEASE_ID=""
 RUNTIME_LEASE_DIR=""
 RUNTIME_LEASE_ROOTS_DIR=""
@@ -47,14 +48,19 @@ remove_sandbox_tmp() {
   # Materialized packages may deliberately contain read-only directories.
   # Change directories only (never hard-linked files), do not follow symlinks,
   # and do not cross filesystem boundaries. This runs only after teardown.
-  if [ -d "$parent" ] && ! find -P "$parent" -xdev -type d -user "$(id -u)" \
-    -exec chmod u+rwx -- {} \; ; then
-    echo "[agent] warning: could not prepare sandbox temporary directories for cleanup: $parent" >&2
-    return 1
+  if [ -d "$parent" ]; then
+    local -a find_opts=( -P "$parent" )
+    if find --version 2>/dev/null | grep -q 'GNU findutils'; then
+      find_opts+=( -ignore_readdir_race )
+    fi
+    find "${find_opts[@]}" -xdev -type d -user "$(id -u)" \
+      -exec chmod u+rwx -- {} + 2>/dev/null || true
   fi
-  if ! rm -rf --one-file-system -- "$parent"; then
-    echo "[agent] warning: could not remove sandbox temporary storage; retaining lease: $parent" >&2
-    return 1
+  if ! rm -rf --one-file-system -- "$parent" 2>/dev/null || [ -e "$parent" ]; then
+    if [ -e "$parent" ]; then
+      echo "[agent] warning: could not remove sandbox temporary storage; retaining lease: $parent" >&2
+      return 1
+    fi
   fi
 }
 
@@ -161,6 +167,7 @@ runtime_lease_bound_container_exists() {
   local runtime=""
   local profile=""
   local container_name=""
+  local podman_context=""
   local key=""
   local value=""
   local status=""
@@ -171,10 +178,14 @@ runtime_lease_bound_container_exists() {
       runtime) runtime="$value" ;;
       profile) profile="$value" ;;
       container) container_name="$value" ;;
+      podman_context) podman_context="$value" ;;
     esac
   done < "$binding_file"
 
   [ "$runtime" = "podman" ] || return 1
+  if [ "$podman_context" != "${SANDBOX_NESTED_PODMAN_CONTEXT:-}" ]; then
+    return 2
+  fi
   case "$profile" in
     default|rootless-linux|firecracker-host) ;;
     *) return 1 ;;
@@ -197,7 +208,9 @@ runtime_lease_bound_container_exists() {
     fi
   else
     command -v podman >/dev/null 2>&1 || return 2
+    init_podman_storage_context 2>/dev/null || return 2
     if env -u CONTAINER_HOST -u CONTAINER_CONNECTION -u DOCKER_HOST \
+      CONTAINERS_STORAGE_CONF="${CONTAINERS_STORAGE_CONF:-}" \
       podman container exists "$container_name" >/dev/null 2>&1; then
       return 0
     else
@@ -253,6 +266,7 @@ bind_runtime_lease_to_container() {
     printf 'runtime=%s\n' "$runtime"
     printf 'profile=%s\n' "$profile"
     printf 'container=%s\n' "$container_name"
+    printf 'podman_context=%s\n' "${SANDBOX_NESTED_PODMAN_CONTEXT:-}"
   } > "$pending"
   chmod 0600 "$pending"
   mv -f "$pending" "$RUNTIME_LEASE_DIR/container.env"
@@ -283,6 +297,7 @@ prepare_runtime_lease_guard() {
   ) &
   guard_pid="$!"
   printf '%s\n' "$guard_pid" > "$RUNTIME_LEASE_DIR/guard.pid"
+  runtime_process_identity "$guard_pid" > "$RUNTIME_LEASE_DIR/guard.identity"
 
   while [ "$ready_attempt" -lt 20 ]; do
     if kill -0 "$guard_pid" 2>/dev/null; then
@@ -524,6 +539,33 @@ stop_runtime_lease_helper() {
   fi
 }
 
+stop_runtime_lease_guard() {
+  local lease_dir="$1"
+  local pid_file="$lease_dir/guard.pid"
+  local pid=""
+  local waited="0"
+  local identity=""
+
+  [ -f "$pid_file" ] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  case "$pid" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  if [ "$pid" -eq "$$" ]; then
+    return 0
+  fi
+  identity="$(cat "$lease_dir/guard.identity" 2>/dev/null || true)"
+  [ -n "$identity" ] && [ "$(runtime_process_identity "$pid")" = "$identity" ] || return 0
+  kill "$pid" 2>/dev/null || return 0
+  while [ "$(runtime_process_identity "$pid")" = "$identity" ] && kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  if [ "$(runtime_process_identity "$pid")" = "$identity" ] && kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+}
+
 stop_runtime_lease_github_app_broker() {
   local lease_dir="$1" pid_file="$1/github-app/service.pid"
   local socket_path="$1/github-app/token.sock" pid="" cmd="" waited=0
@@ -557,9 +599,18 @@ remove_runtime_lease() {
     return 1
   }
 
+  stop_runtime_lease_guard "$lease_dir"
   stop_runtime_lease_helper "$lease_dir"
   stop_runtime_lease_github_app_broker "$lease_dir"
   remove_sandbox_tmp "$lease_dir" || return 1
+  local context="${SANDBOX_NESTED_PODMAN_CONTEXT:-}"
+  if [ -n "$context" ] && [ -f "$lease_dir/container.env" ] \
+    && grep -Fxq "podman_context=$context" "$lease_dir/container.env"; then
+    case "$context" in
+      "${XDG_RUNTIME_DIR:?}/agent-sandbox-nested."*)
+        rm -rf --one-file-system -- "$context" || return 1 ;;
+    esac
+  fi
   rm -rf -- "$lease_dir"
 }
 
