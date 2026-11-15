@@ -71,7 +71,7 @@ EOF_ENV
 DEV_ENV_ENV_FILE="$temp/direnv.env"
 ARGS=()
 append_dev_env_args
-joined="$(printf '%s\\n' "${ARGS[@]}")"
+joined="$(printf '%s\n' "${ARGS[@]}")"
 grep -Fxq "SAFE_VAR=preserved" <<< "$joined"
 for forbidden in 'GH_TOKEN=' 'GITHUB_TOKEN=' 'GIT_CONFIG_COUNT=' 'GIT_CONFIG_KEY_0=' 'SSH_AUTH_SOCK=' 'AGENT_GITHUB_APP_PRIVATE_KEY_FILE='; do
   ! grep -Fq -- "$forbidden" <<< "$joined"
