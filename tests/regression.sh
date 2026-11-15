@@ -3766,6 +3766,8 @@ test_codex_config_mount_omits_workspace_alias() (
   assert_contains "$output" "$config_root:/cache/.codex:rw"
   assert_not_contains "$output" "/cache/.codex/config.toml:ro"
   assert_not_contains "$output" "$config_root:$workspace/.codex:rw"
+  assert_contains "$output" ":/cache/.codex/app-server-control:rw"
+  assert_not_contains "$output" "$config_root:/cache/.codex/app-server-control"
   assert_contains "$(cat "$config_root/config.toml")" 'mcp_oauth_credentials_store = "file"'
   [ -w "$config_root/config.toml" ] || fail "expected generated Codex config to be writable"
   printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$workspace" >> "$config_root/config.toml"

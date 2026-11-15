@@ -124,6 +124,17 @@ prepare_codex_auth_mount_target() {
   CODEX_AUTH_PLACEHOLDER="$target_file"
 }
 
+# Codex keeps its app-server socket, pid and startup lock under
+# $CODEX_HOME/app-server-control, and the socket is a symlink into the
+# container's private /tmp. Sharing that directory through the host ~/.codex
+# makes concurrent containers see dangling sockets and pids from foreign PID
+# namespaces, so each launch gets its own directory owned by its runtime lease.
+mount_codex_daemon_state() {
+  local state_dir
+  state_dir="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-daemon.XXXXXX")" || return 1
+  ARGS+=( -v "$state_dir:/cache/.codex/app-server-control:rw${Z_SUFFIX}" )
+}
+
 prepare_codex_permission_config() {
   resolve_permission_policy "${TOOL:-codex}" "${REMAINING_ARGS[@]}" || return 1
   CODEX_PERMISSION_CONFIG_DIR="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-policy.XXXXXX")" || return 1
@@ -501,6 +512,7 @@ mount_standard_engine() {
         ARGS+=( -e "CODEX_SQLITE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
         ARGS+=( -e "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
       fi
+      mount_codex_daemon_state
       prepare_codex_permission_config
       ;;
     opencode)
