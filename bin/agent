@@ -70,6 +70,8 @@ nix_cmd() {
 
 AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/cli.sh"
+. "$AGENT_BIN_DIR/lib/podman_host.sh"
+unset SANDBOX_NESTED_PODMAN_CONTEXT
 . "$AGENT_BIN_DIR/lib/project_contract.sh"
 . "$AGENT_BIN_DIR/lib/rootfs.sh"
 . "$AGENT_BIN_DIR/lib/nix_roots.sh"
