@@ -40,7 +40,8 @@ prepare_github_app_auth() {
   case "${AGENT_GITHUB_INSTALLATION_ID:-}" in
     ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_INSTALLATION_ID must be numeric" >&2; return 1 ;;
   esac
-  [ -n "${AGENT_GITHUB_APP_PRIVATE_KEY_FILE:-}" ] && [ -f "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ]     && [ -r "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ] || {
+  [ -n "${AGENT_GITHUB_APP_PRIVATE_KEY_FILE:-}" ] && [ -f "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ] \
+    && [ -r "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ] || {
     echo "[agent] AGENT_GITHUB_APP_PRIVATE_KEY_FILE must name a readable host-side key file" >&2
     return 1
   }
@@ -52,7 +53,8 @@ prepare_github_app_auth() {
       echo "[agent] GitHub App private key must not reside inside the mounted project/workspace" >&2
       return 1 ;;
   esac
-  if [ -n "${AGENT_GITHUB_APP_BOT_NAME:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]     || [ -n "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_NAME:-}" ]; then
+  if { [ -n "${AGENT_GITHUB_APP_BOT_NAME:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]; } \
+    || { [ -n "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_NAME:-}" ]; }; then
     echo "[agent] set both AGENT_GITHUB_APP_BOT_NAME and AGENT_GITHUB_APP_BOT_EMAIL" >&2
     return 1
   fi
@@ -63,7 +65,8 @@ prepare_github_app_auth() {
   mkdir -p -m 0700 "$GITHUB_APP_BROKER_DIR" || return 1
   chmod 0700 "$GITHUB_APP_BROKER_DIR" || return 1
 
-  if github_app_broker_running && curl -fsS --max-time 2     --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
+  if github_app_broker_running && curl -fsS --max-time 2 \
+    --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
     return 0
   fi
 
@@ -71,13 +74,17 @@ prepare_github_app_auth() {
   rm -f "$GITHUB_APP_BROKER_SOCKET" "$GITHUB_APP_BROKER_PID_FILE"
   (
     umask 077
-    exec python3 "$AGENT_BIN_DIR/agent-github-app-broker"       "$GITHUB_APP_BROKER_SOCKET" "$AGENT_GITHUB_APP_ID" "$AGENT_GITHUB_INSTALLATION_ID"       "$private_key" "${AGENT_GITHUB_APP_REPOSITORIES:-}"       </dev/null > "$GITHUB_APP_BROKER_DIR/service.log" 2>&1
+    exec python3 "$AGENT_BIN_DIR/agent-github-app-broker" \
+      "$GITHUB_APP_BROKER_SOCKET" "$AGENT_GITHUB_APP_ID" "$AGENT_GITHUB_INSTALLATION_ID" \
+      "$private_key" "${AGENT_GITHUB_APP_REPOSITORIES:-}" \
+      </dev/null > "$GITHUB_APP_BROKER_DIR/service.log" 2>&1
   ) &
   pid=$!
   printf '%s\n' "$pid" > "$GITHUB_APP_BROKER_PID_FILE"
 
   while [ "$attempt" -lt 50 ]; do
-    if github_app_broker_running && curl -fsS --max-time 1       --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
+    if github_app_broker_running && curl -fsS --max-time 1 \
+      --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
       return 0
     fi
     kill -0 "$pid" 2>/dev/null || break
