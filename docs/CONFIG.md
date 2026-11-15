@@ -52,6 +52,78 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | `CLAUDE_AUTH` | unset | slot name, file path | Overlays Claude credentials |
 | `OPENCODE_AUTH` | unset | slot name, file path | Overlays OpenCode credentials |
 
+## Unattended GitHub App Authentication
+
+By default, GitHub SSH remains unchanged. Set `AGENT_GITHUB_AUTH=app` to
+give sandboxed `git` and `gh` a dedicated GitHub App identity without an
+interactive SSH/1Password approval. The host creates a runtime-lease-scoped
+credential broker; the App private key is never mounted into the container.
+
+Create a GitHub App under your GitHub account or organization, install it on
+the repositories agents may change, and grant **Contents: read/write** and
+**Pull requests: read/write** (plus other API permissions only if needed).
+Generate an App private key and keep it **outside all project/workspace mounts**
+in a private host directory, preferably protected by your secret manager.
+
+Example host environment or private `.agent-sandbox.env` defaults:
+
+```sh
+AGENT_GITHUB_AUTH=app
+AGENT_GITHUB_APP_ID=123456
+AGENT_GITHUB_INSTALLATION_ID=789012
+AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/home/me/.config/agent-sandbox/github-app.pem
+# Optionally further limit the token to these repository names:
+AGENT_GITHUB_APP_REPOSITORIES=project-one,project-two
+# Use the exact GitHub App bot identity to attribute authored commits to the bot:
+AGENT_GITHUB_APP_BOT_NAME='my-app[bot]'
+AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
+```
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AGENT_GITHUB_AUTH` | `none` | `none` or `app` |
+| `AGENT_GITHUB_APP_ID` | unset | Numeric GitHub App ID |
+| `AGENT_GITHUB_INSTALLATION_ID` | unset | Numeric App installation ID |
+| `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | unset | Host-only readable PEM private key path |
+| `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to the installation | Comma-separated **repository names**, not `owner/repo`; server-side token scope |
+| `AGENT_GITHUB_APP_BOT_NAME` | `Coding Agent` | Commit author/committer name inside sandbox |
+| `AGENT_GITHUB_APP_BOT_EMAIL` | `coding-agent@users.noreply.github.com` | Commit author/committer email inside sandbox |
+
+The bot's numeric user ID is **not** the App ID or installation ID. Query
+`https://api.github.com/users/APP_SLUG%5Bbot%5D` to find its `id`, then
+use the `ID+SLUG[bot]@users.noreply.github.com` form for GitHub commit
+attribution. If you leave the two bot identity settings unset, commits will
+have a distinct generic author but may not be linked to the App bot profile.
+
+Behavior in `app` mode:
+
+- A broker using host `python3`, `openssl`, and `curl` signs a short-lived
+  GitHub App JWT, requests an installation token, caches it and renews it
+  before its one-hour expiry. Tokens are fetched on demand across arbitrarily
+  long sessions; no user interaction is required.
+- The sandbox sees **only** a Unix socket for requesting installation tokens.
+  Git receives a credential helper for `https://github.com`. Existing
+  `git@github.com:OWNER/REPO.git` and
+  `ssh://git@github.com/OWNER/REPO.git` remotes are rewritten to HTTPS by
+  runtime Git configuration, without modifying the saved origin URL.
+- `gh` (bundled in the image) gets a fresh `GH_TOKEN` for each invocation,
+  while its config directory is isolated from personal GitHub CLI state.
+  Other tools needing `GITHUB_TOKEN` must integrate with the broker separately;
+  an exported one-time token is **not** automatically refreshed.
+- Host `~/.gitconfig`, synthesized host SSH state, and SSH agent forwarding are
+  disabled for that sandbox. Other host secrets should not be bind-mounted.
+  This mode targets GitHub.com; GitHub Enterprise hosts are not supported.
+- A broker is retained for a persistent remote sandbox until that runtime
+  lease is torn down. The broker exits when the lease is removed.
+
+**Trust model:** an agent that can access the socket can obtain and export a
+usable installation token and repeat requests while its sandbox is running.
+Install the App only on repositories the agent is allowed to modify, protect
+main branches, and avoid mounting host credentials or private keys into the
+workspace. The App private key must not be stored inside a checked-out
+repository or any sandbox-mounted directory. Use a non-interactive private
+key file with restrictive host permissions. The host logs do not log tokens.
+
 ## Runtime And Project Resolution
 
 | Variable | Default | Effect |
