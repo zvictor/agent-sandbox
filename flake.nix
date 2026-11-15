@@ -99,6 +99,9 @@
             pkgs.gawk
             pkgs.gnused
             pkgs.jq
+            pkgs.python3
+            pkgs.openssl
+            pkgs.curl
             pkgs.nix
             pkgs.git
             pkgs.docker
