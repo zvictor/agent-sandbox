@@ -901,7 +901,11 @@ stdio_target_args_for() (
   else
     SSH_RUNTIME_DIR=""
   fi
-  REMAINING_ARGS=(--probe)
+  if [ "$#" -gt 2 ]; then
+    REMAINING_ARGS=("${@:3}")
+  else
+    REMAINING_ARGS=(--probe)
+  fi
   ARGS=()
 
   append_stdio_and_target_args
@@ -3769,6 +3773,48 @@ test_codex_config_mount_omits_workspace_alias() (
   [ ! -e "$workspace/.codex" ] || fail "expected codex workspace alias target to be absent"
 )
 
+test_codex_no_daemon_default_in_local_mode() (
+  set -euo pipefail
+
+  local output
+  output="$(stdio_target_args_for)"
+
+  assert_contains "$output" "--no-daemon"
+  assert_contains "$output" $'--no-daemon\n--yolo\n--probe'
+)
+
+test_codex_explicit_daemon_flag_suppresses_no_daemon() (
+  set -euo pipefail
+
+  local output
+  output="$(stdio_target_args_for default 0 --daemon --probe)"
+
+  assert_contains "$output" "--daemon"
+  assert_not_contains "$output" "--no-daemon"
+  assert_contains "$output" $'--yolo\n--daemon\n--probe'
+)
+
+test_codex_explicit_no_daemon_not_duplicated() (
+  set -euo pipefail
+
+  local output count
+  output="$(stdio_target_args_for default 0 --no-daemon --probe)"
+
+  count="$(printf '%s\n' "$output" | grep -c -x -- '--no-daemon')"
+  [ "$count" -eq 1 ] || fail "expected exactly 1 instance of --no-daemon, got $count"
+  assert_contains "$output" $'--yolo\n--no-daemon\n--probe'
+)
+
+test_codex_remote_mode_omits_no_daemon() (
+  set -euo pipefail
+
+  local output
+  output="$(remote_target_args_for)"
+
+  assert_not_contains "$output" "--no-daemon"
+  assert_contains "$output" "/bin/agent-remote-entrypoint"
+)
+
 
 test_codex_project_config_mount_uses_stable_runtime_home() (
   set -euo pipefail
@@ -4468,6 +4514,10 @@ main() {
   run_test "codex config file requires write access" test_codex_config_file_requires_write_access
   run_test "codex API key config remains writable" test_codex_api_key_config_remains_writable
   run_test "codex auth file requires read access" test_codex_auth_file_requires_read_access
+  run_test "codex uses no-daemon by default in local mode" test_codex_no_daemon_default_in_local_mode
+  run_test "codex explicit daemon flag suppresses no-daemon" test_codex_explicit_daemon_flag_suppresses_no_daemon
+  run_test "codex explicit no-daemon flag is not duplicated" test_codex_explicit_no_daemon_not_duplicated
+  run_test "codex remote mode omits no-daemon" test_codex_remote_mode_omits_no_daemon
   run_test "image includes openssh" test_image_includes_openssh
   run_test "need defaults to unstable nixpkgs" test_need_defaults_to_unstable_nixpkgs
 

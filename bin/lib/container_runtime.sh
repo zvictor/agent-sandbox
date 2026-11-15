@@ -1676,6 +1676,21 @@ append_codex_ssh_sandbox_args() {
   fi
 }
 
+codex_has_daemon_flag() {
+  local arg=""
+
+  for arg in "$@"; do
+    [ "$arg" != "--" ] || break
+    case "$arg" in
+      --daemon|--no-daemon|--daemon=*|--no-daemon=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 append_dev_env_args() {
   local env_spec=""
   local key=""
@@ -1945,9 +1960,15 @@ append_stdio_and_target_args() {
     ARGS+=( -- /bin/agent-rootless-linux-entrypoint )
   fi
   append_codex_ssh_sandbox_args
-  if [ "$TOOL" = codex ] || [ "$TOOL" = antigravity ]; then
+  if [ "$TOOL" = codex ]; then
+    if ! remote_container_mode && ! codex_has_daemon_flag "${REMAINING_ARGS[@]}"; then
+      ARGS+=( --no-daemon )
+    fi
     # Supply the primary CLI's permissions on the host, not only in the image.
     # The image adapter still handles child launches and recognizes this flag.
+    apply_tool_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
+    ARGS+=( "${PERMISSION_TOOL_ARGS[@]}" )
+  elif [ "$TOOL" = antigravity ] || [ "$TOOL" = agy ]; then
     apply_tool_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
     ARGS+=( "${PERMISSION_TOOL_ARGS[@]}" )
   elif [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
@@ -2011,4 +2032,5 @@ build_container_args() {
   mount_tool_configs
   ARGS+=( -e "AGENT_PERMISSION_POLICY=$PERMISSION_POLICY" -e "AGENT_PERMISSION_PROJECT_ROOT=$PROJECT_ROOT" )
   append_stdio_and_target_args
+  validate_container_mount_safety || return 1
 }

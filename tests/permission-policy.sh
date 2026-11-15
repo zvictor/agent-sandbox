@@ -7,7 +7,7 @@ fail() { echo "[fail] $*" >&2; exit 1; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "missing $2"; }
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-unset AGENT_PERMISSION_POLICY OPENCODE_PERMISSION
+unset AGENT_PERMISSION_POLICY OPENCODE_PERMISSION AGENT_PERMISSION_PROJECT_ROOT
 SANDBOX_PROFILE=default
 resolve_permission_policy
 [ "$PERMISSION_POLICY" = container ] || fail "standard default"
@@ -172,7 +172,7 @@ first_config="$CODEX_PERMISSION_CONFIG_DIR"
 AGENT_PERMISSION_POLICY=native prepare_codex_permission_config
 [ "$CODEX_PERMISSION_CONFIG_DIR" != "$first_config" ] || fail "policy reused across launches"
 [ ! -e "$CODEX_PERMISSION_CONFIG_DIR/requirements.toml" ] || fail "native retained container requirements"
-! rg -q 'sandbox_mode|approval_policy' "$CODEX_PERMISSION_CONFIG_DIR/config.toml" || fail "native policy pinned permissions"
+! grep -Eq 'sandbox_mode|approval_policy' "$CODEX_PERMISSION_CONFIG_DIR/config.toml" || fail "native policy pinned permissions"
 unset AGENT_PERMISSION_POLICY
 REMAINING_ARGS=(--sandbox read-only --ask-for-approval never)
 prepare_codex_permission_config
@@ -246,6 +246,14 @@ fi
   append_stdio_and_target_args
   [ "${ARGS[-2]}" = --dangerously-skip-permissions ] || fail "rootless resumed conversation omitted bypass"
   [ "${ARGS[-1]}" = "${REMAINING_ARGS[0]}" ] || fail "conversation ID changed"
+  # agy alias must receive identical bypass and controls
+  TOOL=agy
+  ARGS=()
+  REMAINING_ARGS=(-p 'inspect flow-intro files')
+  append_stdio_and_target_args
+  [ "${ARGS[-3]}" = --dangerously-skip-permissions ] || fail "rootless agy omitted bypass"
+  apply_tool_permission_policy agy "${ARGS[@]: -3}"
+  [ "${#PERMISSION_TOOL_ARGS[@]}" = 3 ] || fail "image duplicated agy host bypass"
 )
 (
   # Host Codex shortcuts must also work with an argv-only cached image wrapper.
@@ -258,7 +266,8 @@ fi
   REMAINING_ARGS=(resume test-session)
   ARGS=()
   append_stdio_and_target_args
-  [ "${ARGS[-4]}" = /bin/agent-rootless-linux-entrypoint ] || fail "Codex rootless entrypoint replaced"
+  [ "${ARGS[-5]}" = /bin/agent-rootless-linux-entrypoint ] || fail "Codex rootless entrypoint replaced"
+  [ "${ARGS[-4]}" = --no-daemon ] || fail "rootless Codex omitted no-daemon default"
   [ "${ARGS[-3]}" = --yolo ] || fail "rootless Codex omitted bypass"
   [ "${ARGS[-2]} ${ARGS[-1]}" = 'resume test-session' ] || fail "resume args changed"
   [ "${REMAINING_ARGS[*]}" = 'resume test-session' ] || fail "host mutated Codex args"
@@ -272,6 +281,11 @@ fi
     if [ "$arg" = --yolo ]; then count=$((count + 1)); fi
   done
   [ "$count" = 1 ] || fail "Codex host duplicated explicit bypass"
+  ARGS=()
+  REMAINING_ARGS=(--daemon resume test-session)
+  append_stdio_and_target_args
+  [[ "${ARGS[*]}" != *--no-daemon* ]] || fail "explicit --daemon received --no-daemon"
+  [[ "${ARGS[*]}" == *--daemon* ]] || fail "explicit --daemon was omitted"
   ARGS=()
   REMAINING_ARGS=(--sandbox read-only --ask-for-approval never)
   append_stdio_and_target_args
