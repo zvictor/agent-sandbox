@@ -78,6 +78,7 @@ AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AGENT_BIN_DIR/lib/container_api.sh"
 . "$AGENT_BIN_DIR/lib/need_helper.sh"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
+. "$AGENT_BIN_DIR/lib/github_app.sh"
 . "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
 . "$AGENT_BIN_DIR/lib/doctor.sh"
@@ -219,6 +220,7 @@ prepare_runtime_lease
 prepare_runtime_artifacts
 prepare_container_api
 prepare_need_helper
+prepare_github_app_auth
 log_debug_context
 
 build_container_args
