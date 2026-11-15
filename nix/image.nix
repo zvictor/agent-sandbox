@@ -413,13 +413,14 @@ EOF
 
     mkdir -p "$out/nixcache" "$out/tmp" "$out/tmp/.X11-unix" "$out/var/tmp" "$out/config"
     mkdir -p "$out/proc" "$out/sys/fs/cgroup" "$out/dev/net" "$out/dev/snd"
-    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/run/systemd/system" "$out/run/user" "$out/var/run"
+    mkdir -p "$out/run" "$out/run/agent-container-api" "$out/run/agent-github-app" "$out/run/agent-nix-helper" "$out/run/agent-path-guard" "$out/run/agent-runtime-receipts" "$out/run/host-services" "$out/run/secrets" "$out/run/systemd/system" "$out/run/user" "$out/var/run"
   '';
 
   imageBasePaths =
     [
       skeleton
       pkgs.git
+      pkgs.gh
       agentCompat
       pkgs.direnv
       pkgs.nix-direnv
@@ -509,7 +510,7 @@ rec {
       # Keep common runtime mount destinations as normal directories, not
       # symlink chains.
       for d in \
-        cache config nixcache tmp tmp/.X11-unix run run/agent-container-api run/agent-nix-helper run/agent-runtime-receipts run/host-services run/secrets run/systemd run/systemd/system run/user var var/run var/tmp \
+        cache config nixcache tmp tmp/.X11-unix run run/agent-container-api run/agent-github-app run/agent-nix-helper run/agent-runtime-receipts run/host-services run/secrets run/systemd run/systemd/system run/user var var/run var/tmp \
         nix nix/store nix/var/nix nix/var/log/nix nix/var/db \
         proc sys sys/fs sys/fs/cgroup dev dev/net dev/snd
       do
