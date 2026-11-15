@@ -186,7 +186,7 @@ cleanup() {
   # independent launcher resources. Failed leases remain available for retry.
   set +e
   cleanup_runtime_lease
-  if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
+  if [ "${RUNTIME_LEASE_PERSIST:-0}" != "1" ] && [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
   fi
   if [ -n "$RUNTIME_IDENTITY_HOST_DIR" ] && [ -d "$RUNTIME_IDENTITY_HOST_DIR" ]; then
