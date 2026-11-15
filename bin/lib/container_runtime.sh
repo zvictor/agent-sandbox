@@ -1,3 +1,4 @@
+[ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/permission_policy.sh"
 
 mount_engine() {
@@ -124,6 +125,17 @@ prepare_codex_auth_mount_target() {
   CODEX_AUTH_PLACEHOLDER="$target_file"
 }
 
+# Codex keeps its app-server socket, pid and startup lock under
+# $CODEX_HOME/app-server-control, and the socket is a symlink into the
+# container's private /tmp. Sharing that directory through the host ~/.codex
+# makes concurrent containers see dangling sockets and pids from foreign PID
+# namespaces, so each launch gets its own directory owned by its runtime lease.
+mount_codex_daemon_state() {
+  local state_dir
+  state_dir="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-daemon.XXXXXX")" || return 1
+  ARGS+=( -v "$state_dir:/cache/.codex/app-server-control:rw${Z_SUFFIX}" )
+}
+
 prepare_codex_permission_config() {
   resolve_permission_policy "${TOOL:-codex}" "${REMAINING_ARGS[@]}" || return 1
   CODEX_PERMISSION_CONFIG_DIR="$(mktemp -d "${RUNTIME_LEASE_DIR:?runtime lease required}/codex-policy.XXXXXX")" || return 1
@@ -192,15 +204,6 @@ resolve_rootless_network_backend() {
   esac
 
   return 1
-}
-
-podman_runtime_cmd() {
-  if firecracker_host_profile; then
-    sudo -n podman "$@"
-    return
-  fi
-
-  podman "$@"
 }
 
 runtime_run_label() {
@@ -506,6 +509,7 @@ mount_standard_engine() {
         ARGS+=( -e "CODEX_SQLITE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
         ARGS+=( -e "AGENT_CODEX_ROLLOUT_SOURCE_HOME=$CODEX_CONFIG_PROJECT_PATH" )
       fi
+      mount_codex_daemon_state
       prepare_codex_permission_config
       ;;
     opencode)
@@ -1693,6 +1697,21 @@ append_codex_ssh_sandbox_args() {
   fi
 }
 
+codex_has_daemon_flag() {
+  local arg=""
+
+  for arg in "$@"; do
+    [ "$arg" != "--" ] || break
+    case "$arg" in
+      --daemon|--no-daemon|--daemon=*|--no-daemon=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 append_dev_env_args() {
   local env_spec=""
   local key=""
@@ -1837,7 +1856,7 @@ append_passthrough_env_args() {
         if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
           continue
         fi
-        ;; 
+        ;;
       AGENT_GITHUB_AUTH)
         continue
         ;;
@@ -1970,9 +1989,15 @@ append_stdio_and_target_args() {
     ARGS+=( -- /bin/agent-rootless-linux-entrypoint )
   fi
   append_codex_ssh_sandbox_args
-  if [ "$TOOL" = codex ] || [ "$TOOL" = antigravity ]; then
+  if [ "$TOOL" = codex ]; then
+    if ! remote_container_mode && ! codex_has_daemon_flag "${REMAINING_ARGS[@]}"; then
+      ARGS+=( --no-daemon )
+    fi
     # Supply the primary CLI's permissions on the host, not only in the image.
     # The image adapter still handles child launches and recognizes this flag.
+    apply_tool_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
+    ARGS+=( "${PERMISSION_TOOL_ARGS[@]}" )
+  elif [ "$TOOL" = antigravity ] || [ "$TOOL" = agy ]; then
     apply_tool_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
     ARGS+=( "${PERMISSION_TOOL_ARGS[@]}" )
   elif [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
@@ -1992,6 +2017,10 @@ run_container_runtime() {
   if [ "$RUNTIME" = "podman" ] && firecracker_host_profile; then
     run_with_logical_argv0 "$TOOL" sudo -n podman run "${ARGS[@]}"
     return
+  fi
+
+  if [ "$RUNTIME" = "podman" ]; then
+    init_podman_storage_context || return 1
   fi
 
   if [ "$RUNTIME" = "podman" ] && rootless_linux_profile; then
@@ -2037,4 +2066,5 @@ build_container_args() {
   append_github_app_container_args
   ARGS+=( -e "AGENT_PERMISSION_POLICY=$PERMISSION_POLICY" -e "AGENT_PERMISSION_PROJECT_ROOT=$PROJECT_ROOT" )
   append_stdio_and_target_args
+  validate_container_mount_safety || return 1
 }
