@@ -4,6 +4,10 @@ set -euo pipefail
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 TEST_HOST_PATH="$PATH"
 
+# Fast offline GitHub App auth checks (no real App credentials/network required).
+python3 "$REPO_ROOT/tests/github-app-broker.py"
+bash "$REPO_ROOT/tests/github-app-auth.sh"
+
 fail() {
   echo "[fail] $*" >&2
   exit 1
