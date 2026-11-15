@@ -59,4 +59,22 @@ GIT_CONFIG_KEY_1=credential.helper \
 GIT_CONFIG_VALUE_1='!/run/agent-path-guard/github-app-git-credential' \
 git config --get-all credential.helper | tail -n 1 | grep -Fxq '!/run/agent-path-guard/github-app-git-credential'
 
+cat > "$temp/direnv.env" <<'EOF_ENV'
+GH_TOKEN=personal-token
+GITHUB_TOKEN=personal-github-token
+GIT_CONFIG_COUNT=2
+GIT_CONFIG_KEY_0=credential.helper
+SSH_AUTH_SOCK=/host/onepassword.sock
+AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/host/secret.pem
+SAFE_VAR=preserved
+EOF_ENV
+DEV_ENV_ENV_FILE="$temp/direnv.env"
+ARGS=()
+append_dev_env_args
+joined="$(printf '%s\\n' "${ARGS[@]}")"
+grep -Fxq "SAFE_VAR=preserved" <<< "$joined"
+for forbidden in 'GH_TOKEN=' 'GITHUB_TOKEN=' 'GIT_CONFIG_COUNT=' 'GIT_CONFIG_KEY_0=' 'SSH_AUTH_SOCK=' 'AGENT_GITHUB_APP_PRIVATE_KEY_FILE='; do
+  ! grep -Fq -- "$forbidden" <<< "$joined"
+done
+
 echo "GitHub App launcher checks passed"
