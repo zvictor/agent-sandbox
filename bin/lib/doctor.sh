@@ -96,6 +96,15 @@ doctor_config_state() {
 }
 
 doctor_contract_source() {
+  case "${AGENT_PROJECT_CONTRACT:-auto}" in
+    none)
+      printf 'disabled (AGENT_PROJECT_CONTRACT=none)\n'
+      return 0
+      ;;
+    auto)
+      ;;
+  esac
+
   if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
     printf '%s\n' "$PROJECT_NIX_DIR/packages.nix"
   elif [ -f "$PROJECT_ROOT/shell.nix" ]; then

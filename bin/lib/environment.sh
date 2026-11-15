@@ -711,6 +711,19 @@ prepare_project_contract_input() {
   STORE_INPUT_NAME=""
   PROJECT_OVERRIDE_ARGS=()
 
+  case "${AGENT_PROJECT_CONTRACT:-auto}" in
+    auto)
+      ;;
+    none)
+      STORE_INPUT_NAME="empty-project"
+      return 0
+      ;;
+    *)
+      echo "[agent] invalid AGENT_PROJECT_CONTRACT='${AGENT_PROJECT_CONTRACT}' (expected: auto, none)" >&2
+      exit 1
+      ;;
+  esac
+
   if [ -f "$PROJECT_NIX_DIR/packages.nix" ]; then
     TMP_DIR="$(mktemp -d)"
     stage_project_contract_input "$TMP_DIR"

@@ -1300,6 +1300,50 @@ test_symlinked_shell_stages_resolved_nix_contract() (
   assert_contains "$output" "template=font template"
 )
 
+test_project_contract_selector() (
+  set -euo pipefail
+
+  local tmp_dir project_dir output status
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  project_dir="$tmp_dir/project"
+  mkdir -p "$project_dir/nix"
+  printf "{ pkgs ? import <nixpkgs> {} }: pkgs.mkShell { packages = []; }\n" > "$project_dir/shell.nix"
+  printf "{ pkgs, unstable }: []\n" > "$project_dir/nix/packages.nix"
+
+  source "$REPO_ROOT/bin/lib/project_contract.sh"
+  source "$REPO_ROOT/bin/lib/environment.sh"
+  source "$REPO_ROOT/bin/lib/doctor.sh"
+
+  PROJECT_ROOT="$project_dir"
+  PROJECT_NIX_DIR="$project_dir/nix"
+
+  # Case 1: auto selects packages.nix when present
+  AGENT_PROJECT_CONTRACT=auto prepare_project_contract_input
+  assert_contains "$STORE_INPUT_NAME" "project-nix"
+  [ -n "$STORE_INPUT_PATH" ] || fail "expected STORE_INPUT_PATH to be non-empty when AGENT_PROJECT_CONTRACT=auto"
+
+  # Case 2: none selects empty-project and stages nothing
+  AGENT_PROJECT_CONTRACT=none prepare_project_contract_input
+  assert_contains "$STORE_INPUT_NAME" "empty-project"
+  if [ -n "$STORE_INPUT_PATH" ]; then
+    fail "expected STORE_INPUT_PATH to be empty when AGENT_PROJECT_CONTRACT=none, got: $STORE_INPUT_PATH"
+  fi
+
+  # Case 3: doctor reports disabled
+  output="$(AGENT_PROJECT_CONTRACT=none doctor_contract_source)"
+  assert_contains "$output" "disabled (AGENT_PROJECT_CONTRACT=none)"
+
+  # Case 4: invalid value fails fast
+  set +e
+  output="$(AGENT_PROJECT_CONTRACT=invalid prepare_project_contract_input 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "expected non-zero exit status for invalid AGENT_PROJECT_CONTRACT"
+  assert_contains "$output" "invalid AGENT_PROJECT_CONTRACT='invalid' (expected: auto, none)"
+)
+
 test_image_uses_standard_git() (
   set -euo pipefail
 
@@ -4304,6 +4348,7 @@ main() {
   run_test "legacy fetchTarball lock is rejected" test_legacy_fetchtarball_lock_is_rejected
   run_test "shell.nix NIX_PATH default receives explicit pkgs" test_shell_nix_nix_path_default_receives_explicit_pkgs
   run_test "symlinked shell stages resolved nix contract" test_symlinked_shell_stages_resolved_nix_contract
+  run_test "project contract selector" test_project_contract_selector
   run_test "image uses standard git" test_image_uses_standard_git
   run_test "device passthrough support" test_device_passthrough_support
   run_test "kvm smoke script" test_kvm_smoke_script

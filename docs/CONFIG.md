@@ -57,6 +57,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `AGENT_PROJECT_ROOT` | enclosing git top-level or cwd | Host project root |
+| `AGENT_PROJECT_CONTRACT` | `auto` | Project package contract mode (`auto`, `none`); `none` uses the built-in empty contract and skips `packages.nix` and `shell.nix` |
 | `AGENT_PROJECT_NIX_DIR` | `$AGENT_PROJECT_ROOT/nix` | Project contract directory |
 | `AGENT_SANDBOX_FLAKE_REF` | local checkout or `github:zvictor/agent-sandbox` | Sandbox flake source |
 | `AGENT_CACHE_DIR` | `$XDG_CACHE_HOME/agent-sandbox` or host-home fallback | Cache root for artifacts, helpers, and tool installs |
