@@ -16,7 +16,9 @@ let
     || builtins.match "^podman-[0-9].*" name != null
     || pname == "docker"
     || pname == "docker-client"
-    || builtins.match "^docker(-client)?-[0-9].*" name != null;
+    || builtins.match "^docker(-client)?-[0-9].*" name != null
+    || pname == "procps"
+    || pkgs.lib.hasPrefix "procps-" name;
 
   devPackagesFinal =
     if builtins.isList devPackages then
@@ -454,10 +456,10 @@ EOF
       pkgs.xsel
     ]
     ++ helpers
-    ++ devPackagesImage
     ++ toolLaunchers
     ++ compatWrappers
-    ++ [ needCommand remoteScripts rootlessLinuxSession firecrackerPodmanWrapper containersPolicy sudoConfig sudoRuntime ];
+    ++ [ needCommand remoteScripts rootlessLinuxSession firecrackerPodmanWrapper containersPolicy sudoConfig sudoRuntime ]
+    ++ devPackagesImage;
 
   imageSpec = {
     name = "agent-base";
