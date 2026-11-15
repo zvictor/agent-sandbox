@@ -7,6 +7,7 @@ set -euo pipefail
 }
 
 AGENT_BIN_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$AGENT_BIN_DIR/lib/podman_host.sh"
 . "$AGENT_BIN_DIR/lib/runtime_lease.sh"
 
 RUNTIME_LEASE_DIR="$1"
@@ -58,7 +59,12 @@ while [ -d "$RUNTIME_LEASE_DIR" ]; do
   fi
 
   if [ "$container_state" -eq 1 ]; then
-    remove_runtime_lease "$RUNTIME_LEASE_DIR"
+    if runtime_lease_owner_running "$RUNTIME_LEASE_DIR"; then
+      sleep 1
+    fi
+    if [ -d "$RUNTIME_LEASE_DIR" ]; then
+      remove_runtime_lease "$RUNTIME_LEASE_DIR"
+    fi
     exit 0
   fi
 

@@ -1,3 +1,4 @@
+[ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 PROJECT_CONFIG_FILE=""
 EFFECTIVE_TOOLS_LIST=""
 EFFECTIVE_TOOLS_SOURCE=""
@@ -430,6 +431,7 @@ rootless_linux_preflight_fail() {
 
 preflight_rootless_linux_profile() {
   local delegation_output=""
+  local podman_info_output=""
   local podman_rootless=""
   local delegated_probe=""
 
@@ -444,8 +446,6 @@ preflight_rootless_linux_profile() {
     *) rootless_linux_preflight_fail "AGENT_ALLOW_SUDO must be 0 or 1" ;;
   esac
 
-  [ -z "${AGENT_EXTRA_MOUNTS:-}" ] \
-    || rootless_linux_preflight_fail "AGENT_EXTRA_MOUNTS is not supported"
   [ -z "${AGENT_AUTO_MOUNT_DIRS:-}" ] \
     || rootless_linux_preflight_fail "AGENT_AUTO_MOUNT_DIRS is not supported"
   [ -z "${AGENT_EXTRA_DEVICES:-}" ] \
@@ -540,10 +540,16 @@ rmdir "$probe_path" \
     rootless_linux_preflight_fail "unprivileged user namespaces are unavailable"
   fi
 
-  if ! podman info >/dev/null 2>&1; then
+  if ! podman_info_output="$(podman info --format '{{.Host.Security.Rootless}}' 2>&1)"; then
+    printf '[agent] rootless-linux podman executable: %s\n' "$(command -v podman)" >&2
+    if [ -n "$podman_info_output" ]; then
+      printf '%s\n' "$podman_info_output" | while IFS= read -r diagnostic; do
+        printf '[agent] rootless-linux podman info: %s\n' "$diagnostic" >&2
+      done
+    fi
     rootless_linux_preflight_fail "podman info failed for the launcher user"
   fi
-  podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+  podman_rootless="$(printf '%s\n' "$podman_info_output" | awk '/^(true|false)$/ { rootless = $0 } END { print rootless }')"
   [ "$podman_rootless" = "true" ] || rootless_linux_preflight_fail "rootless podman is required"
 
   if ! ROOTLESS_NETWORK_BACKEND="$(resolve_rootless_network_backend)"; then
@@ -830,6 +836,9 @@ bootstrap_environment() {
   resolve_permission_policy "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   validate_tool_permission_args "$TOOL" "${REMAINING_ARGS[@]}" || return 1
   resolve_runtime
+  prepare_nested_podman_context || return 1
+  assert_host_podman_namespace || return 1
+  init_podman_storage_context || return 1
   preflight_firecracker_host_profile
   preflight_rootless_linux_profile
   resolve_sandbox_flake
