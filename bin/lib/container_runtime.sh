@@ -564,10 +564,16 @@ prepare_path_guard_dir() {
   local guarded_command=""
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
-  PATH_GUARD_HOST_DIR="$(mktemp -d "$HELPER_TMPDIR/path-guard.XXXXXX")"
+  if [ "${RUNTIME_LEASE_PERSIST:-0}" = "1" ]; then
+    PATH_GUARD_HOST_DIR="$RUNTIME_LEASE_DIR/path-guard"
+    mkdir -p "$PATH_GUARD_HOST_DIR"
+    rm -f "$PATH_GUARD_HOST_DIR/gh" "$PATH_GUARD_HOST_DIR/github-app-token" "$PATH_GUARD_HOST_DIR/github-app-git-credential"
+  else
+    PATH_GUARD_HOST_DIR="$(mktemp -d "$HELPER_TMPDIR/path-guard.XXXXXX")"
+  fi
 
   for guarded_command in git sh nix nix-shell need; do
-    ln -s "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
+    ln -sfn "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
   done
   prepare_github_app_commands
 
