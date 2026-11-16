@@ -77,7 +77,7 @@ AGENT_GITHUB_INSTALLATION_ID=789012
 AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/home/me/.config/agent-sandbox/github-app.pem
 # Optionally further limit the token to these repository names:
 AGENT_GITHUB_APP_REPOSITORIES=project-one,project-two
-# Use the exact GitHub App bot identity to attribute authored commits to the bot:
+# Required: use the exact GitHub App bot identity for authored commits:
 AGENT_GITHUB_APP_BOT_NAME='my-app[bot]'
 AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
 ```
@@ -89,14 +89,16 @@ AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
 | `AGENT_GITHUB_INSTALLATION_ID` | unset | Numeric App installation ID |
 | `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | unset | Host-only readable PEM private key path |
 | `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to the installation | Comma-separated **repository names**, not `owner/repo`; server-side token scope |
-| `AGENT_GITHUB_APP_BOT_NAME` | `Coding Agent` | Commit author/committer name inside sandbox |
-| `AGENT_GITHUB_APP_BOT_EMAIL` | `coding-agent@users.noreply.github.com` | Commit author/committer email inside sandbox |
+| `AGENT_GITHUB_APP_BOT_NAME` | unset; required in App mode | App bot login, including `[bot]`; commit author/committer name inside sandbox |
+| `AGENT_GITHUB_APP_BOT_EMAIL` | unset; required in App mode | App bot's `ID+LOGIN@users.noreply.github.com` commit email |
 
 The bot's numeric user ID is **not** the App ID or installation ID. Query
 `https://api.github.com/users/APP_SLUG%5Bbot%5D` to find its `id`, then
 use the `ID+SLUG[bot]@users.noreply.github.com` form for GitHub commit
-attribution. If you leave the two bot identity settings unset, commits will
-have a distinct generic author but may not be linked to the App bot profile.
+attribution. App mode refuses to launch if either identity setting is missing;
+there is no generic commit identity. Set these values in the host environment
+or private `.agent-sandbox.env`, then restart existing sandboxes to apply them.
+Changing the configuration does not change existing commits.
 
 Behavior in `app` mode:
 

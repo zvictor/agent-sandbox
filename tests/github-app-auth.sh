@@ -67,6 +67,28 @@ ln -s /bin/true "$temp/incomplete-tools/bin/python3"
 
 GITHUB_APP_AUTH_MODE=app
 GITHUB_APP_BROKER_DIR="$temp/github-app"
+# Missing or partial identities must fail before provisioning or adding args.
+for identity in missing name-only email-only; do
+  (
+    unset AGENT_GITHUB_APP_BOT_NAME AGENT_GITHUB_APP_BOT_EMAIL
+    case "$identity" in
+      name-only) AGENT_GITHUB_APP_BOT_NAME='example[bot]' ;;
+      email-only) AGENT_GITHUB_APP_BOT_EMAIL='12345+example[bot]@users.noreply.github.com' ;;
+    esac
+    AGENT_GITHUB_AUTH=app
+    prepare_github_app_host_tools() { echo 'unexpected dependency provisioning' >&2; exit 1; }
+    if prepare_github_app_auth; then
+      echo 'missing App identity unexpectedly accepted' >&2
+      exit 1
+    fi
+    ARGS=()
+    if append_github_app_container_args; then
+      echo 'missing App identity unexpectedly added to container' >&2
+      exit 1
+    fi
+    test "${#ARGS[@]}" -eq 0
+  )
+done
 AGENT_GITHUB_APP_BOT_NAME='example[bot]'
 AGENT_GITHUB_APP_BOT_EMAIL='12345+example[bot]@users.noreply.github.com'
 Z_SUFFIX=""

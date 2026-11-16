@@ -42,6 +42,13 @@ github_app_broker_running() {
   return 1
 }
 
+validate_github_app_identity() {
+  if [ -z "${AGENT_GITHUB_APP_BOT_NAME:-}" ] || [ -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]; then
+    echo "[agent] App mode requires AGENT_GITHUB_APP_BOT_NAME and AGENT_GITHUB_APP_BOT_EMAIL; set the App bot login and its ID+LOGIN@users.noreply.github.com email" >&2
+    return 1
+  fi
+}
+
 prepare_github_app_auth() {
   local private_key="" workspace="" attempt=0 pid=""
   GITHUB_APP_AUTH_MODE="${AGENT_GITHUB_AUTH:-none}"
@@ -51,6 +58,7 @@ prepare_github_app_auth() {
     *) echo "[agent] AGENT_GITHUB_AUTH must be 'none' or 'app'" >&2; return 1 ;;
   esac
 
+  validate_github_app_identity || return 1
   prepare_github_app_host_tools || return 1
   case "${AGENT_GITHUB_APP_ID:-}" in
     ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_APP_ID must be numeric" >&2; return 1 ;;
@@ -71,12 +79,6 @@ prepare_github_app_auth() {
       echo "[agent] GitHub App private key must not reside inside the mounted project/workspace" >&2
       return 1 ;;
   esac
-  if { [ -n "${AGENT_GITHUB_APP_BOT_NAME:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]; } \
-    || { [ -n "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ] && [ -z "${AGENT_GITHUB_APP_BOT_NAME:-}" ]; }; then
-    echo "[agent] set both AGENT_GITHUB_APP_BOT_NAME and AGENT_GITHUB_APP_BOT_EMAIL" >&2
-    return 1
-  fi
-
   GITHUB_APP_BROKER_DIR="$RUNTIME_LEASE_DIR/github-app"
   GITHUB_APP_BROKER_SOCKET="$GITHUB_APP_BROKER_DIR/token.sock"
   GITHUB_APP_BROKER_PID_FILE="$GITHUB_APP_BROKER_DIR/service.pid"
@@ -156,6 +158,7 @@ EOF_GH
 
 append_github_app_container_args() {
   [ "$GITHUB_APP_AUTH_MODE" = app ] || return 0
+  validate_github_app_identity || return 1
   ARGS+=(
     -v "$GITHUB_APP_BROKER_DIR:/run/agent-github-app:rw${Z_SUFFIX}"
     -e GIT_TERMINAL_PROMPT=0
@@ -169,8 +172,8 @@ append_github_app_container_args() {
     -e GIT_CONFIG_KEY_3=url.https://github.com/.insteadOf
     -e 'GIT_CONFIG_VALUE_3=ssh://git@github.com/'
     -e GIT_CONFIG_KEY_4=user.name
-    -e "GIT_CONFIG_VALUE_4=${AGENT_GITHUB_APP_BOT_NAME:-Coding Agent}"
+    -e "GIT_CONFIG_VALUE_4=$AGENT_GITHUB_APP_BOT_NAME"
     -e GIT_CONFIG_KEY_5=user.email
-    -e "GIT_CONFIG_VALUE_5=${AGENT_GITHUB_APP_BOT_EMAIL:-coding-agent@users.noreply.github.com}"
+    -e "GIT_CONFIG_VALUE_5=$AGENT_GITHUB_APP_BOT_EMAIL"
   )
 }
