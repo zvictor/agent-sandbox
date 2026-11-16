@@ -1664,7 +1664,48 @@ test_rootfs_buildenv_rejects_package_collisions() (
   image_file="$(cat "$REPO_ROOT/nix/image.nix")"
 
   assert_not_contains "$image_file" 'ignoreCollisions = true;'
-  assert_contains "$image_file" 'pname == "procps"'
+  assert_contains "$image_file" 'devPackagesImage = filterImagePackages devPackagesFinal;'
+)
+
+test_image_filters_runtime_owned_project_packages() (
+  set -euo pipefail
+
+  local output
+  output="$(
+    env -u NIX_CONFIG \
+      NIX_REMOTE="dummy://" \
+      AGENT_TEST_REPO_ROOT="$REPO_ROOT" \
+      nix --extra-experimental-features 'nix-command flakes' eval --impure --json --expr '
+        let
+          filterImagePackages = import (builtins.toPath (
+            (builtins.getEnv "AGENT_TEST_REPO_ROOT") + "/nix/filter-image-packages.nix"
+          )) {
+            lib.hasPrefix = prefix: value:
+              builtins.substring 0 (builtins.stringLength prefix) value == prefix;
+          };
+          projectPackages = [
+            { pname = "coreutils"; name = "coreutils-9.12"; }
+            { pname = "coreutils-full"; name = "coreutils-full-9.12"; }
+            { pname = "coreutils"; name = "custom-single-binary"; }
+            { name = "coreutils-9.12"; }
+            { name = "coreutils-full-9.12-doc"; }
+            { name = "git-2.51.2"; }
+            { name = "bun-1.3.3"; }
+            { name = "nix-2.34.0"; }
+            { name = "podman-5.8.0"; }
+            { name = "docker-client-29.0.0"; }
+            { name = "procps-4.0.6"; }
+            { pname = "coreutils-helper"; name = "coreutils-helper-1"; }
+            { pname = "curl"; name = "curl-8.22.0-dev"; }
+            { pname = "project-tool"; name = "project-tool-1"; }
+            { pname = "project-tool"; name = "project-tool-2"; }
+          ];
+        in
+        map (pkg: pkg.name) (filterImagePackages projectPackages)
+      '
+  )"
+  [ "$output" = '["coreutils-helper-1","curl-8.22.0-dev","project-tool-1","project-tool-2"]' ] \
+    || fail "unexpected project packages selected for the image: $output"
 )
 
 test_remote_secrets_are_not_passthrough_env() (
@@ -4800,6 +4841,7 @@ main() {
   run_test "image includes clipboard tools" test_image_includes_clipboard_tools
   run_test "image includes procps" test_image_includes_procps
   run_test "rootfs buildenv rejects package collisions" test_rootfs_buildenv_rejects_package_collisions
+  run_test "image filters runtime-owned project packages" test_image_filters_runtime_owned_project_packages
   run_test "remote mode suppresses ssh agent by default" test_remote_mode_suppresses_ssh_agent_by_default
   run_test "remote secrets are not passthrough env" test_remote_secrets_are_not_passthrough_env
   run_test "remote host env opt-in restores agent passthrough" test_remote_host_env_opt_in_restores_agent_passthrough

@@ -4,6 +4,7 @@
 |---|---|---|
 | Bun | oven-sh/bun | Bun runtime and built-in API behavior |
 | Nix | NixOS/nix | Store, garbage-collector root, and CLI behavior |
+| Nixpkgs | NixOS/nixpkgs | Package definitions and buildEnv rootfs assembly |
 | Podman | containers/podman | Podman runtime, rootfs, and init behavior |
 | crun | containers/crun | OCI user-namespace and cgroup delegation behavior |
 | Catatonit | openSUSE/catatonit | Minimal container PID-1 signal forwarding and orphan reaping |

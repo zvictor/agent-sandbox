@@ -1,24 +1,6 @@
 { pkgs, unstablePkgs, devPackages, nix2containerPkgs }:
 let
-  isShadowedImagePackage =
-    pkg:
-    let
-      pname = if pkg ? pname then pkg.pname else "";
-      name = if pkg ? name then pkg.name else "";
-    in
-    pname == "git"
-    || pkgs.lib.hasPrefix "git-" name
-    || pname == "bun"
-    || pkgs.lib.hasPrefix "bun-" name
-    || pname == "nix"
-    || builtins.match "^nix-[0-9].*" name != null
-    || pname == "podman"
-    || builtins.match "^podman-[0-9].*" name != null
-    || pname == "docker"
-    || pname == "docker-client"
-    || builtins.match "^docker(-client)?-[0-9].*" name != null
-    || pname == "procps"
-    || pkgs.lib.hasPrefix "procps-" name;
+  filterImagePackages = import ./filter-image-packages.nix { inherit (pkgs) lib; };
 
   devPackagesFinal =
     if builtins.isList devPackages then
@@ -30,7 +12,7 @@ let
         agent-sandbox: devPackages must be a list (or an attrset containing devPackages)
       '';
 
-  devPackagesImage = builtins.filter (pkg: !(isShadowedImagePackage pkg)) devPackagesFinal;
+  devPackagesImage = filterImagePackages devPackagesFinal;
 
   helpers = with pkgs.dockerTools; [
     usrBinEnv
