@@ -76,7 +76,7 @@ prepare_github_app_identity() {
 }
 
 prepare_github_app_auth() {
-  local private_key="" workspace="" attempt=0 pid=""
+  local private_key="" workspace="" attempt=0 pid="" fingerprint="" expected_health=""
   GITHUB_APP_AUTH_MODE="${AGENT_GITHUB_AUTH:-none}"
   case "$GITHUB_APP_AUTH_MODE" in
     none|0) return 0 ;;
@@ -89,7 +89,7 @@ prepare_github_app_auth() {
     ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_APP_ID must be numeric" >&2; return 1 ;;
   esac
   case "${AGENT_GITHUB_INSTALLATION_ID:-}" in
-    ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_INSTALLATION_ID must be numeric" >&2; return 1 ;;
+    ""|*[!0-9,]*|,*|*,|*,,*) echo "[agent] AGENT_GITHUB_INSTALLATION_ID must contain comma-separated numeric IDs" >&2; return 1 ;;
   esac
   [ -n "${AGENT_GITHUB_APP_PRIVATE_KEY_FILE:-}" ] && [ -f "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ] \
     && [ -r "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE" ] || {
@@ -112,9 +112,20 @@ prepare_github_app_auth() {
   mkdir -p -m 0700 "$GITHUB_APP_BROKER_DIR" || return 1
   chmod 0700 "$GITHUB_APP_BROKER_DIR" || return 1
 
-  if github_app_broker_running && PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 2 \
-    --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
-    return 0
+  fingerprint="$(PATH="$GITHUB_APP_HOST_PATH" python3 "$AGENT_BIN_DIR/agent-github-app-broker" \
+    --fingerprint "$AGENT_GITHUB_APP_ID" "$AGENT_GITHUB_INSTALLATION_ID" \
+    "$private_key" "${AGENT_GITHUB_APP_REPOSITORIES:-}")" || return 1
+  expected_health="ok $fingerprint"
+  if github_app_broker_running; then
+    if [ "$(PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 2 \
+      --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health 2>/dev/null)" = "$expected_health" ]; then
+      return 0
+    fi
+    stop_runtime_lease_github_app_broker "$RUNTIME_LEASE_DIR"
+    if github_app_broker_running; then
+      echo "[agent] could not stop the previous GitHub App broker" >&2
+      return 1
+    fi
   fi
 
   # A stale socket from a crashed broker is safe to remove only in our lease.
@@ -131,8 +142,8 @@ prepare_github_app_auth() {
   printf '%s\n' "$pid" > "$GITHUB_APP_BROKER_PID_FILE"
 
   while [ "$attempt" -lt 50 ]; do
-    if github_app_broker_running && PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 1 \
-      --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
+    if github_app_broker_running && [ "$(PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 1 \
+      --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health 2>/dev/null)" = "$expected_health" ]; then
       return 0
     fi
     kill -0 "$pid" 2>/dev/null || break
@@ -149,8 +160,17 @@ prepare_github_app_commands() {
   cat > "$PATH_GUARD_HOST_DIR/github-app-token" <<'EOF_TOKEN'
 #!/bin/sh
 set -eu
-exec /bin/curl --fail --silent --show-error --max-time 30 \
-  --unix-socket /run/agent-github-app/token.sock http://localhost/token
+if [ "$#" -gt 1 ]; then
+  echo 'usage: github-app-token [OWNER/REPO]' >&2
+  exit 1
+fi
+if [ -n "${1:-}" ]; then
+  set -- --get --data-urlencode "repository=$1"
+else
+  set --
+fi
+exec /bin/curl --fail-with-body --silent --show-error --max-time 120 \
+  --unix-socket /run/agent-github-app/token.sock "$@" http://localhost/token
 EOF_TOKEN
 
   cat > "$PATH_GUARD_HOST_DIR/github-app-git-credential" <<'EOF_CREDENTIAL'
@@ -159,27 +179,22 @@ set -eu
 [ "${1:-}" = get ] || exit 0
 protocol=""
 host=""
+path=""
 while IFS= read -r line; do
   [ -n "$line" ] || break
   case "$line" in
     protocol=*) protocol="${line#protocol=}" ;;
     host=*) host="${line#host=}" ;;
+    path=*) path="${line#path=}" ;;
   esac
 done
 [ "$protocol" = https ] && [ "$host" = github.com ] || exit 0
-token="$(/run/agent-path-guard/github-app-token)" || exit 1
+path="${path%.git}"
+token="$("$(dirname "$0")/github-app-token" "$path")" || exit 1
 printf 'username=x-access-token\npassword=%s\n\n' "$token"
 EOF_CREDENTIAL
 
-  cat > "$PATH_GUARD_HOST_DIR/gh" <<'EOF_GH'
-#!/bin/sh
-set -eu
-export GH_TOKEN="$(/run/agent-path-guard/github-app-token)"
-export GH_CONFIG_DIR=/cache/agent-github-app/gh
-export GH_HOST=github.com
-mkdir -p "$GH_CONFIG_DIR"
-exec /bin/gh "$@"
-EOF_GH
+  cp "$AGENT_BIN_DIR/../scripts/image/github-app-gh.sh" "$PATH_GUARD_HOST_DIR/gh"
   chmod 0755 "$PATH_GUARD_HOST_DIR/github-app-token"     "$PATH_GUARD_HOST_DIR/github-app-git-credential" "$PATH_GUARD_HOST_DIR/gh"
 }
 
@@ -189,7 +204,7 @@ append_github_app_container_args() {
   ARGS+=(
     -v "$GITHUB_APP_BROKER_DIR:/run/agent-github-app:rw${Z_SUFFIX}"
     -e GIT_TERMINAL_PROMPT=0
-    -e GIT_CONFIG_COUNT=6
+    -e GIT_CONFIG_COUNT=7
     -e GIT_CONFIG_KEY_0=credential.helper
     -e GIT_CONFIG_VALUE_0=
     -e GIT_CONFIG_KEY_1=credential.helper
@@ -202,5 +217,7 @@ append_github_app_container_args() {
     -e "GIT_CONFIG_VALUE_4=$AGENT_GITHUB_APP_BOT_NAME"
     -e GIT_CONFIG_KEY_5=user.email
     -e "GIT_CONFIG_VALUE_5=$AGENT_GITHUB_APP_BOT_EMAIL"
+    -e GIT_CONFIG_KEY_6=credential.https://github.com.useHttpPath
+    -e GIT_CONFIG_VALUE_6=true
   )
 }

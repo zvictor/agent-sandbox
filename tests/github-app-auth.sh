@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+AGENT_BIN_DIR="$ROOT/bin"
 # shellcheck source=../bin/lib/github_app.sh
 . "$ROOT/bin/lib/github_app.sh"
 # shellcheck source=../bin/lib/container_runtime.sh
@@ -149,7 +150,7 @@ bash -n "$PATH_GUARD_HOST_DIR/gh"
 
 append_github_app_container_args
 joined="$(printf '%s\n' "${ARGS[@]}")"
-grep -Fxq 'GIT_CONFIG_COUNT=6' <<< "$joined"
+grep -Fxq 'GIT_CONFIG_COUNT=7' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_KEY_0=credential.helper' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_VALUE_0=' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_VALUE_1=!/run/agent-path-guard/github-app-git-credential' <<< "$joined"
@@ -157,6 +158,8 @@ grep -Fxq 'GIT_CONFIG_VALUE_2=git@github.com:' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_VALUE_3=ssh://git@github.com/' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_VALUE_4=example[bot]' <<< "$joined"
 grep -Fxq 'GIT_CONFIG_VALUE_5=12345+example[bot]@users.noreply.github.com' <<< "$joined"
+grep -Fxq 'GIT_CONFIG_KEY_6=credential.https://github.com.useHttpPath' <<< "$joined"
+grep -Fxq 'GIT_CONFIG_VALUE_6=true' <<< "$joined"
 
 for reserved in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GH_TOKEN GH_HOST GH_CONFIG_DIR GITHUB_TOKEN; do
   runtime_env_key_is_reserved "$reserved"
@@ -195,5 +198,115 @@ grep -Fxq "SAFE_VAR=preserved" <<< "$joined"
 for forbidden in 'GH_TOKEN=' 'GITHUB_TOKEN=' 'GIT_CONFIG_COUNT=' 'GIT_CONFIG_KEY_0=' 'SSH_AUTH_SOCK=' 'AGENT_GITHUB_APP_PRIVATE_KEY_FILE='; do
   ! grep -Fq -- "$forbidden" <<< "$joined"
 done
+
+# Run the generated helpers with fake tokens and a fake gh executable.
+cat > "$PATH_GUARD_HOST_DIR/github-app-token" <<'EOF_TEST_TOKEN'
+#!/bin/sh
+set -eu
+[ "${1:-}" != unavailable/repo ] || exit 1
+printf 'installation-token:%s\n' "${1:-default}"
+EOF_TEST_TOKEN
+cat > "$temp/real-gh" <<'EOF_TEST_GH'
+#!/bin/sh
+printf 'token=%s\nrepo=%s\n' "${GH_TOKEN:-unset}" "${GH_REPO:-unset}"
+printf 'arg=%s\n' "$@"
+EOF_TEST_GH
+chmod +x "$temp/real-gh"
+sed -e "s|/bin/gh|$temp/real-gh|g" \
+    -e "s|GH_CONFIG_DIR=/cache/agent-github-app/gh|GH_CONFIG_DIR=$temp/gh-config|" \
+    "$ROOT/scripts/image/github-app-gh.sh" > "$PATH_GUARD_HOST_DIR/gh"
+chmod +x "$PATH_GUARD_HOST_DIR/gh"
+
+mkdir -p "$temp/checkout" "$temp/no-repo"
+git init -q "$temp/checkout"
+git -C "$temp/checkout" remote add origin git@github.com:personal/project.git
+(
+  cd "$temp/checkout"
+  unset GH_REPO GH_TOKEN GITHUB_TOKEN
+  output="$("$PATH_GUARD_HOST_DIR/gh" pr view)"
+  grep -Fxq 'token=installation-token:personal/project' <<< "$output"
+  for args in '-R org/project' '--repo=org/project' '-Rorg/project'; do
+    read -r -a repo_args <<< "$args"
+    output="$("$PATH_GUARD_HOST_DIR/gh" pr view "${repo_args[@]}")"
+    grep -Fxq 'token=installation-token:org/project' <<< "$output"
+    grep -Fxq 'repo=org/project' <<< "$output"
+  done
+  output="$(GH_REPO=org/project "$PATH_GUARD_HOST_DIR/gh" workflow list)"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  for endpoint in repos/org/project/issues /repos/org/project/issues https://api.github.com/repos/org/project/issues; do
+    output="$("$PATH_GUARD_HOST_DIR/gh" api "$endpoint")"
+    grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  done
+  output="$("$PATH_GUARD_HOST_DIR/gh" repo clone org/project)"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  output="$("$PATH_GUARD_HOST_DIR/gh" pr view https://github.com/org/project/pull/2)"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  output="$("$PATH_GUARD_HOST_DIR/gh" repo view org/project -R personal/project)"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  output="$("$PATH_GUARD_HOST_DIR/gh" api 'repos/org/project?unused=value')"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  output="$(GH_REPO=org/project "$PATH_GUARD_HOST_DIR/gh" api 'repos/{owner}/{repo}/issues')"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+  git remote add upstream https://github.com/org/project.git
+  git config remote.upstream.gh-resolved base
+  output="$("$PATH_GUARD_HOST_DIR/gh" pr view)"
+  grep -Fxq 'token=installation-token:org/project' <<< "$output"
+)
+(
+  cd "$temp/no-repo"
+  unset GH_REPO GH_TOKEN GITHUB_TOKEN
+  output="$("$PATH_GUARD_HOST_DIR/gh" api installation/repositories)"
+  grep -Fxq 'token=installation-token:default' <<< "$output"
+  output="$(GH_REPO=unavailable/repo "$PATH_GUARD_HOST_DIR/gh" --version)"
+  grep -Fxq 'token=unset' <<< "$output"
+  if output="$(GH_REPO=unavailable/repo "$PATH_GUARD_HOST_DIR/gh" pr view 2> "$temp/gh-error")"; then
+    echo 'gh ran after failed token selection' >&2
+    exit 1
+  fi
+  test -z "$output"
+  grep -q 'authentication failed' "$temp/gh-error"
+)
+
+# Git must pass the repository path through its actual credential protocol.
+for repository in personal/project org/project; do
+  output="$(printf 'url=https://github.com/%s.git\n\n' "$repository" | \
+    GIT_CONFIG_COUNT=3 \
+    GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
+    GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1="!$PATH_GUARD_HOST_DIR/github-app-git-credential" \
+    GIT_CONFIG_KEY_2=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_2=true \
+    git credential fill)"
+  grep -Fxq "password=installation-token:$repository" <<< "$output"
+done
+
+# A persistent lease must replace its real broker when IDs or scopes change.
+# Health checks do not mint tokens, so this uses a dummy key and no GitHub calls.
+(
+  . "$ROOT/bin/lib/runtime_lease.sh"
+  PROJECT_ROOT="$temp/lifecycle-project"
+  AGENT_WORKSPACE_PATH="$PROJECT_ROOT"
+  RUNTIME_LEASE_DIR="$temp/lifecycle-lease"
+  mkdir -p "$PROJECT_ROOT" "$RUNTIME_LEASE_DIR"
+  AGENT_GITHUB_AUTH=app
+  AGENT_GITHUB_APP_ID=42
+  AGENT_GITHUB_INSTALLATION_ID=123
+  AGENT_GITHUB_APP_PRIVATE_KEY_FILE="$temp/lifecycle-key.pem"
+  printf 'unused offline test key\n' > "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE"
+  unset AGENT_GITHUB_APP_REPOSITORIES
+  prepare_github_app_host_tools() { GITHUB_APP_HOST_PATH="$PATH"; }
+  trap 'stop_runtime_lease_github_app_broker "$RUNTIME_LEASE_DIR"' EXIT
+  prepare_github_app_auth
+  first_pid="$(cat "$GITHUB_APP_BROKER_PID_FILE")"
+  prepare_github_app_auth
+  test "$(cat "$GITHUB_APP_BROKER_PID_FILE")" = "$first_pid"
+  AGENT_GITHUB_INSTALLATION_ID=123,456
+  prepare_github_app_auth
+  second_pid="$(cat "$GITHUB_APP_BROKER_PID_FILE")"
+  test "$second_pid" != "$first_pid"
+  ! kill -0 "$first_pid" 2>/dev/null
+  AGENT_GITHUB_APP_REPOSITORIES=personal/one,org/two
+  prepare_github_app_auth
+  test "$(cat "$GITHUB_APP_BROKER_PID_FILE")" != "$second_pid"
+  ! kill -0 "$second_pid" 2>/dev/null
+)
 
 echo "GitHub App launcher checks passed"

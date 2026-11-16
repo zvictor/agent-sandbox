@@ -6,6 +6,7 @@ host. Callers receive short-lived installation tokens, never the signing key.
 """
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,7 @@ from pathlib import Path
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
 REFRESH_MARGIN_SECONDS = 120
+BROKER_PROTOCOL_VERSION = 2
 
 
 def b64url(payload):
@@ -110,8 +112,98 @@ class TokenIssuer:
             return token
 
 
+def parse_installation_ids(value):
+    if not re.fullmatch(r"[0-9]+(?:,[0-9]+)*", value):
+        raise ValueError("installation IDs must be comma-separated numbers")
+    ids = [str(int(item)) for item in value.split(",")]
+    if "0" in ids or len(set(ids)) != len(ids):
+        raise ValueError("installation IDs must be positive and unique")
+    return ids
+
+
+def configuration_fingerprint(app_id, installation_ids, key_file, repositories=None):
+    config = [BROKER_PROTOCOL_VERSION, app_id, installation_ids, str(Path(key_file).resolve()), repositories or []]
+    return hashlib.sha256(json.dumps(config, separators=(",", ":")).encode()).hexdigest()
+
+
+class RepositoryContextError(ValueError):
+    pass
+
+
+class RepositoryAccessError(PermissionError):
+    pass
+
+
+class TokenRouter:
+    def __init__(self, app_id, installation_ids, key_file, repositories=None, api_root=API_ROOT):
+        self.issuers = {
+            item: TokenIssuer(app_id, item, key_file, api_root=api_root)
+            for item in installation_ids
+        }
+        if not self.issuers:
+            raise ValueError("at least one installation ID is required")
+        self.repositories = repositories or []
+        for repo in self.repositories:
+            qualified = re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo)
+            bare = len(self.issuers) == 1 and re.fullmatch(r"[A-Za-z0-9_.-]+", repo)
+            if not (qualified or bare):
+                raise ValueError("repository scope must use OWNER/REPO with multiple installations")
+        self.owners = {}
+        self.lock = threading.Lock()
+
+    def load_installations(self):
+        with self.lock:
+            if self.owners:
+                return
+            owners = {}
+            for installation_id, issuer in self.issuers.items():
+                metadata = issuer.request_json(
+                    "/app/installations/" + installation_id,
+                    app_jwt(issuer.app_id, issuer.key_file),
+                )
+                owner = metadata.get("account", {}).get("login", "")
+                if metadata.get("id") != int(installation_id) or not isinstance(owner, str) \
+                        or not re.fullmatch(r"[A-Za-z0-9-]+", owner):
+                    raise ValueError("GitHub returned invalid installation metadata")
+                owner = owner.lower()
+                if owner in owners:
+                    raise ValueError("multiple configured installations have the same owner")
+                names = [repo.split("/")[-1] for repo in self.repositories
+                         if "/" not in repo or repo.split("/")[0].lower() == owner]
+                if self.repositories and not names:
+                    raise ValueError("repository scope must include a repository for each installation")
+                issuer.repositories = names
+                owners[owner] = issuer
+            self.owners = owners
+
+    def get_identity(self):
+        self.load_installations()
+        return next(iter(self.issuers.values())).get_identity()
+
+    def get_token(self, repository=None):
+        if repository:
+            if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repository):
+                raise RepositoryContextError("repository must be OWNER/REPO")
+            owner, name = repository.split("/")
+            if self.repositories and not any(
+                item.lower() in (repository.lower(), name.lower()) for item in self.repositories
+            ):
+                raise RepositoryAccessError("repository is outside the configured allowlist")
+            self.load_installations()
+            issuer = self.owners.get(owner.lower())
+            if issuer is None:
+                raise RepositoryAccessError("no configured GitHub App installation for repository owner")
+        elif len(self.issuers) == 1:
+            self.load_installations()
+            issuer = next(iter(self.issuers.values()))
+        else:
+            raise RepositoryContextError("multiple installations require repository context; use GH_REPO or --repo")
+        return issuer.get_token()
+
+
 class TokenHandler(BaseHTTPRequestHandler):
     issuer = None
+    health_response = "ok\n"
 
     def log_message(self, fmt, *args):
         # Never log request bodies, installation tokens, or signing material.
@@ -127,11 +219,20 @@ class TokenHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
-        if self.path == "/health":
-            self.send_text(200, "ok\n")
-        elif self.path == "/token":
+        target = urllib.parse.urlsplit(self.path)
+        if target.path == "/health" and not target.query:
+            self.send_text(200, self.health_response)
+        elif target.path == "/token":
             try:
-                self.send_text(200, self.issuer.get_token() + "\n")
+                query = urllib.parse.parse_qs(target.query, keep_blank_values=True)
+                if query and (set(query) != {"repository"} or len(query["repository"]) != 1 or not query["repository"][0]):
+                    raise RepositoryContextError("expected a single repository=OWNER/REPO parameter")
+                repository = query.get("repository", [None])[0]
+                self.send_text(200, self.issuer.get_token(repository) + "\n")
+            except RepositoryAccessError as exc:
+                self.send_text(403, str(exc) + "\n")
+            except RepositoryContextError as exc:
+                self.send_text(400, str(exc) + "\n")
             except Exception as exc:
                 # Error details belong in the trusted host log, not the sandbox.
                 print("GitHub App token refresh failed: " + type(exc).__name__, file=sys.stderr)
@@ -148,9 +249,9 @@ class Broker(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = False
 
 
-def serve(socket_path, app_id, installation_id, key_file, repositories=None):
-    if not app_id.isdecimal() or not installation_id.isdecimal():
-        raise ValueError("GitHub App and installation IDs must be numeric")
+def serve(socket_path, app_id, installation_ids, key_file, repositories=None):
+    if not app_id.isdecimal():
+        raise ValueError("GitHub App ID must be numeric")
     key = Path(key_file).resolve(strict=True)
     if not key.is_file():
         raise ValueError("GitHub App private key must be a regular file")
@@ -159,8 +260,11 @@ def serve(socket_path, app_id, installation_id, key_file, repositories=None):
         raise ValueError("socket parent must be a real directory")
     if os.path.lexists(socket_path):
         raise ValueError("refusing to overwrite an existing socket path")
-    TokenHandler.issuer = TokenIssuer(app_id, installation_id, key, repositories)
-    server = Broker(socket_path, TokenHandler)
+    handler = type("ConfiguredTokenHandler", (TokenHandler,), {
+        "issuer": TokenRouter(app_id, installation_ids, key, repositories),
+        "health_response": "ok " + configuration_fingerprint(app_id, installation_ids, key, repositories) + "\n",
+    })
+    server = Broker(socket_path, handler)
     try:
         os.chmod(socket_path, 0o600)
         server.serve_forever(poll_interval=0.2)
@@ -175,18 +279,20 @@ def serve(socket_path, app_id, installation_id, key_file, repositories=None):
 def main(argv):
     if len(argv) not in (5, 6):
         raise SystemExit(
-            "usage: agent-github-app-broker SOCKET|--identity APP_ID INSTALLATION_ID PRIVATE_KEY_FILE [REPO1,REPO2]"
+            "usage: agent-github-app-broker SOCKET|--identity|--fingerprint APP_ID INSTALLATION_IDS PRIVATE_KEY_FILE [REPO1,REPO2]"
         )
-    socket_path, app_id, installation_id, key_file = argv[1:5]
+    socket_path, app_id, installation_spec, key_file = argv[1:5]
+    installation_ids = parse_installation_ids(installation_spec)
     repositories = argv[5].split(",") if len(argv) == 6 and argv[5] else []
-    if any(not name or "/" in name or name.strip() != name for name in repositories):
-        raise SystemExit("repository scope must be comma-separated repository names")
-    if socket_path == "--identity":
-        login, email = TokenIssuer(app_id, installation_id, key_file, repositories).get_identity()
+    if socket_path == "--fingerprint":
+        TokenRouter(app_id, installation_ids, key_file, repositories)
+        print(configuration_fingerprint(app_id, installation_ids, key_file, repositories))
+    elif socket_path == "--identity":
+        login, email = TokenRouter(app_id, installation_ids, key_file, repositories).get_identity()
         print(login)
         print(email)
     else:
-        serve(socket_path, app_id, installation_id, key_file, repositories)
+        serve(socket_path, app_id, installation_ids, key_file, repositories)
 
 
 if __name__ == "__main__":

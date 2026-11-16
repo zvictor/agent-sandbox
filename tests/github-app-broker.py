@@ -143,21 +143,159 @@ class TokenIssuerTests(unittest.TestCase):
                 )
 
 
-class BrokerSocketTests(unittest.TestCase):
-    def test_unix_socket_exposes_token_and_only_documented_routes(self):
-        class FakeIssuer:
-            def get_token(self):
-                return "short-lived-test-token"
+class TokenRouterTests(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+        self.minted = {}
 
-        with tempfile.TemporaryDirectory() as d:
-            socket_path = str(Path(d) / "token.sock")
-            handler = type("TestHandler", (broker.TokenHandler,), {"issuer": FakeIssuer()})
+        def request(issuer, path, bearer, data=None):
+            self.requests.append((path, bearer, data))
+            if path == "/app/installations/123":
+                return {"id": 123, "account": {"login": "personal"}}
+            if path == "/app/installations/456":
+                return {"id": 456, "account": {"login": "org"}}
+            if path.endswith("/access_tokens"):
+                installation = path.split("/")[3]
+                self.minted[installation] = self.minted.get(installation, 0) + 1
+                expiry = dt.datetime.fromtimestamp(time.time() + 3600, dt.timezone.utc).isoformat()
+                return {"token": f"token-{installation}-{self.minted[installation]}", "expires_at": expiry}
+            raise AssertionError("unexpected API request: " + path)
+
+        patcher = mock.patch.object(broker.TokenIssuer, "request_json", new=request)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        jwt = mock.patch.object(broker, "app_jwt", return_value="signed-jwt")
+        jwt.start()
+        self.addCleanup(jwt.stop)
+
+    def test_routes_and_refreshes_each_installation_independently(self):
+        router = broker.TokenRouter("42", ["123", "456"], "/host/key.pem")
+        self.assertEqual(router.get_token("personal/project"), "token-123-1")
+        self.assertEqual(router.get_token("org/project"), "token-456-1")
+        self.assertEqual(router.get_token("PERSONAL/another-project"), "token-123-1")
+        router.issuers["123"].expires_at = time.time() + 30
+        self.assertEqual(router.get_token("org/project"), "token-456-1")
+        self.assertEqual(router.get_token("personal/project"), "token-123-2")
+        self.assertEqual(self.minted, {"123": 2, "456": 1})
+
+    def test_denies_ambiguous_and_unconfigured_repository_context(self):
+        router = broker.TokenRouter("42", ["123", "456"], "/host/key.pem")
+        with self.assertRaises(broker.RepositoryContextError):
+            router.get_token()
+        with self.assertRaises(broker.RepositoryAccessError):
+            router.get_token("unconfigured/project")
+        for repository in ("project", "org/project/extra", "org/project\n"):
+            with self.subTest(repository=repository), self.assertRaises(broker.RepositoryContextError):
+                router.get_token(repository)
+        self.assertEqual(self.minted, {})
+
+    def test_scopes_repository_names_to_each_installation_owner(self):
+        router = broker.TokenRouter("42", ["123", "456"], "/host/key.pem", ["personal/one", "org/two"])
+        router.get_token("personal/one")
+        router.get_token("org/two")
+        payloads = {path: data for path, _, data in self.requests if data is not None}
+        self.assertEqual(payloads, {
+            "/app/installations/123/access_tokens": {"repositories": ["one"]},
+            "/app/installations/456/access_tokens": {"repositories": ["two"]},
+        })
+        with self.assertRaises(broker.RepositoryAccessError):
+            router.get_token("org/one")
+        with self.assertRaises(ValueError):
+            broker.TokenRouter("42", ["123", "456"], "/host/key.pem", ["one"])
+
+    def test_single_installation_accepts_unscoped_requests_and_bare_names(self):
+        router = broker.TokenRouter("42", ["123"], "/host/key.pem", ["project"])
+        self.assertEqual(router.get_token(), "token-123-1")
+        self.assertEqual(router.get_token("personal/project"), "token-123-1")
+        self.assertEqual(self.requests[-1][2], {"repositories": ["project"]})
+        with self.assertRaises(broker.RepositoryAccessError):
+            router.get_token("org/project")
+
+    def test_rejects_incomplete_scope_instead_of_broadening_access(self):
+        router = broker.TokenRouter("42", ["123", "456"], "/host/key.pem", ["personal/one"])
+        with self.assertRaises(ValueError):
+            router.get_token("personal/one")
+        self.assertEqual(self.minted, {})
+
+    def test_installation_id_configuration(self):
+        self.assertEqual(broker.parse_installation_ids("123,456"), ["123", "456"])
+        self.assertEqual(broker.parse_installation_ids("123"), ["123"])
+        for value in ("", "0", "123,123", "123,0123", ",123", "123,", "123,,456", "123, 456", "123,no"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                broker.parse_installation_ids(value)
+
+    def test_broker_fingerprint_changes_when_access_configuration_changes(self):
+        original = broker.configuration_fingerprint("42", ["123"], "/host/key.pem", ["one"])
+        self.assertEqual(original, broker.configuration_fingerprint("42", ["123"], "/host/key.pem", ["one"]))
+        for app, ids, key, repos in (
+            ("43", ["123"], "/host/key.pem", ["one"]),
+            ("42", ["123", "456"], "/host/key.pem", ["one"]),
+            ("42", ["123"], "/host/another-key.pem", ["one"]),
+            ("42", ["123"], "/host/key.pem", ["two"]),
+        ):
+            self.assertNotEqual(original, broker.configuration_fingerprint(app, ids, key, repos))
+
+    @unittest.skipUnless(Path("/bin/curl").exists() and shutil.which("git"), "curl and git are required")
+    def test_generated_git_and_gh_helpers_route_through_the_real_socket(self):
+        router = broker.TokenRouter("42", ["123", "456"], "/host/key.pem")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            socket_path = str(path / "token.sock")
+            handler = type("TestHandler", (broker.TokenHandler,), {"issuer": router})
             server = broker.Broker(socket_path, handler)
             worker = threading.Thread(target=server.serve_forever, daemon=True)
             worker.start()
             try:
-                for path, expected in (("/health", b"ok"), ("/token", b"short-lived-test-token"),
-                                       ("/unknown", b"not found")):
+                subprocess.run([
+                    "bash", "-ec",
+                    'source "$1/bin/lib/github_app.sh"; AGENT_BIN_DIR="$1/bin"; '
+                    'PATH_GUARD_HOST_DIR="$2"; GITHUB_APP_AUTH_MODE=app; prepare_github_app_commands',
+                    "fixture", str(ROOT), str(path),
+                ], check=True)
+                helper = path / "github-app-token"
+                helper.write_text(helper.read_text().replace("/run/agent-github-app/token.sock", socket_path))
+                env = dict(os.environ, GIT_CONFIG_COUNT="3",
+                           GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="",
+                           GIT_CONFIG_KEY_1="credential.helper",
+                           GIT_CONFIG_VALUE_1="!" + str(path / "github-app-git-credential"),
+                           GIT_CONFIG_KEY_2="credential.https://github.com.useHttpPath", GIT_CONFIG_VALUE_2="true")
+                for repository, token in (("personal/project", "token-123-1"), ("org/project", "token-456-1")):
+                    result = subprocess.run(
+                        ["git", "credential", "fill"], input=f"url=https://github.com/{repository}.git\n\n",
+                        text=True, capture_output=True, check=True, env=env,
+                    )
+                    self.assertIn("password=" + token, result.stdout)
+                fake_gh = path / "real-gh"
+                fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$GH_TOKEN"\n')
+                fake_gh.chmod(0o755)
+                gh = path / "gh"
+                gh.write_text(gh.read_text().replace("/bin/gh", str(fake_gh)).replace(
+                    "GH_CONFIG_DIR=/cache/agent-github-app/gh", "GH_CONFIG_DIR=" + str(path / "gh-config")
+                ))
+                for owner, token in (("personal", "token-123-1"), ("org", "token-456-1")):
+                    result = subprocess.run([str(gh), "pr", "view", "--repo", owner + "/project"],
+                                            text=True, capture_output=True, check=True)
+                    self.assertEqual(result.stdout.strip(), token)
+                result = subprocess.run([str(helper)], text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("repository context", result.stdout)
+                self.assertEqual(self.minted, {"123": 1, "456": 1})
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=3)
+
+
+class BrokerSocketTests(unittest.TestCase):
+    def check_socket(self, issuer, cases):
+        with tempfile.TemporaryDirectory() as d:
+            socket_path = str(Path(d) / "token.sock")
+            handler = type("TestHandler", (broker.TokenHandler,), {"issuer": issuer})
+            server = broker.Broker(socket_path, handler)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                for path, status, expected in cases:
                     with self.subTest(path=path), socket.socket(socket.AF_UNIX) as conn:
                         conn.connect(socket_path)
                         conn.sendall(("GET " + path + " HTTP/1.1\r\nHost: localhost\r\n\r\n").encode())
@@ -168,12 +306,43 @@ class BrokerSocketTests(unittest.TestCase):
                                 break
                             chunks.append(chunk)
                         response = b"".join(chunks)
+                        self.assertIn(b" " + str(status).encode() + b" ", response.split(b"\r\n")[0])
                         self.assertIn(expected, response)
                         self.assertIn(b"Cache-Control: no-store", response)
             finally:
                 server.shutdown()
                 server.server_close()
                 worker.join(timeout=3)
+
+    def test_unix_socket_exposes_token_and_only_documented_routes(self):
+        class FakeIssuer:
+            def get_token(self, repository=None):
+                return "short-lived-test-token"
+
+        self.check_socket(FakeIssuer(), [
+            ("/health", 200, b"ok"),
+            ("/token", 200, b"short-lived-test-token"),
+            ("/unknown", 404, b"not found"),
+        ])
+
+    def test_socket_routes_repository_context_and_reports_selection_errors(self):
+        class FakeRouter:
+            def get_token(self, repository=None):
+                if repository is None:
+                    raise broker.RepositoryContextError("repository context required")
+                if repository in ("personal/project", "org/project"):
+                    return "token-for-" + repository
+                raise broker.RepositoryAccessError("repository denied")
+
+        self.check_socket(FakeRouter(), [
+            ("/token?repository=personal%2Fproject", 200, b"token-for-personal/project"),
+            ("/token?repository=org%2Fproject", 200, b"token-for-org/project"),
+            ("/token", 400, b"repository context required"),
+            ("/token?repository=unconfigured%2Fproject", 403, b"repository denied"),
+            ("/token?repository=", 400, b"single repository"),
+            ("/token?repository=org/a&repository=org/b", 400, b"single repository"),
+            ("/token?key=secret", 400, b"single repository"),
+        ])
 
 
 if __name__ == "__main__":

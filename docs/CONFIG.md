@@ -73,10 +73,11 @@ Example host environment or private `.agent-sandbox.env` defaults:
 ```sh
 AGENT_GITHUB_AUTH=app
 AGENT_GITHUB_APP_ID=123456
-AGENT_GITHUB_INSTALLATION_ID=789012
+# One installation ID, or a comma-separated list for personal/org access:
+AGENT_GITHUB_INSTALLATION_ID=789012,345678
 AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/home/me/.config/agent-sandbox/github-app.pem
-# Optionally further limit the token to these repository names:
-AGENT_GITHUB_APP_REPOSITORIES=project-one,project-two
+# Optionally limit access; qualify names when using multiple installations:
+AGENT_GITHUB_APP_REPOSITORIES=my-account/project-one,my-org/project-two
 # Optional: override automatic discovery; set both values together:
 AGENT_GITHUB_APP_BOT_NAME='my-app[bot]'
 AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
@@ -86,9 +87,9 @@ AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
 | --- | --- | --- |
 | `AGENT_GITHUB_AUTH` | `none` | `none` or `app` |
 | `AGENT_GITHUB_APP_ID` | unset | Numeric GitHub App ID |
-| `AGENT_GITHUB_INSTALLATION_ID` | unset | Numeric App installation ID |
+| `AGENT_GITHUB_INSTALLATION_ID` | unset | One numeric installation ID or comma-separated IDs for the same App, without spaces |
 | `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | unset | Host-only readable PEM private key path |
-| `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to the installation | Comma-separated **repository names**, not `owner/repo`; server-side token scope |
+| `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to configured installations | Comma-separated `OWNER/REPO` allowlist; bare repository names also work with a single installation |
 | `AGENT_GITHUB_APP_BOT_NAME` | discovered from the authenticated App | Optional override of the commit author/committer name; set with the email |
 | `AGENT_GITHUB_APP_BOT_EMAIL` | discovered bot's `ID+LOGIN@users.noreply.github.com` | Optional override of the commit email; set with the name |
 
@@ -104,10 +105,49 @@ To override discovery, set both values in the host environment or private
 `.agent-sandbox.env`. Providing only one value is an error. Restart existing
 sandboxes to apply changes; existing commits retain their recorded identity.
 
+### Access across personal and organization repositories
+
+Install the same App on each account whose repositories agents need, then put
+all those installation IDs in `AGENT_GITHUB_INSTALLATION_ID`. The App ID, private
+key, and bot identity are shared. The broker discovers each installation's owner,
+selects it by repository, and caches and refreshes its token independently.
+
+Git authentication includes the repository path, so ordinary fetches, clones,
+and pushes select the corresponding installation automatically. The `gh` wrapper
+selects a token using an explicit repository target or URL, `--repo`/`-R`, `GH_REPO`,
+or the checkout's configured default GitHub remote (otherwise `origin`).
+
+```sh
+git clone git@github.com:my-account/project-one.git
+git clone git@github.com:my-org/project-two.git
+gh pr list --repo my-account/project-one
+gh workflow run checks.yml --repo my-org/project-two
+GH_REPO=my-org/project-two gh api installation/repositories
+```
+
+With multiple installations, calls without repository context fail with a
+request to set `GH_REPO` or `--repo`. The wrapper does not try another account
+when selection or authentication fails. GitHub permissions still apply; for
+example, dispatching workflows needs **Actions: write** on the selected installation.
+
+Each `gh` invocation uses one installation token, and
+`gh api installation/repositories` lists that installation's repositories.
+GitHub has no single installation token spanning multiple accounts. Commands
+needing access to private repositories in different installations in one API
+operation may require a different authentication method.
+
+For an optional repository allowlist with multiple installations, use qualified
+`OWNER/REPO` entries and include at least one repository per configured
+installation. The broker applies each owner's names to that installation's
+server-side token scope; requests outside the allowlist fail.
+
+Start a new sandbox after changing IDs or scopes. For persistent remote
+sandboxes, use `agent remote down` and `agent remote up` to replace the broker.
+
 Behavior in `app` mode:
 
 - A broker using host `python3`, `openssl`, and `curl` signs a short-lived
-  GitHub App JWT, requests an installation token, caches it and renews it
+  GitHub App JWT, requests tokens per configured installation, caches each and renews it
   before its one-hour expiry. Tokens are fetched on demand across arbitrarily
   long sessions; no user interaction is required.
 - The sandbox sees **only** a Unix socket for requesting installation tokens.
@@ -117,7 +157,8 @@ Behavior in `app` mode:
   runtime Git configuration, without modifying the saved origin URL.
 - `gh` (bundled in the image) gets a fresh `GH_TOKEN` for each invocation,
   while its config directory is isolated from personal GitHub CLI state.
-  Other tools needing `GITHUB_TOKEN` must integrate with the broker separately;
+  Other tools needing `GITHUB_TOKEN` can request a token for their target with
+  `/run/agent-path-guard/github-app-token OWNER/REPO` for each invocation;
   an exported one-time token is **not** automatically refreshed.
 - Host `~/.gitconfig`, synthesized host SSH state, and SSH agent forwarding are
   disabled for that sandbox. Other host secrets should not be bind-mounted.
