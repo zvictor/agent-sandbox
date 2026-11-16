@@ -1449,8 +1449,10 @@ append_ssh_agent_args() {
   local host_sock=""
   local container_sock="/run/host-services/ssh-auth.sock"
 
-  if remote_container_mode && [ "${AGENT_REMOTE_FORWARD_SSH_AGENT:-0}" != "1" ]; then
-    return 0
+  if remote_container_mode; then
+    [ "${AGENT_REMOTE_FORWARD_SSH_AGENT:-0}" = "1" ] || return 0
+  else
+    [ "${AGENT_FORWARD_SSH_AGENT:-0}" = "1" ] || return 0
   fi
 
   host_sock="$(resolve_ssh_auth_socket)"

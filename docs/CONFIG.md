@@ -44,6 +44,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
 | `AGENT_NEED_HELPER` | `1` | `0`, `1` | Enables or disables the narrow host-backed Nix helper |
+| `AGENT_FORWARD_SSH_AGENT` | `0` | `0`, `1` | Opts local launches into host SSH agent forwarding; remote launches use `AGENT_REMOTE_FORWARD_SSH_AGENT` |
 | `AGENT_CODEX_VERSION` | unset | exact npm version, `latest` | Pins the sandboxed `@openai/codex` package; unset or `latest` keeps auto-update behavior |
 | `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex home; `project` uses `$AGENT_PROJECT_ROOT/.codex` |
 | `CLAUDE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Claude config root |
@@ -54,7 +55,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 
 ## Unattended GitHub App Authentication
 
-By default, GitHub SSH remains unchanged. Set `AGENT_GITHUB_AUTH=app` to
+Host SSH agent forwarding is disabled by default. Set `AGENT_GITHUB_AUTH=app` to
 give sandboxed `git` and `gh` a dedicated GitHub App identity without an
 interactive SSH/1Password approval. The host creates a runtime-lease-scoped
 credential broker; the App private key is never mounted into the container.
@@ -638,7 +639,9 @@ Compatibility alias:
 
 The launcher also synthesizes a read-only `/cache/.ssh` from host SSH client state. It copies host SSH config and known-host files into a runtime dir, excludes private-key material, and makes that runtime dir the container's `~/.ssh`.
 
-If the host `SSH_AUTH_SOCK` points to a live Unix socket, the launcher also bind-mounts it into the container at `/run/host-services/ssh-auth.sock`, sets in-container `SSH_AUTH_SOCK` to that path, and injects that stable socket path ahead of the imported SSH config. The raw host path is not forwarded through environment passthrough.
+Host SSH agent forwarding is disabled by default, even when `SSH_AUTH_SOCK` is set. To enable it for local launches, set `AGENT_FORWARD_SSH_AGENT=1` in the host environment or `.agent-sandbox.env`. Remote launches require `AGENT_REMOTE_FORWARD_SSH_AGENT=1` instead; the local setting does not enable remote forwarding. GitHub App authentication disables forwarding regardless of either setting.
+
+When forwarding is enabled and the host `SSH_AUTH_SOCK` points to a live Unix socket, the launcher bind-mounts it into the container at `/run/host-services/ssh-auth.sock` and sets in-container `SSH_AUTH_SOCK` to that path. The synthesized SSH config uses that stable socket path ahead of the imported SSH config. The raw host path is not forwarded through environment passthrough.
 
 Use `AGENT_EXTRA_DEVICES` when a workload needs explicit device nodes inside the sandbox, for example nested VM tests on hosts that expose KVM:
 
@@ -706,7 +709,7 @@ The launcher also reacts to a few standard host variables. These are not treated
 - `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket for `podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
-- `SSH_AUTH_SOCK`: when it points to a live socket, the host SSH agent is mounted into the sandbox
+- `SSH_AUTH_SOCK`: identifies the host agent socket to mount only when SSH agent forwarding is explicitly enabled
 - `~/.ssh`: copied into a read-only synthesized container `~/.ssh`, excluding private-key files
 
 ## Compatibility Aliases

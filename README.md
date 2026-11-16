@@ -292,7 +292,7 @@ For SSH operations under Codex's native sandbox, the launcher exposes the sandbo
 - Ephemeral run: set `<TOOL>_CONFIG=fresh`.
 - Project-local login: `./scripts/agent login codex work --config project`.
 - Missing command: run `need <command>` or `need run <command> -- <command> ...`.
-- SSH Git remotes: the sandbox now synthesizes a read-only `/cache/.ssh` from host SSH client state and forwards the active host agent to `/run/host-services/ssh-auth.sock` when `SSH_AUTH_SOCK` is set.
+- SSH Git remotes: the sandbox synthesizes a read-only `/cache/.ssh` from host SSH client state. Host SSH agent forwarding is off by default; set `AGENT_FORWARD_SSH_AGENT=1` to forward the active host agent to `/run/host-services/ssh-auth.sock` for local launches. Remote launches require `AGENT_REMOTE_FORWARD_SSH_AGENT=1`.
 - Unattended GitHub App access: set `AGENT_GITHUB_AUTH=app` to let `git` and `gh` transparently authenticate with refreshed installation tokens through a host credential broker, without forwarding your personal SSH agent. See [the GitHub App setup guide](docs/CONFIG.md#unattended-github-app-authentication).
 - SSH `ProxyCommand` helpers: if your SSH config calls tools like `cloudflared`, add them to the sandbox package contract so they exist inside the container too.
 
