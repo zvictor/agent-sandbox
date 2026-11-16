@@ -13,6 +13,58 @@ trap 'rm -rf "$temp"' EXIT
 PATH_GUARD_HOST_DIR="$temp/path-guard"
 mkdir -p "$PATH_GUARD_HOST_DIR"
 
+# A direct checkout can run on a host without the broker dependencies on PATH.
+mkdir -p "$temp/empty" "$temp/tools/bin"
+for tool in python3 openssl curl; do
+  ln -s /bin/true "$temp/tools/bin/$tool"
+done
+(
+  PATH="$temp/tools/bin"
+  nix_cmd() { echo 'unexpected Nix build' >&2; return 1; }
+  prepare_github_app_host_tools
+  test "$GITHUB_APP_HOST_PATH" = "$temp/tools/bin"
+)
+(
+  PATH="$temp/empty"
+  AGENT_BIN_DIR="$ROOT/bin"
+  RUNTIME_LEASE_DIR="$temp"
+  nix_cmd() {
+    test "$#" -eq 5 || return 1
+    test "$1" = build || return 1
+    test "$2" = --out-link || return 1
+    test "$3" = "$RUNTIME_LEASE_DIR/github-app-host-tools" || return 1
+    test "$4" = --print-out-paths || return 1
+    test "$5" = "path:$AGENT_BIN_DIR/..#github-app-host-tools" || return 1
+    printf '%s\n' "$temp/tools"
+  }
+  prepare_github_app_host_tools
+  test "$GITHUB_APP_HOST_PATH" = "$temp/tools/bin:$temp/empty"
+  for tool in python3 openssl curl; do
+    PATH="$GITHUB_APP_HOST_PATH" command -v "$tool" >/dev/null
+  done
+)
+(
+  PATH="$temp/empty"
+  AGENT_BIN_DIR="$ROOT/bin"
+  RUNTIME_LEASE_DIR="$temp"
+  nix_cmd() { return 1; }
+  if prepare_github_app_host_tools; then
+    exit 1
+  fi
+)
+mkdir -p "$temp/incomplete-tools/bin"
+ln -s /bin/true "$temp/incomplete-tools/bin/python3"
+(
+  PATH="$temp/empty"
+  AGENT_BIN_DIR="$ROOT/bin"
+  RUNTIME_LEASE_DIR="$temp"
+  nix_cmd() { printf '%s\n' "$temp/incomplete-tools"; }
+  if prepare_github_app_host_tools; then
+    echo 'incomplete host tools unexpectedly accepted' >&2
+    exit 1
+  fi
+)
+
 GITHUB_APP_AUTH_MODE=app
 GITHUB_APP_BROKER_DIR="$temp/github-app"
 AGENT_GITHUB_APP_BOT_NAME='example[bot]'

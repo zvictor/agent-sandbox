@@ -58,6 +58,8 @@ By default, GitHub SSH remains unchanged. Set `AGENT_GITHUB_AUTH=app` to
 give sandboxed `git` and `gh` a dedicated GitHub App identity without an
 interactive SSH/1Password approval. The host creates a runtime-lease-scoped
 credential broker; the App private key is never mounted into the container.
+The broker needs `python3`, `openssl`, and `curl` on the host. If any are
+missing, the launcher builds the pinned host tools with Nix on first use.
 
 Create a GitHub App under your GitHub account or organization, install it on
 the repositories agents may change, and grant **Contents: read/write** and

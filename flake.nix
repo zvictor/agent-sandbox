@@ -151,6 +151,10 @@
           rootfs = images.rootfs;
           inherit cchvServer;
           cchv-server = cchvServer;
+          github-app-host-tools = pkgs.symlinkJoin {
+            name = "agent-github-app-host-tools";
+            paths = [ pkgs.python3 pkgs.openssl pkgs.curl ];
+          };
 
           agent-cli = mkTool "agent";
           agent = mkTool "agent";

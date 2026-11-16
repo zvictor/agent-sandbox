@@ -3,6 +3,27 @@ GITHUB_APP_AUTH_MODE="none"
 GITHUB_APP_BROKER_DIR=""
 GITHUB_APP_BROKER_SOCKET=""
 GITHUB_APP_BROKER_PID_FILE=""
+GITHUB_APP_HOST_PATH=""
+
+prepare_github_app_host_tools() {
+  local tools_path="" tool=""
+  GITHUB_APP_HOST_PATH="$PATH"
+  if command -v python3 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "[agent] preparing GitHub App host dependencies with Nix..." >&2
+  tools_path="$(nix_cmd build --out-link "$RUNTIME_LEASE_DIR/github-app-host-tools" --print-out-paths "path:$AGENT_BIN_DIR/..#github-app-host-tools")" || {
+    echo "[agent] failed to build GitHub App host dependencies" >&2
+    return 1
+  }
+  GITHUB_APP_HOST_PATH="$tools_path/bin:$PATH"
+  for tool in python3 openssl curl; do
+    if ! PATH="$GITHUB_APP_HOST_PATH" command -v "$tool" >/dev/null 2>&1; then
+      echo "[agent] GitHub App host dependency missing after Nix build: $tool" >&2
+      return 1
+    fi
+  done
+}
 
 github_app_broker_running() {
   local pid="" cmd=""
@@ -30,10 +51,7 @@ prepare_github_app_auth() {
     *) echo "[agent] AGENT_GITHUB_AUTH must be 'none' or 'app'" >&2; return 1 ;;
   esac
 
-  command -v python3 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1     && command -v curl >/dev/null 2>&1 || {
-    echo "[agent] GitHub App authentication requires python3, openssl, and curl on the host" >&2
-    return 1
-  }
+  prepare_github_app_host_tools || return 1
   case "${AGENT_GITHUB_APP_ID:-}" in
     ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_APP_ID must be numeric" >&2; return 1 ;;
   esac
@@ -46,7 +64,7 @@ prepare_github_app_auth() {
     return 1
   }
 
-  private_key="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE")"
+  private_key="$(PATH="$GITHUB_APP_HOST_PATH" python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$AGENT_GITHUB_APP_PRIVATE_KEY_FILE")" || return 1
   workspace="$(cd "${AGENT_WORKSPACE_PATH:-$PWD}" && pwd -P)" || return 1
   case "$private_key" in
     "$workspace"|"$workspace"/*|"$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
@@ -65,7 +83,7 @@ prepare_github_app_auth() {
   mkdir -p -m 0700 "$GITHUB_APP_BROKER_DIR" || return 1
   chmod 0700 "$GITHUB_APP_BROKER_DIR" || return 1
 
-  if github_app_broker_running && curl -fsS --max-time 2 \
+  if github_app_broker_running && PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 2 \
     --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
     return 0
   fi
@@ -74,6 +92,7 @@ prepare_github_app_auth() {
   rm -f "$GITHUB_APP_BROKER_SOCKET" "$GITHUB_APP_BROKER_PID_FILE"
   (
     umask 077
+    export PATH="$GITHUB_APP_HOST_PATH"
     exec python3 "$AGENT_BIN_DIR/agent-github-app-broker" \
       "$GITHUB_APP_BROKER_SOCKET" "$AGENT_GITHUB_APP_ID" "$AGENT_GITHUB_INSTALLATION_ID" \
       "$private_key" "${AGENT_GITHUB_APP_REPOSITORIES:-}" \
@@ -83,7 +102,7 @@ prepare_github_app_auth() {
   printf '%s\n' "$pid" > "$GITHUB_APP_BROKER_PID_FILE"
 
   while [ "$attempt" -lt 50 ]; do
-    if github_app_broker_running && curl -fsS --max-time 1 \
+    if github_app_broker_running && PATH="$GITHUB_APP_HOST_PATH" curl -fsS --max-time 1 \
       --unix-socket "$GITHUB_APP_BROKER_SOCKET" http://localhost/health >/dev/null 2>&1; then
       return 0
     fi
