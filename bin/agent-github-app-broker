@@ -8,12 +8,14 @@ import base64
 import datetime as dt
 import json
 import os
+import re
 import socketserver
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -57,6 +59,37 @@ class TokenIssuer:
         self.cached_token = None
         self.expires_at = 0
 
+    def request_json(self, path, bearer, data=None):
+        request = urllib.request.Request(
+            self.api_root + path,
+            data=None if data is None else json.dumps(data).encode(),
+            method="GET" if data is None else "POST",
+            headers={
+                "Authorization": "Bearer " + bearer,
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": API_VERSION,
+                "User-Agent": "agent-sandbox-github-app-broker",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.load(response)
+
+    def get_identity(self):
+        app = self.request_json("/app", app_jwt(self.app_id, self.key_file))
+        slug = app.get("slug")
+        if not isinstance(slug, str) or not re.fullmatch(r"[A-Za-z0-9-]+", slug):
+            raise ValueError("GitHub returned an invalid App slug")
+        login = slug + "[bot]"
+        user = self.request_json(
+            "/users/" + urllib.parse.quote(login, safe=""), self.get_token()
+        )
+        user_id = user.get("id")
+        if user.get("login") != login or user.get("type") != "Bot" \
+                or type(user_id) is not int or user_id <= 0:
+            raise ValueError("GitHub returned an invalid App bot identity")
+        return login, str(user_id) + "+" + login + "@users.noreply.github.com"
+
     def get_token(self):
         with self.lock:
             if self.cached_token and time.time() < self.expires_at - REFRESH_MARGIN_SECONDS:
@@ -65,20 +98,9 @@ class TokenIssuer:
             data = {}
             if self.repositories:
                 data["repositories"] = self.repositories
-            request = urllib.request.Request(
-                self.api_root + "/app/installations/" + str(self.installation_id) + "/access_tokens",
-                data=json.dumps(data).encode(),
-                method="POST",
-                headers={
-                    "Authorization": "Bearer " + jwt,
-                    "Accept": "application/vnd.github+json",
-                    "Content-Type": "application/json",
-                    "X-GitHub-Api-Version": API_VERSION,
-                    "User-Agent": "agent-sandbox-github-app-broker",
-                },
+            result = self.request_json(
+                "/app/installations/" + str(self.installation_id) + "/access_tokens", jwt, data
             )
-            with urllib.request.urlopen(request, timeout=20) as response:
-                result = json.load(response)
             token = result["token"]
             expires = dt.datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
             expiry = expires.timestamp()
@@ -153,13 +175,18 @@ def serve(socket_path, app_id, installation_id, key_file, repositories=None):
 def main(argv):
     if len(argv) not in (5, 6):
         raise SystemExit(
-            "usage: agent-github-app-broker SOCKET APP_ID INSTALLATION_ID PRIVATE_KEY_FILE [REPO1,REPO2]"
+            "usage: agent-github-app-broker SOCKET|--identity APP_ID INSTALLATION_ID PRIVATE_KEY_FILE [REPO1,REPO2]"
         )
     socket_path, app_id, installation_id, key_file = argv[1:5]
     repositories = argv[5].split(",") if len(argv) == 6 and argv[5] else []
     if any(not name or "/" in name or name.strip() != name for name in repositories):
         raise SystemExit("repository scope must be comma-separated repository names")
-    serve(socket_path, app_id, installation_id, key_file, repositories)
+    if socket_path == "--identity":
+        login, email = TokenIssuer(app_id, installation_id, key_file, repositories).get_identity()
+        print(login)
+        print(email)
+    else:
+        serve(socket_path, app_id, installation_id, key_file, repositories)
 
 
 if __name__ == "__main__":

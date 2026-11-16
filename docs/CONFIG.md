@@ -77,7 +77,7 @@ AGENT_GITHUB_INSTALLATION_ID=789012
 AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/home/me/.config/agent-sandbox/github-app.pem
 # Optionally further limit the token to these repository names:
 AGENT_GITHUB_APP_REPOSITORIES=project-one,project-two
-# Required: use the exact GitHub App bot identity for authored commits:
+# Optional: override automatic discovery; set both values together:
 AGENT_GITHUB_APP_BOT_NAME='my-app[bot]'
 AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
 ```
@@ -89,16 +89,20 @@ AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
 | `AGENT_GITHUB_INSTALLATION_ID` | unset | Numeric App installation ID |
 | `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | unset | Host-only readable PEM private key path |
 | `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to the installation | Comma-separated **repository names**, not `owner/repo`; server-side token scope |
-| `AGENT_GITHUB_APP_BOT_NAME` | unset; required in App mode | App bot login, including `[bot]`; commit author/committer name inside sandbox |
-| `AGENT_GITHUB_APP_BOT_EMAIL` | unset; required in App mode | App bot's `ID+LOGIN@users.noreply.github.com` commit email |
+| `AGENT_GITHUB_APP_BOT_NAME` | discovered from the authenticated App | Optional override of the commit author/committer name; set with the email |
+| `AGENT_GITHUB_APP_BOT_EMAIL` | discovered bot's `ID+LOGIN@users.noreply.github.com` | Optional override of the commit email; set with the name |
 
-The bot's numeric user ID is **not** the App ID or installation ID. Query
-`https://api.github.com/users/APP_SLUG%5Bbot%5D` to find its `id`, then
-use the `ID+SLUG[bot]@users.noreply.github.com` form for GitHub commit
-attribution. App mode refuses to launch if either identity setting is missing;
-there is no generic commit identity. Set these values in the host environment
-or private `.agent-sandbox.env`, then restart existing sandboxes to apply them.
-Changing the configuration does not change existing commits.
+When both identity settings are unset, the host authenticates with the App's
+JWT to [get the App's slug](https://docs.github.com/en/rest/apps/apps#get-the-authenticated-app),
+then uses an installation token to [look up the bot user](https://docs.github.com/en/rest/users/users#get-a-user).
+The bot's numeric user ID is **not** the App ID or installation ID. The launcher
+uses the bot's `SLUG[bot]` login and `ID+SLUG[bot]@users.noreply.github.com` email
+for commit attribution. This discovery requires GitHub access at startup;
+failure stops launch without substituting a generic identity.
+
+To override discovery, set both values in the host environment or private
+`.agent-sandbox.env`. Providing only one value is an error. Restart existing
+sandboxes to apply changes; existing commits retain their recorded identity.
 
 Behavior in `app` mode:
 

@@ -31,6 +31,58 @@ def fake_api_response(token, expires):
 
 
 class TokenIssuerTests(unittest.TestCase):
+    def test_discovers_identity_from_authenticated_app_and_bot_user(self):
+        expiry = dt.datetime.fromtimestamp(time.time() + 3600, dt.timezone.utc).isoformat()
+        responses = [
+            io.BytesIO(b'{"id":42,"slug":"example"}'),
+            fake_api_response("installation-token", expiry),
+            io.BytesIO(b'{"id":98765,"login":"example[bot]","type":"Bot"}'),
+        ]
+        with mock.patch.object(broker, "app_jwt", return_value="signed-jwt"), \
+             mock.patch.object(broker.urllib.request, "urlopen", side_effect=responses) as opened:
+            issuer = broker.TokenIssuer("42", "123", "/host/key.pem", ["example-repo"])
+            self.assertEqual(issuer.get_identity(), (
+                "example[bot]", "98765+example[bot]@users.noreply.github.com"
+            ))
+            requests = [call.args[0] for call in opened.call_args_list]
+            self.assertEqual([request.full_url for request in requests], [
+                "https://api.github.com/app",
+                "https://api.github.com/app/installations/123/access_tokens",
+                "https://api.github.com/users/example%5Bbot%5D",
+            ])
+            self.assertEqual(requests[0].get_method(), "GET")
+            self.assertEqual(requests[0].get_header("Authorization"), "Bearer signed-jwt")
+            self.assertEqual(requests[2].get_header("Authorization"), "Bearer installation-token")
+            self.assertEqual(json.loads(requests[1].data), {"repositories": ["example-repo"]})
+
+    def test_identity_discovery_rejects_invalid_app_slugs(self):
+        for slug in (None, "", "wrong/path", "example\nother"):
+            with self.subTest(slug=slug), \
+                 mock.patch.object(broker, "app_jwt", return_value="jwt"):
+                issuer = broker.TokenIssuer("42", "123", "/host/key.pem")
+                with mock.patch.object(issuer, "request_json", return_value={"slug": slug}):
+                    with self.assertRaises(ValueError):
+                        issuer.get_identity()
+
+    def test_identity_discovery_rejects_invalid_bot_users(self):
+        valid = {"id": 98765, "login": "example[bot]", "type": "Bot"}
+        invalid = [dict(valid, id=value) for value in (0, -1, True, "98765", None)]
+        invalid += [dict(valid, login="another[bot]"), dict(valid, type="User")]
+        for user in invalid:
+            with self.subTest(user=user), \
+                 mock.patch.object(broker, "app_jwt", return_value="jwt"):
+                issuer = broker.TokenIssuer("42", "123", "/host/key.pem")
+                with mock.patch.object(issuer, "request_json", side_effect=[{"slug": "example"}, user]), \
+                     mock.patch.object(issuer, "get_token", return_value="installation-token"):
+                    with self.assertRaises(ValueError):
+                        issuer.get_identity()
+
+    def test_identity_discovery_propagates_network_failure(self):
+        with mock.patch.object(broker, "app_jwt", return_value="jwt"), \
+             mock.patch.object(broker.urllib.request, "urlopen", side_effect=broker.urllib.error.URLError("offline")):
+            with self.assertRaises(broker.urllib.error.URLError):
+                broker.TokenIssuer("42", "123", "/host/key.pem").get_identity()
+
     def test_installation_token_cache_and_refresh(self):
         now = time.time()
         expiry = dt.datetime.fromtimestamp(now + 3600, dt.timezone.utc).isoformat()

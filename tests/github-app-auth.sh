@@ -67,18 +67,17 @@ ln -s /bin/true "$temp/incomplete-tools/bin/python3"
 
 GITHUB_APP_AUTH_MODE=app
 GITHUB_APP_BROKER_DIR="$temp/github-app"
-# Missing or partial identities must fail before provisioning or adding args.
-for identity in missing name-only email-only; do
+# Partial overrides must fail without attempting discovery or adding args.
+for identity in name-only email-only; do
   (
     unset AGENT_GITHUB_APP_BOT_NAME AGENT_GITHUB_APP_BOT_EMAIL
     case "$identity" in
       name-only) AGENT_GITHUB_APP_BOT_NAME='example[bot]' ;;
       email-only) AGENT_GITHUB_APP_BOT_EMAIL='12345+example[bot]@users.noreply.github.com' ;;
     esac
-    AGENT_GITHUB_AUTH=app
-    prepare_github_app_host_tools() { echo 'unexpected dependency provisioning' >&2; exit 1; }
-    if prepare_github_app_auth; then
-      echo 'missing App identity unexpectedly accepted' >&2
+    python3() { echo 'unexpected discovery' >&2; exit 1; }
+    if prepare_github_app_identity /host/key.pem; then
+      echo 'partial App identity unexpectedly accepted' >&2
       exit 1
     fi
     ARGS=()
@@ -89,8 +88,54 @@ for identity in missing name-only email-only; do
     test "${#ARGS[@]}" -eq 0
   )
 done
+(
+  unset AGENT_GITHUB_APP_BOT_NAME AGENT_GITHUB_APP_BOT_EMAIL
+  GITHUB_APP_HOST_PATH="$PATH"
+  AGENT_BIN_DIR="$ROOT/bin"
+  AGENT_GITHUB_APP_ID=42
+  AGENT_GITHUB_INSTALLATION_ID=123
+  AGENT_GITHUB_APP_REPOSITORIES=example-repo
+  python3() {
+    test "$#" -eq 6 || return 1
+    test "$1" = "$ROOT/bin/agent-github-app-broker" || return 1
+    test "$2" = --identity || return 1
+    test "$3" = 42 && test "$4" = 123 || return 1
+    test "$5" = /host/key.pem && test "$6" = example-repo || return 1
+    printf '%s\n' 'example[bot]' '98765+example[bot]@users.noreply.github.com'
+  }
+  prepare_github_app_identity /host/key.pem
+  test "$AGENT_GITHUB_APP_BOT_NAME" = 'example[bot]'
+  test "$AGENT_GITHUB_APP_BOT_EMAIL" = '98765+example[bot]@users.noreply.github.com'
+  Z_SUFFIX=""
+  ARGS=()
+  append_github_app_container_args
+  grep -Fxq 'GIT_CONFIG_VALUE_5=98765+example[bot]@users.noreply.github.com' <<< "$(printf '%s\n' "${ARGS[@]}")"
+)
+for discovery in failure malformed; do
+  (
+    unset AGENT_GITHUB_APP_BOT_NAME AGENT_GITHUB_APP_BOT_EMAIL
+    GITHUB_APP_HOST_PATH="$PATH"
+    AGENT_BIN_DIR="$ROOT/bin"
+    AGENT_GITHUB_APP_ID=42
+    AGENT_GITHUB_INSTALLATION_ID=123
+    python3() {
+      [ "$discovery" != failure ] || return 1
+      printf 'incomplete-response\n'
+    }
+    if prepare_github_app_identity /host/key.pem; then
+      echo 'failed identity discovery unexpectedly accepted' >&2
+      exit 1
+    fi
+    test -z "${AGENT_GITHUB_APP_BOT_NAME:-}"
+    test -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}"
+  )
+done
 AGENT_GITHUB_APP_BOT_NAME='example[bot]'
 AGENT_GITHUB_APP_BOT_EMAIL='12345+example[bot]@users.noreply.github.com'
+(
+  python3() { echo 'unexpected discovery for explicit identity' >&2; exit 1; }
+  prepare_github_app_identity /host/key.pem
+)
 Z_SUFFIX=""
 ARGS=()
 

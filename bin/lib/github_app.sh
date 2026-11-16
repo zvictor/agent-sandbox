@@ -44,9 +44,35 @@ github_app_broker_running() {
 
 validate_github_app_identity() {
   if [ -z "${AGENT_GITHUB_APP_BOT_NAME:-}" ] || [ -z "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]; then
-    echo "[agent] App mode requires AGENT_GITHUB_APP_BOT_NAME and AGENT_GITHUB_APP_BOT_EMAIL; set the App bot login and its ID+LOGIN@users.noreply.github.com email" >&2
+    echo "[agent] GitHub App commit identity has not been resolved" >&2
     return 1
   fi
+}
+
+prepare_github_app_identity() {
+  local identity=""
+  local -a fields=()
+
+  if [ -n "${AGENT_GITHUB_APP_BOT_NAME:-}" ] || [ -n "${AGENT_GITHUB_APP_BOT_EMAIL:-}" ]; then
+    if ! validate_github_app_identity; then
+      echo "[agent] set both AGENT_GITHUB_APP_BOT_NAME and AGENT_GITHUB_APP_BOT_EMAIL, or leave both unset for automatic discovery" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  identity="$(PATH="$GITHUB_APP_HOST_PATH" python3 "$AGENT_BIN_DIR/agent-github-app-broker" \
+    --identity "$AGENT_GITHUB_APP_ID" "$AGENT_GITHUB_INSTALLATION_ID" "$1" "${AGENT_GITHUB_APP_REPOSITORIES:-}")" || {
+    echo "[agent] failed to discover GitHub App commit identity; check GitHub access or set both bot identity settings explicitly" >&2
+    return 1
+  }
+  mapfile -t fields <<< "$identity"
+  if [ "${#fields[@]}" -ne 2 ] || [ -z "${fields[0]:-}" ] || [ -z "${fields[1]:-}" ]; then
+    echo "[agent] invalid GitHub App commit identity response" >&2
+    return 1
+  fi
+  AGENT_GITHUB_APP_BOT_NAME="${fields[0]}"
+  AGENT_GITHUB_APP_BOT_EMAIL="${fields[1]}"
 }
 
 prepare_github_app_auth() {
@@ -58,7 +84,6 @@ prepare_github_app_auth() {
     *) echo "[agent] AGENT_GITHUB_AUTH must be 'none' or 'app'" >&2; return 1 ;;
   esac
 
-  validate_github_app_identity || return 1
   prepare_github_app_host_tools || return 1
   case "${AGENT_GITHUB_APP_ID:-}" in
     ""|*[!0-9]*) echo "[agent] AGENT_GITHUB_APP_ID must be numeric" >&2; return 1 ;;
@@ -79,6 +104,8 @@ prepare_github_app_auth() {
       echo "[agent] GitHub App private key must not reside inside the mounted project/workspace" >&2
       return 1 ;;
   esac
+  prepare_github_app_identity "$private_key" || return 1
+
   GITHUB_APP_BROKER_DIR="$RUNTIME_LEASE_DIR/github-app"
   GITHUB_APP_BROKER_SOCKET="$GITHUB_APP_BROKER_DIR/token.sock"
   GITHUB_APP_BROKER_PID_FILE="$GITHUB_APP_BROKER_DIR/service.pid"
