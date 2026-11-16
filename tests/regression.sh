@@ -29,6 +29,7 @@ resolve_test_store_path() {
 
 TEST_RETAINED_STORE_PATH="$(resolve_test_store_path)"
 source "$REPO_ROOT/bin/lib/podman_host.sh"
+source "$REPO_ROOT/bin/lib/github_app.sh"
 
 assert_contains() {
   local haystack="$1"
