@@ -80,6 +80,7 @@ unset SANDBOX_NESTED_PODMAN_CONTEXT
 . "$AGENT_BIN_DIR/lib/container_api.sh"
 . "$AGENT_BIN_DIR/lib/need_helper.sh"
 . "$AGENT_BIN_DIR/lib/container_runtime.sh"
+. "$AGENT_BIN_DIR/lib/github_app.sh"
 . "$AGENT_BIN_DIR/lib/dev_env.sh"
 . "$AGENT_BIN_DIR/lib/environment.sh"
 . "$AGENT_BIN_DIR/lib/doctor.sh"
@@ -187,7 +188,7 @@ cleanup() {
   # independent launcher resources. Failed leases remain available for retry.
   set +e
   cleanup_runtime_lease
-  if [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
+  if [ "${RUNTIME_LEASE_PERSIST:-0}" != "1" ] && [ -n "$PATH_GUARD_HOST_DIR" ] && [ -d "$PATH_GUARD_HOST_DIR" ]; then
     rm -rf "$PATH_GUARD_HOST_DIR"
   fi
   if [ -n "$RUNTIME_IDENTITY_HOST_DIR" ] && [ -d "$RUNTIME_IDENTITY_HOST_DIR" ]; then
@@ -221,6 +222,7 @@ prepare_runtime_lease
 prepare_runtime_artifacts
 prepare_container_api
 prepare_need_helper
+prepare_github_app_auth
 log_debug_context
 
 build_container_args

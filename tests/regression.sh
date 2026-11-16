@@ -4,6 +4,10 @@ set -euo pipefail
 REPO_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 TEST_HOST_PATH="$PATH"
 
+# Fast offline GitHub App auth checks (no real App credentials/network required).
+python3 "$REPO_ROOT/tests/github-app-broker.py"
+bash "$REPO_ROOT/tests/github-app-auth.sh"
+
 fail() {
   echo "[fail] $*" >&2
   exit 1
@@ -25,6 +29,7 @@ resolve_test_store_path() {
 
 TEST_RETAINED_STORE_PATH="$(resolve_test_store_path)"
 source "$REPO_ROOT/bin/lib/podman_host.sh"
+source "$REPO_ROOT/bin/lib/github_app.sh"
 
 assert_contains() {
   local haystack="$1"
@@ -1505,13 +1510,32 @@ test_config_selectors_are_not_passthrough_env() (
 test_ssh_agent_mount_support() (
   set -euo pipefail
 
-  local socket_path output
+  local socket_path output setting
   socket_path="/tmp/test-ssh-agent.sock"
 
+  unset AGENT_FORWARD_SSH_AGENT AGENT_REMOTE_FORWARD_SSH_AGENT AGENT_REMOTE_CONTAINER_MODE GITHUB_APP_AUTH_MODE
   output="$(ssh_agent_args_for "$socket_path")"
+  assert_not_contains "$output" "$socket_path"
+  assert_not_contains "$output" "SSH_AUTH_SOCK="
+
+  for setting in '' 0 true; do
+    output="$(AGENT_FORWARD_SSH_AGENT="$setting" ssh_agent_args_for "$socket_path")"
+    assert_not_contains "$output" "$socket_path"
+    assert_not_contains "$output" "SSH_AUTH_SOCK="
+  done
+
+  output="$(AGENT_FORWARD_SSH_AGENT=1 ssh_agent_args_for "$socket_path")"
 
   assert_contains "$output" "$socket_path:/run/host-services/ssh-auth.sock:rw"
   assert_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
+
+  output="$(AGENT_FORWARD_SSH_AGENT=1 ssh_agent_args_for '')"
+  assert_not_contains "$output" "ssh-auth.sock"
+  assert_not_contains "$output" "SSH_AUTH_SOCK="
+
+  output="$(GITHUB_APP_AUTH_MODE=app AGENT_FORWARD_SSH_AGENT=1 ssh_agent_args_for "$socket_path")"
+  assert_not_contains "$output" "$socket_path"
+  assert_not_contains "$output" "SSH_AUTH_SOCK="
 )
 
 test_remote_mode_suppresses_ssh_agent_by_default() (
@@ -1520,12 +1544,19 @@ test_remote_mode_suppresses_ssh_agent_by_default() (
   local socket_path output
   socket_path="/tmp/test-ssh-agent.sock"
 
+  unset AGENT_FORWARD_SSH_AGENT AGENT_REMOTE_FORWARD_SSH_AGENT GITHUB_APP_AUTH_MODE
   output="$(
     AGENT_REMOTE_CONTAINER_MODE=1 ssh_agent_args_for "$socket_path"
   )"
 
   assert_not_contains "$output" "$socket_path:/run/host-services/ssh-auth.sock:rw"
   assert_not_contains "$output" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock"
+
+  output="$(
+    AGENT_REMOTE_CONTAINER_MODE=1 AGENT_FORWARD_SSH_AGENT=1 ssh_agent_args_for "$socket_path"
+  )"
+  assert_not_contains "$output" "$socket_path"
+  assert_not_contains "$output" "SSH_AUTH_SOCK="
 
   output="$(
     AGENT_REMOTE_CONTAINER_MODE=1 AGENT_REMOTE_FORWARD_SSH_AGENT=1 ssh_agent_args_for "$socket_path"

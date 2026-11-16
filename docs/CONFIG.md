@@ -44,6 +44,7 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | `AGENT_CONTAINER_API` | `none` | `none`, `auto`, `podman-session`, `podman-host`, `docker-host` | Controls inner container API exposure |
 | `AGENT_DEV_ENV` | `host-helper` | `host-helper`, `none` | Enables or disables the host direnv snapshot helper |
 | `AGENT_NEED_HELPER` | `1` | `0`, `1` | Enables or disables the narrow host-backed Nix helper |
+| `AGENT_FORWARD_SSH_AGENT` | `0` | `0`, `1` | Opts local launches into host SSH agent forwarding; remote launches use `AGENT_REMOTE_FORWARD_SSH_AGENT` |
 | `AGENT_CODEX_VERSION` | unset | exact npm version, `latest` | Pins the sandboxed `@openai/codex` package; unset or `latest` keeps auto-update behavior |
 | `CODEX_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Codex home; `project` uses `$AGENT_PROJECT_ROOT/.codex` |
 | `CLAUDE_CONFIG` | `host` | `host`, `project`, `fresh`, `<path>` | Selects Claude config root |
@@ -51,6 +52,86 @@ Run `agent config explain` to see the launch directory, project root, loaded fil
 | `CODEX_AUTH` | unset | slot name, file path | Overlays Codex credentials |
 | `CLAUDE_AUTH` | unset | slot name, file path | Overlays Claude credentials |
 | `OPENCODE_AUTH` | unset | slot name, file path | Overlays OpenCode credentials |
+
+## Unattended GitHub App Authentication
+
+Host SSH agent forwarding is disabled by default. Set `AGENT_GITHUB_AUTH=app` to
+give sandboxed `git` and `gh` a dedicated GitHub App identity without an
+interactive SSH/1Password approval. The host creates a runtime-lease-scoped
+credential broker; the App private key is never mounted into the container.
+The broker needs `python3`, `openssl`, and `curl` on the host. If any are
+missing, the launcher builds the pinned host tools with Nix on first use.
+
+Create a GitHub App under your GitHub account or organization, install it on
+the repositories agents may change, and grant **Contents: read/write** and
+**Pull requests: read/write** (plus other API permissions only if needed).
+Generate an App private key and keep it **outside all project/workspace mounts**
+in a private host directory, preferably protected by your secret manager.
+
+Example host environment or private `.agent-sandbox.env` defaults:
+
+```sh
+AGENT_GITHUB_AUTH=app
+AGENT_GITHUB_APP_ID=123456
+AGENT_GITHUB_INSTALLATION_ID=789012
+AGENT_GITHUB_APP_PRIVATE_KEY_FILE=/home/me/.config/agent-sandbox/github-app.pem
+# Optionally further limit the token to these repository names:
+AGENT_GITHUB_APP_REPOSITORIES=project-one,project-two
+# Optional: override automatic discovery; set both values together:
+AGENT_GITHUB_APP_BOT_NAME='my-app[bot]'
+AGENT_GITHUB_APP_BOT_EMAIL='BOT_USER_ID+my-app[bot]@users.noreply.github.com'
+```
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AGENT_GITHUB_AUTH` | `none` | `none` or `app` |
+| `AGENT_GITHUB_APP_ID` | unset | Numeric GitHub App ID |
+| `AGENT_GITHUB_INSTALLATION_ID` | unset | Numeric App installation ID |
+| `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | unset | Host-only readable PEM private key path |
+| `AGENT_GITHUB_APP_REPOSITORIES` | all repositories accessible to the installation | Comma-separated **repository names**, not `owner/repo`; server-side token scope |
+| `AGENT_GITHUB_APP_BOT_NAME` | discovered from the authenticated App | Optional override of the commit author/committer name; set with the email |
+| `AGENT_GITHUB_APP_BOT_EMAIL` | discovered bot's `ID+LOGIN@users.noreply.github.com` | Optional override of the commit email; set with the name |
+
+When both identity settings are unset, the host authenticates with the App's
+JWT to [get the App's slug](https://docs.github.com/en/rest/apps/apps#get-the-authenticated-app),
+then uses an installation token to [look up the bot user](https://docs.github.com/en/rest/users/users#get-a-user).
+The bot's numeric user ID is **not** the App ID or installation ID. The launcher
+uses the bot's `SLUG[bot]` login and `ID+SLUG[bot]@users.noreply.github.com` email
+for commit attribution. This discovery requires GitHub access at startup;
+failure stops launch without substituting a generic identity.
+
+To override discovery, set both values in the host environment or private
+`.agent-sandbox.env`. Providing only one value is an error. Restart existing
+sandboxes to apply changes; existing commits retain their recorded identity.
+
+Behavior in `app` mode:
+
+- A broker using host `python3`, `openssl`, and `curl` signs a short-lived
+  GitHub App JWT, requests an installation token, caches it and renews it
+  before its one-hour expiry. Tokens are fetched on demand across arbitrarily
+  long sessions; no user interaction is required.
+- The sandbox sees **only** a Unix socket for requesting installation tokens.
+  Git receives a credential helper for `https://github.com`. Existing
+  `git@github.com:OWNER/REPO.git` and
+  `ssh://git@github.com/OWNER/REPO.git` remotes are rewritten to HTTPS by
+  runtime Git configuration, without modifying the saved origin URL.
+- `gh` (bundled in the image) gets a fresh `GH_TOKEN` for each invocation,
+  while its config directory is isolated from personal GitHub CLI state.
+  Other tools needing `GITHUB_TOKEN` must integrate with the broker separately;
+  an exported one-time token is **not** automatically refreshed.
+- Host `~/.gitconfig`, synthesized host SSH state, and SSH agent forwarding are
+  disabled for that sandbox. Other host secrets should not be bind-mounted.
+  This mode targets GitHub.com; GitHub Enterprise hosts are not supported.
+- A broker is retained for a persistent remote sandbox until that runtime
+  lease is torn down. The broker exits when the lease is removed.
+
+**Trust model:** an agent that can access the socket can obtain and export a
+usable installation token and repeat requests while its sandbox is running.
+Install the App only on repositories the agent is allowed to modify, protect
+main branches, and avoid mounting host credentials or private keys into the
+workspace. The App private key must not be stored inside a checked-out
+repository or any sandbox-mounted directory. Use a non-interactive private
+key file with restrictive host permissions. The host logs do not log tokens.
 
 ## Runtime And Project Resolution
 
@@ -564,7 +645,9 @@ Compatibility alias:
 
 The launcher also synthesizes a read-only `/cache/.ssh` from host SSH client state. It copies host SSH config and known-host files into a runtime dir, excludes private-key material, and makes that runtime dir the container's `~/.ssh`.
 
-If the host `SSH_AUTH_SOCK` points to a live Unix socket, the launcher also bind-mounts it into the container at `/run/host-services/ssh-auth.sock`, sets in-container `SSH_AUTH_SOCK` to that path, and injects that stable socket path ahead of the imported SSH config. The raw host path is not forwarded through environment passthrough.
+Host SSH agent forwarding is disabled by default, even when `SSH_AUTH_SOCK` is set. To enable it for local launches, set `AGENT_FORWARD_SSH_AGENT=1` in the host environment or `.agent-sandbox.env`. Remote launches require `AGENT_REMOTE_FORWARD_SSH_AGENT=1` instead; the local setting does not enable remote forwarding. GitHub App authentication disables forwarding regardless of either setting.
+
+When forwarding is enabled and the host `SSH_AUTH_SOCK` points to a live Unix socket, the launcher bind-mounts it into the container at `/run/host-services/ssh-auth.sock` and sets in-container `SSH_AUTH_SOCK` to that path. The synthesized SSH config uses that stable socket path ahead of the imported SSH config. The raw host path is not forwarded through environment passthrough.
 
 Use `AGENT_EXTRA_DEVICES` when a workload needs explicit device nodes inside the sandbox, for example nested VM tests on hosts that expose KVM:
 
@@ -632,7 +715,7 @@ The launcher also reacts to a few standard host variables. These are not treated
 - `XDG_RUNTIME_DIR`: used to locate the rootless Podman socket for `podman-host`
 - `XDG_CACHE_HOME`: used as the default base for `AGENT_CACHE_DIR`
 - `TMPDIR`: used for helper temp files when `AGENT_HELPER_TMPDIR` is unset
-- `SSH_AUTH_SOCK`: when it points to a live socket, the host SSH agent is mounted into the sandbox
+- `SSH_AUTH_SOCK`: identifies the host agent socket to mount only when SSH agent forwarding is explicitly enabled
 - `~/.ssh`: copied into a read-only synthesized container `~/.ssh`, excluding private-key files
 
 ## Compatibility Aliases

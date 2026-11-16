@@ -1,0 +1,23 @@
+name: GitHub App authentication (offline tests)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify launcher is executable
+        run: ./scripts/agent --help
+      - name: Verify Python broker
+        run: python3 tests/github-app-broker.py
+      - name: Verify Git and gh sandbox shims
+        run: bash tests/github-app-auth.sh

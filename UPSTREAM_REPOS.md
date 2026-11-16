@@ -16,3 +16,4 @@
 | CodeMachine | moazbuilds/CodeMachine-CLI | Child CLI execution and hardcoded permission bypasses |
 | systemd | systemd/systemd | User-manager and cgroup-v2 delegation behavior |
 | Linux kernel | torvalds/linux | cgroup-v2 migration, delegation, and namespace behavior |
+| GitHub REST API | github/rest-api-description | App JWT authentication, installation tokens, and bot user identity schemas |
