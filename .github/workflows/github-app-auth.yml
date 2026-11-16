@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Verify launcher is executable
+        run: ./scripts/agent --help
       - name: Verify Python broker
         run: python3 tests/github-app-broker.py
       - name: Verify Git and gh sandbox shims
