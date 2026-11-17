@@ -610,6 +610,8 @@ The helper follows validated runtime metadata updates, including token and
 socket changes after an Orca restart. Commands fail while the host application
 is disconnected; retry after it is running again. Orca-returned artifact paths
 are usable inside the sandbox only when they fall within its existing mounts.
+The generated CLI launcher belongs to the container's runtime lease and stays
+available if the outer launcher exits while that container is still running.
 
 Compatibility checks cover Orca 1.4.259's packaged CLI and its orchestration
 guide under Node 24. A live host Orca connection was unavailable during those
