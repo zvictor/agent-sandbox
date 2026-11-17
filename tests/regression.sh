@@ -520,6 +520,7 @@ path_guard_entries_for() (
   SANDBOX_PROFILE="$profile"
   AGENT_SANDBOX_PROFILE="$profile"
   HELPER_TMPDIR="$(mktemp -d)"
+  RUNTIME_LEASE_DIR="$HELPER_TMPDIR/lease"
   trap 'rm -rf "$HELPER_TMPDIR" "$PATH_GUARD_HOST_DIR"' EXIT
 
   prepare_path_guard_dir
@@ -3428,13 +3429,13 @@ test_launcher_cleanup_preserves_status() (
   fixture="$(mktemp -d)"
   trap 'rm -rf "$fixture"' EXIT
   for expected in 0 23 130; do
-    mkdir -p "$fixture/guard" "$fixture/identity" "$fixture/helper"
+    mkdir -p "$fixture/lease/path-guard" "$fixture/identity" "$fixture/helper"
     set +e
     bash -c '
       set -eu
       eval "$(sed -n '\''/^cleanup() {/,/^trap cleanup EXIT/p'\'' "$1/bin/agent")"
       cleanup_runtime_lease() { return 1; }
-      PATH_GUARD_HOST_DIR="$2/guard"
+      PATH_GUARD_HOST_DIR="$2/lease/path-guard"
       RUNTIME_IDENTITY_HOST_DIR="$2/identity"
       HELPER_STATE_DIR="$2/helper"
       CODEX_AUTH_PLACEHOLDER="" TMP_DIR="" LOGIN_STATE_DIR=""
@@ -3443,7 +3444,8 @@ test_launcher_cleanup_preserves_status() (
     status=$?
     set -e
     [ "$status" = "$expected" ] || fail "cleanup replaced agent exit status"
-    [ ! -e "$fixture/guard" ] && [ ! -e "$fixture/identity" ] && [ ! -e "$fixture/helper" ] \
+    [ -d "$fixture/lease/path-guard" ] || fail "failed lease cleanup removed mounted commands"
+    [ ! -e "$fixture/identity" ] && [ ! -e "$fixture/helper" ] \
       || fail "lease cleanup failure skipped independent resources"
   done
 )
@@ -4821,6 +4823,7 @@ main() {
   run_test "shared permission policy" bash "$REPO_ROOT/tests/permission-policy.sh"
   run_test "host agent resources mounts" bash "$REPO_ROOT/tests/host-agent-resources.sh"
   run_test "Orca access launcher" bash "$REPO_ROOT/tests/orca-access.sh"
+  run_test "command launchers follow container lease" bash "$REPO_ROOT/tests/path-guard-lifecycle.sh"
   run_test "rootfs mirror integrity and publication" bash "$REPO_ROOT/tests/rootfs-mirror.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity

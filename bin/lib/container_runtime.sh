@@ -572,13 +572,11 @@ prepare_path_guard_dir() {
   local guarded_command=""
 
   PATH_GUARD_CONTAINER_DIR="/run/agent-path-guard"
-  if [ "${RUNTIME_LEASE_PERSIST:-0}" = "1" ]; then
-    PATH_GUARD_HOST_DIR="$RUNTIME_LEASE_DIR/path-guard"
-    mkdir -p "$PATH_GUARD_HOST_DIR"
-    rm -f "$PATH_GUARD_HOST_DIR/gh" "$PATH_GUARD_HOST_DIR/github-app-token" "$PATH_GUARD_HOST_DIR/github-app-git-credential"
-  else
-    PATH_GUARD_HOST_DIR="$(mktemp -d "$HELPER_TMPDIR/path-guard.XXXXXX")"
-  fi
+  # The mounted directory must survive launcher exit while its container lives.
+  # The runtime lease removes it only after confirmed container teardown.
+  PATH_GUARD_HOST_DIR="${RUNTIME_LEASE_DIR:?runtime lease required}/path-guard"
+  mkdir -p "$PATH_GUARD_HOST_DIR"
+  rm -f "$PATH_GUARD_HOST_DIR/gh" "$PATH_GUARD_HOST_DIR/github-app-token" "$PATH_GUARD_HOST_DIR/github-app-git-credential"
 
   for guarded_command in git sh nix nix-shell need; do
     ln -sfn "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
