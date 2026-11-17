@@ -563,6 +563,58 @@ AGENT_CODEX_VERSION=0.141.0 ./scripts/codex resume <session-id>
 AGENT_CODEX_VERSION=latest ./scripts/codex
 ```
 
+## Orca Access
+
+Start Orca on the host before launching the sandbox:
+
+```sh
+AGENT_ORCA=1 agent codex
+```
+
+This lets agents use Orca's native CLI and orchestration skills against the
+running host application. Access is off by default. It grants control of host
+Orca, including starting workers and sending terminal commands, which can
+execute outside the calling sandbox.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AGENT_ORCA` | `0` | Set to `1` to enable host Orca access |
+| `AGENT_ORCA_CLI_PATH` | discovered from host `orca-ide` Nix closure | Optional absolute path to the installed package's `out/cli/index.js`; must reside in the Nix store |
+| `AGENT_ORCA_USER_DATA_PATH` | `${XDG_CONFIG_HOME:-$HOST_HOME/.config}/orca` | Host Orca profile containing `orca-runtime.json` |
+
+The integration initially supports local Linux Podman runs with the `default`
+or `rootless-linux` profile. Docker, remote sandboxes, and `firecracker-host`
+are rejected. The host installation remains responsible for Orca's version;
+the sandbox uses the JavaScript shipped with that installation. Discovery
+requires one matching CLI entry in the installed `orca-ide` Nix closure.
+
+For a custom installation or profile, replace the paths in this example:
+
+```sh
+AGENT_ORCA=1 \
+AGENT_ORCA_CLI_PATH='/nix/store/<orca-extracted-output>/resources/app.asar.unpacked/out/cli/index.js' \
+AGENT_ORCA_USER_DATA_PATH='/home/<user>/.config/orca-custom' \
+agent codex
+```
+
+Agent-sandbox provisions Node 24 through its `orca-tools` flake output and
+keeps both Node and the extracted Orca package rooted for the runtime lease.
+It generates `ORCA_CLI_COMMAND` for the agent and mounts a private runtime
+connection directory read-only at `/run/agent-orca`. A host helper projects
+minimal connection metadata and relays socket bytes to Orca; it does not
+execute host commands. Orca's native CLI, protocol, and authentication remain
+in use. The full Orca profile, its socket directory, and the desktop session
+bus are not mounted.
+
+The helper follows validated runtime metadata updates, including token and
+socket changes after an Orca restart. Commands fail while the host application
+is disconnected; retry after it is running again. Orca-returned artifact paths
+are usable inside the sandbox only when they fall within its existing mounts.
+
+Compatibility checks cover Orca 1.4.259's packaged CLI and its orchestration
+guide under Node 24. A live host Orca connection was unavailable during those
+checks; successful worker dispatch is not claimed by that validation.
+
 ## Container API Access
 
 | Variable | Default | Effect |

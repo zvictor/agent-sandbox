@@ -283,6 +283,10 @@ remote_uses_pod() {
 }
 
 remote_reject_implicit_host_bridges() {
+  if [ "${AGENT_ORCA:-0}" != 0 ]; then
+    echo '[agent] Orca integration is unavailable in remote mode; use a local Linux Podman sandbox' >&2
+    exit 1
+  fi
   if [ "${AGENT_REMOTE_ALLOW_CONTAINER_API:-0}" != "1" ]; then
     case "${AGENT_CONTAINER_API:-none}" in
       ""|none) ;;

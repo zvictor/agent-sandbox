@@ -1,5 +1,6 @@
 [ -n "${PODMAN_HOST_SH_LOADED:-}" ] || . "$(dirname "${BASH_SOURCE[0]}")/podman_host.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/permission_policy.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/orca.sh"
 
 mount_engine() {
   local engine="$1"
@@ -441,6 +442,9 @@ append_split_arg_values() {
 }
 
 runtime_env_key_is_reserved() {
+  if [ "${ORCA_ENABLED:-0}" = 1 ]; then
+    case "$1" in ORCA_CLI_COMMAND|ORCA_USER_DATA_PATH) return 0 ;; esac
+  fi
   if [ "${GITHUB_APP_AUTH_MODE:-none}" = app ]; then
     case "$1" in
       GH_*|GITHUB_TOKEN|GIT_CONFIG_*|GIT_TERMINAL_PROMPT) return 0 ;;
@@ -580,6 +584,7 @@ prepare_path_guard_dir() {
     ln -sfn "/bin/$guarded_command" "$PATH_GUARD_HOST_DIR/$guarded_command"
   done
   prepare_github_app_commands
+  prepare_orca_commands
 
   if firecracker_host_profile; then
     ln -s "/bin/agent-firecracker-podman" "$PATH_GUARD_HOST_DIR/podman"
@@ -1881,7 +1886,7 @@ append_passthrough_env_args() {
           continue
         fi
         ;;
-      AGENT_GITHUB_AUTH)
+      AGENT_GITHUB_AUTH|AGENT_ORCA|AGENT_ORCA_CLI_PATH|AGENT_ORCA_USER_DATA_PATH)
         continue
         ;;
     esac
@@ -2089,6 +2094,7 @@ build_container_args() {
   append_passthrough_env_args
   mount_tool_configs
   append_github_app_container_args
+  append_orca_container_args
   ARGS+=( -e "AGENT_PERMISSION_POLICY=$PERMISSION_POLICY" -e "AGENT_PERMISSION_PROJECT_ROOT=$PROJECT_ROOT" )
   append_stdio_and_target_args
   validate_container_mount_safety || return 1

@@ -4820,6 +4820,7 @@ main() {
   run_test "project config parsing and environment forwarding" bash "$REPO_ROOT/tests/project-config.sh"
   run_test "shared permission policy" bash "$REPO_ROOT/tests/permission-policy.sh"
   run_test "host agent resources mounts" bash "$REPO_ROOT/tests/host-agent-resources.sh"
+  run_test "Orca access launcher" bash "$REPO_ROOT/tests/orca-access.sh"
   run_test "rootfs mirror integrity and publication" bash "$REPO_ROOT/tests/rootfs-mirror.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity

@@ -29,7 +29,7 @@ for hook in resolve_permission_policy validate_tool_permission_args \
   append_remote_state_mount_args append_dev_env_args append_workspace_mount_args \
   append_extra_env_args append_auto_mount_dir_args append_split_arg_values \
   append_extra_device_args append_passthrough_env_args mount_tool_configs \
-  append_github_app_container_args append_stdio_and_target_args \
+  append_github_app_container_args append_orca_container_args append_stdio_and_target_args \
   validate_container_mount_safety; do
   eval "$hook() { :; }"
 done

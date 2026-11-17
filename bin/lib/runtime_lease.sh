@@ -590,6 +590,26 @@ stop_runtime_lease_github_app_broker() {
   # Do not SIGKILL a reused PID; the service might have already exited.
 }
 
+stop_runtime_lease_orca() {
+  local projection="$1/orca/runtime" pid="" cmd="" waited=0
+  [ -f "$1/orca/service.pid" ] || return 0
+  pid="$(cat "$1/orca/service.pid" 2>/dev/null || true)"
+  case "$pid" in ""|*[!0-9]*) return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  [ -r "/proc/$pid/cmdline" ] || return 0
+  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  case "$cmd" in *agent-orca-runtime.cjs*serve*"$projection"*) ;; *) return 0 ;; esac
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 50 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo '[agent] ERROR: Orca connection helper did not stop; retaining runtime lease' >&2
+    return 1
+  fi
+}
+
 remove_runtime_lease() {
   local lease_dir="$1"
 
@@ -602,6 +622,7 @@ remove_runtime_lease() {
   stop_runtime_lease_guard "$lease_dir"
   stop_runtime_lease_helper "$lease_dir"
   stop_runtime_lease_github_app_broker "$lease_dir"
+  stop_runtime_lease_orca "$lease_dir" || return 1
   remove_sandbox_tmp "$lease_dir" || return 1
   local context="${SANDBOX_NESTED_PODMAN_CONTEXT:-}"
   if [ -n "$context" ] && [ -f "$lease_dir/container.env" ] \

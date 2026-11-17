@@ -155,6 +155,10 @@
             name = "agent-github-app-host-tools";
             paths = [ pkgs.python3 pkgs.openssl pkgs.curl ];
           };
+          orca-tools = pkgs.symlinkJoin {
+            name = "agent-orca-tools";
+            paths = [ pkgs.nodejs_24 ];
+          };
 
           agent-cli = mkTool "agent";
           agent = mkTool "agent";

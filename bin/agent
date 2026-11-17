@@ -223,6 +223,7 @@ prepare_runtime_artifacts
 prepare_container_api
 prepare_need_helper
 prepare_github_app_auth
+prepare_orca
 log_debug_context
 
 build_container_args
