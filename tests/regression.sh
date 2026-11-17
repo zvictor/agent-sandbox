@@ -2299,7 +2299,11 @@ test_rootless_linux_mirror_prepares_dynamic_mount_targets() (
   tmp_dir="$(mktemp -d)"
   trap 'find "$tmp_dir" -type d -exec chmod u+rwx {} + 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
   source_rootfs="$tmp_dir/source"
-  mkdir -p "$source_rootfs/etc"
+  mkdir -p "$source_rootfs/etc" "$source_rootfs/bin"
+  for executable in sh catatonit agent-rootless-linux-entrypoint agent-remote-entrypoint; do
+    printf '#!/bin/sh\nexit 0\n' > "$source_rootfs/bin/$executable"
+    chmod 0555 "$source_rootfs/bin/$executable"
+  done
   chmod 0555 "$source_rootfs" "$source_rootfs/etc"
 
   source "$REPO_ROOT/bin/lib/rootfs.sh"
@@ -4776,7 +4780,7 @@ test_image_includes_openssh() (
   assert_contains "$image_file" "proc sys sys/fs sys/fs/cgroup dev dev/net"
   assert_contains "$image_file" "var/tmp"
   assert_contains "$image_file" '"$out/run/host-services"'
-  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=9"
+  assert_contains "$rootfs_file" "ROOTFS_MIRROR_FORMAT=10"
   assert_contains "$rootfs_file" "run/agent-path-guard"
   assert_contains "$rootfs_file" "run/agent-runtime-receipts"
   assert_contains "$rootfs_file" "var/tmp"
@@ -4816,6 +4820,7 @@ main() {
   run_test "project config parsing and environment forwarding" bash "$REPO_ROOT/tests/project-config.sh"
   run_test "shared permission policy" bash "$REPO_ROOT/tests/permission-policy.sh"
   run_test "host agent resources mounts" bash "$REPO_ROOT/tests/host-agent-resources.sh"
+  run_test "rootfs mirror integrity and publication" bash "$REPO_ROOT/tests/rootfs-mirror.sh"
   run_test "opencode wrapper default" test_opencode_wrapper_default
   run_test "runtime resolution parity" test_runtime_resolution_parity
   run_test "runtime invocation exposes logical agent argv0" test_runtime_invocation_exposes_logical_agent_argv0

@@ -114,6 +114,10 @@ Cache strategy:
 - cached Nix artifacts are registered at their final GC-root paths under `AGENT_CACHE_DIR/gcroots`
 - Docker runtime image IDs are cached under `AGENT_CACHE_DIR/images`
 - Podman mirror state can be cached under `AGENT_CACHE_DIR/rootfs-cache`
+- Mirror keys include the source rootfs derivation. Preparation and publication
+  are serialized per mirror with `flock`; cache hits require executable init
+  and entrypoint files. Incomplete mirrors are replaced before launch, and
+  `AGENT_FORCE_REBUILD=1` also invalidates the mirror.
 - `rootless-linux` always uses that mirror so crun can create dynamic mount
   targets without mapping container root; its `:O` upper layer remains
   ephemeral
