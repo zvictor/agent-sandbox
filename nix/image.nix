@@ -276,6 +276,7 @@ EOF
       mkdir -p "$CACHE_DIR"
 
       if [ "${name}" = "codex" ]; then
+        . ${../scripts/image/codex-clipboard-env.sh}
         export CODEX_HOME="''${CODEX_HOME:-/cache/.codex}"
         export CODEX_CONFIG_DIR="''${CODEX_CONFIG_DIR:-''${CODEX_HOME}}"
         if [ -n "''${AGENT_CODEX_ROLLOUT_SOURCE_HOME:-}" ]; then

@@ -1649,6 +1649,12 @@ append_clipboard_args() {
   local x11_sock=""
   local xauth_file=""
 
+  # Terminal clipboard delivery targets the viewing device, independently of
+  # whether desktop display sockets are forwarded into this container.
+  if [ "${ORCA_REMOTE_VIEWER_CLIPBOARD:-}" = 1 ]; then
+    ARGS+=( -e ORCA_REMOTE_VIEWER_CLIPBOARD=1 )
+  fi
+
   if [ "${AGENT_DISABLE_CLIPBOARD:-0}" = "1" ]; then
     return 0
   fi

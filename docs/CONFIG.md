@@ -273,6 +273,25 @@ the selected init fails during container creation.
 | `AGENT_HELPER_TMPDIR` | `$AGENT_CACHE_DIR/tmp` | Temp directory for helper runs |
 | `AGENT_DEBUG` | `0` | Print resolved paths and execution details with container environment values redacted |
 
+### Copying from Codex to Orca mobile
+
+Codex's `/copy` uses the terminal clipboard protocol (OSC 52) when running in
+an Orca terminal, so the viewing device can receive the copied text. This also
+covers sessions started on desktop and opened on a phone later. Orca's
+`ORCA_REMOTE_VIEWER_CLIPBOARD=1` marker is preserved for remote viewers whose
+terminal identity differs. This works independently of `AGENT_ORCA=1`, which
+grants access to Orca's control API.
+
+Ordinary desktop terminals keep their native clipboard behavior. Disabling
+Wayland/X11 forwarding with `AGENT_DISABLE_CLIPBOARD=1` does not disable the
+terminal's own clipboard protocol. Orca's clipboard settings and the viewing
+device's permissions still apply; its browser client may ask you to tap a Copy
+button before the browser accepts a clipboard write.
+
+Restart existing sandboxed Codex agents with the rebuilt runtime to pick up
+this behavior; their startup environment cannot be changed by attaching a
+phone to an already-running process.
+
 ### Temporary storage
 
 Inside a newly launched Podman sandbox, run `df -h /tmp` to see the capacity

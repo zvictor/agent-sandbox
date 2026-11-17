@@ -4848,6 +4848,7 @@ main() {
   run_test "audio forwarding support" test_audio_forwarding_support
   run_test "image includes audio recorders" test_image_includes_audio_recorders
   run_test "clipboard forwarding support" test_clipboard_forwarding_support
+  run_test "remote-viewer terminal clipboard" bash "$REPO_ROOT/tests/terminal-clipboard.sh"
   run_test "image includes clipboard tools" test_image_includes_clipboard_tools
   run_test "image includes procps" test_image_includes_procps
   run_test "rootfs buildenv rejects package collisions" test_rootfs_buildenv_rejects_package_collisions
