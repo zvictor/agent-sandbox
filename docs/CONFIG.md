@@ -595,6 +595,11 @@ running host application. Access is off by default. It grants control of host
 Orca, including starting workers and sending terminal commands, which can
 execute outside the calling sandbox.
 
+Inside an enabled sandbox, both `orca` and `orca-ide` on `PATH` invoke the same
+installed Orca CLI. This supports notifications such as `orca orchestration
+check`. The `orca` alias is confined to the sandbox; host discovery continues
+to use `orca-ide` to avoid Linux's GNOME Orca screen reader.
+
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `AGENT_ORCA` | `0` | Set to `1` to enable host Orca access |

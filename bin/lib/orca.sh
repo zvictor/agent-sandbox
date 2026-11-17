@@ -111,7 +111,7 @@ prepare_orca() {
 
 prepare_orca_commands() {
   # Persistent path guards may have been prepared by an earlier launch.
-  rm -f "$PATH_GUARD_HOST_DIR/orca-ide"
+  rm -f "$PATH_GUARD_HOST_DIR/orca-ide" "$PATH_GUARD_HOST_DIR/orca"
   [ "$ORCA_ENABLED" = 1 ] || return 0
   {
     printf '#!/bin/bash\nset -euo pipefail\n'
@@ -119,6 +119,9 @@ prepare_orca_commands() {
     printf 'exec %q %q "$@"\n' "$ORCA_NODE" "$ORCA_CLI_PATH"
   } > "$PATH_GUARD_HOST_DIR/orca-ide"
   chmod 0755 "$PATH_GUARD_HOST_DIR/orca-ide"
+  # Orca's notifications use `orca`; keep both spellings on the same client.
+  # This alias exists only in the granted sandbox, never on the Linux host.
+  ln -s orca-ide "$PATH_GUARD_HOST_DIR/orca"
 }
 
 append_orca_container_args() {

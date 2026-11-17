@@ -91,16 +91,18 @@ EOF
 chmod 0755 "$ORCA_NODE"
 prepare_orca_commands
 export EXPECTED_CLI="$fixture_cli"
-shim_status=0
-"$PATH_GUARD_HOST_DIR/orca-ide" 'one argument' '' 'literal $HOME; $(false)' $'two\nlines' >"$test_dir/stdout" 2>"$test_dir/stderr" || shim_status=$?
-[ "$shim_status" -eq 17 ] || fail 'shim lost exit status'
-mapfile -d '' -t received_args <"$test_dir/stdout"
 expected_args=('one argument' '' 'literal $HOME; $(false)' $'two\nlines')
-[ "${#received_args[@]}" -eq "${#expected_args[@]}" ] || fail 'shim changed argument count or stdout'
-for index in "${!expected_args[@]}"; do
-  [ "${received_args[$index]}" = "${expected_args[$index]}" ] || fail 'shim changed arguments or stdout'
+for cli_name in orca-ide orca; do
+  shim_status=0
+  PATH="$PATH_GUARD_HOST_DIR:$PATH" "$cli_name" "${expected_args[@]}" >"$test_dir/stdout" 2>"$test_dir/stderr" || shim_status=$?
+  [ "$shim_status" -eq 17 ] || fail "$cli_name lost exit status"
+  mapfile -d '' -t received_args <"$test_dir/stdout"
+  [ "${#received_args[@]}" -eq "${#expected_args[@]}" ] || fail "$cli_name changed argument count or stdout"
+  for index in "${!expected_args[@]}"; do
+    [ "${received_args[$index]}" = "${expected_args[$index]}" ] || fail "$cli_name changed arguments or stdout"
+  done
+  [ "$(cat "$test_dir/stderr")" = 'fixture stderr' ] || fail "$cli_name changed stderr"
 done
-[ "$(cat "$test_dir/stderr")" = 'fixture stderr' ] || fail 'shim changed stderr'
 
 ORCA_PROJECTION_DIR="$test_dir/lease/orca/runtime"
 ARGS=()
@@ -130,6 +132,7 @@ done
 ORCA_ENABLED=0
 prepare_orca_commands
 [ ! -e "$PATH_GUARD_HOST_DIR/orca-ide" ] || fail 'disabled access retained stale shim'
+[ ! -e "$PATH_GUARD_HOST_DIR/orca" ] && [ ! -L "$PATH_GUARD_HOST_DIR/orca" ] || fail 'disabled access retained stale alias'
 
 # Remote startup has its own entry path; it must reject the capability too.
 (
