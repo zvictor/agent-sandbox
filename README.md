@@ -303,6 +303,7 @@ More complete workflows live in [docs/RECIPES.md](docs/RECIPES.md).
 You can rely on these behaviors:
 - The selected workspace is mounted read-write at the same absolute path inside the sandbox.
 - Tool config mounts are explicit rather than ambient.
+- Host `~/.agents`, when present, is mounted read-only at container `~/.agents`, making shared user skills available to agents.
 - The standard Git executable is available, including commands that update the index, refs, and repository configuration.
 - Container-local `sudo` is disabled by default and is enabled only with `AGENT_ALLOW_SUDO=1`.
 - Every supported container runs an engine-managed init as PID 1; agent tools and remote services are its children, so orphaned descendants are reaped.

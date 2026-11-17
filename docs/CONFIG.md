@@ -494,6 +494,17 @@ it changes host auth/config and cache ownership semantics.
 
 ## Tool Config Roots And Auth
 
+The launcher mounts the host user's `~/.agents` directory read-only at
+`/cache/.agents` when it exists, independently of the selected tool or config
+mode. With container `HOME=/cache`, this makes user skills under
+`~/.agents/skills` available at their normal discovery path. `AGENT_HOST_HOME`
+selects the host home used for this mount. A symlink for `.agents` is resolved;
+broken links and non-directory entries fail launch. Symlinks within `.agents`
+still require their targets to be accessible inside the container. Install or
+update these shared skills on the host, then start a new agent session to
+refresh skill discovery. Remote launches use the remote host's `~/.agents`;
+they do not copy skills from the local client.
+
 Tool config mounts:
 - `codex`: every selected user home mounts at `/cache/.codex`; project mode mounts host `~/.codex` there, leaves `$AGENT_PROJECT_ROOT/.codex` visible as the project layer, overlays `$AGENT_PROJECT_ROOT/.codex/sessions` at `/cache/.codex/sessions`, keeps the SQLite resume inventory in the project layer through `CODEX_SQLITE_HOME`, and mounts freshly generated runtime policy at `/etc/codex` from the container's runtime lease
 - `opencode`: host config root to container `~/.config/opencode`

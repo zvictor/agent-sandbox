@@ -1367,6 +1367,20 @@ append_firecracker_host_args() {
   )
 }
 
+append_host_agent_resources_args() {
+  local agents_dir="$HOST_HOME/.agents"
+
+  if [ ! -e "$agents_dir" ] && [ ! -L "$agents_dir" ]; then
+    return 0
+  fi
+  if [ ! -d "$agents_dir" ]; then
+    echo "[agent] ERROR: host agent resources must resolve to an existing directory: $agents_dir" >&2
+    return 1
+  fi
+  agents_dir="$(resolve_mount_dir "$agents_dir")" || return 1
+  ARGS+=( -v "$agents_dir:/cache/.agents:ro${Z_SUFFIX}" )
+}
+
 append_host_socket_args() {
   if [ "${GITHUB_APP_AUTH_MODE:-none}" != app ] && [ -f "$HOST_HOME/.gitconfig" ]; then
     ARGS+=( -v "$HOST_HOME/.gitconfig:/cache/.gitconfig:ro${Z_SUFFIX}" )
@@ -2061,6 +2075,7 @@ build_container_args() {
   append_runtime_identity_mount_args
   append_runtime_identity_args
   append_firecracker_host_args
+  append_host_agent_resources_args || return 1
   append_host_socket_args
   append_ssh_runtime_mount_args
   append_remote_state_mount_args
